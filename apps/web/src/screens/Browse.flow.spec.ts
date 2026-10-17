@@ -97,6 +97,18 @@ let deleteAnswer: () => Response = () => json({ deleted: true, id: VAULT.id });
 /** When set, the next write answers 409 with this — the file moved on disk. */
 let conflictOnWrite: { currentContent: string; currentHash: string } | null = null;
 
+/** A file a create PUT put on the server. The stub's root listing carries it
+ *  afterwards, so "the new row appeared without a reload" is asserted against a
+ *  listing that CHANGED rather than against the same listing read twice. */
+let created: {
+  id: string;
+  name: string;
+  path: string;
+  isDir: boolean;
+  childrenLoaded: boolean;
+  modified: number;
+} | null = null;
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -116,7 +128,7 @@ function treeFor(url: string) {
       ],
     };
   }
-  return TREE;
+  return created === null ? TREE : { dir: ".", entries: [...TREE.entries, created] };
 }
 
 function route(url: string, method: string): Response {
@@ -153,6 +165,21 @@ function stubFetch() {
     const url = String(input);
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: typeof init?.body === "string" ? init.body : "" });
+    if (method === "PUT" && typeof init?.body === "string") {
+      // A create is a PUT with a null base hash; a real server would list the
+      // file from then on, so the root level the stub answers starts holding it.
+      const body = JSON.parse(init.body) as { path?: string; baseHash?: string | null };
+      if (body.baseHash === null && body.path) {
+        created = {
+          id: body.path,
+          name: body.path,
+          path: body.path,
+          isDir: false,
+          childrenLoaded: false,
+          modified: 1,
+        };
+      }
+    }
     return route(url, method);
   }) as unknown as typeof fetch;
 }
@@ -180,6 +207,7 @@ function stubFetchHoldingTheWrite() {
 beforeEach(() => {
   calls = [];
   conflictOnWrite = null;
+  created = null;
   deleteAnswer = () => json({ deleted: true, id: VAULT.id });
   useStore.setState(INITIAL);
   stubFetch();
@@ -566,5 +594,83 @@ describe("Browse, deleting a vault (D-06)", () => {
     expect(useStore.getState().vaults).toHaveLength(1);
     expect(dialog().textContent).toContain("does not match the vault name");
     expect(host.textContent).not.toContain("No vaults yet");
+  });
+});
+
+describe("Browse, the New file CTA and the Read/Edit toggle", () => {
+  it("creates the next unused name, opens it, and re-reads the level its row lands in", async () => {
+    const host = await mount();
+    await settle();
+
+    await click(findButton(host, "New file"));
+    await settle();
+
+    const creates = callsTo("/api/file").filter((c) => c.method === "PUT");
+    expect(creates.length).toBe(1);
+    const body = JSON.parse(creates[0]!.body) as Record<string, unknown>;
+    expect(body.path).toBe("untitled.md");
+    expect(body.vault).toBe("v1");
+    expect(body.content).toBe("");
+    // The create form 01-02 accepts — and the only one. A hash here would mean
+    // "overwrite the file with this base", which is a different request.
+    expect(body.baseHash).toBeNull();
+
+    // Opened, through the app's own read rather than a navigation.
+    expect(useStore.getState().activeTabPath).toBe("untitled.md");
+    expect(
+      callsTo("/api/file")
+        .filter((c) => c.method === "GET")
+        .some((c) => decodeURIComponent(c.url).includes("path=untitled.md")),
+    ).toBe(true);
+
+    // The row comes from a second read of the root level — the mount's one read,
+    // plus the refresh the create asked for. No page reload is involved.
+    const rootReads = callsTo("/api/vaults/v1/tree").filter((c) =>
+      decodeURIComponent(c.url).includes("dir=."),
+    );
+    expect(rootReads.length).toBe(2);
+    expect(findRow(host, "untitled")).toBeTruthy();
+  });
+
+  it("creates one file from two rapid clicks", async () => {
+    const release = stubFetchHoldingTheWrite();
+    const host = await mount();
+    await settle();
+
+    const cta = findButton(host, "New file");
+    await click(cta);
+    // The guard bites on the first click, not 140ms later when the spinner is due.
+    expect(cta.disabled).toBe(true);
+    await click(cta);
+
+    release();
+    await settle();
+
+    expect(callsTo("/api/file").filter((c) => c.method === "PUT").length).toBe(1);
+  });
+
+  it("reads the buffer the editor holds, and switches back without losing it", async () => {
+    const host = await mount();
+    await settle();
+    await click(findRow(host, "Alpha"));
+    await act(async () => {
+      useStore.getState().setBuffer(EDITED);
+    });
+
+    await click(findButton(host, "Read"));
+    const view = host.querySelector(".md-view");
+    expect(view, "no read view after switching to Read").toBeTruthy();
+    // The UNSAVED edit is what is on screen: the read view is the same buffer,
+    // not the last content the server acknowledged.
+    expect(view!.textContent).toContain("first line, edited");
+    expect(view!.querySelector("h1")?.textContent).toBe("Alpha");
+    expect(host.querySelector(".cm-content")).toBeNull();
+
+    await click(findButton(host, "Edit"));
+    expect(host.querySelector(".md-view")).toBeNull();
+    expect(host.querySelector(".cm-content")?.textContent).toContain("first line, edited");
+    // Switching modes is not an edit: nothing was saved, nothing was discarded.
+    expect(useStore.getState().tabs[0]!.buffer).toBe(EDITED);
+    expect(isDirty(useStore.getState().tabs[0]!)).toBe(true);
   });
 });
