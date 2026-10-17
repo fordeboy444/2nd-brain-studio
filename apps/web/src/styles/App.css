@@ -774,6 +774,25 @@ body:has(.sidebar-resizer.dragging) {
   color: var(--text-tertiary);
 }
 
+/* The two text utilities every card and empty state leans on: a small uppercase
+   eyebrow (`.subhead`) and a quiet body line (`.muted`). Both were restored
+   after the removal pass dropped them with the account forms they sat beside —
+   they are generic, and `.modal-header .muted` and `.backlinks-popover-head
+   .subhead` already expected them. */
+.subhead {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  margin: var(--sp-1) 0 0;
+}
+.muted {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+}
+
 /* ---- Search ----
    A centered overlay (see SearchPanel): the field is the whole chrome, and
    results grow beneath it only once you've typed, so an empty search is just
