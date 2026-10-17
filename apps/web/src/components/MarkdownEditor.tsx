@@ -4,6 +4,8 @@ import { Decoration, EditorView, type DecorationSet } from "@codemirror/view";
 import { StateField, type Text } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
 import { jsonLanguage } from "@codemirror/lang-json";
+import { AsyncButton } from "./AsyncButton.js";
+import { Banner } from "./Banner.js";
 import { editorTheme, markdownHighlight } from "../lib/editor/theme.js";
 import { isDirty, useStore } from "../store.js";
 
@@ -102,6 +104,9 @@ export function MarkdownEditor() {
   const setBuffer = useStore((s) => s.setBuffer);
   const saveActive = useStore((s) => s.saveActive);
   const saveError = useStore((s) => s.saveError);
+  const conflict = useStore((s) => s.conflict);
+  const reloadFromDisk = useStore((s) => s.reloadFromDisk);
+  const keepMine = useStore((s) => s.keepMine);
   const revealRequest = useStore((s) => s.pendingRevealLine);
   const consumeReveal = useStore((s) => s.consumeReveal);
 
@@ -195,26 +200,46 @@ export function MarkdownEditor() {
         </span>
       </div>
 
-      {/* A failed save keeps the edit on screen and says so. The buffer is not
-          rolled back anywhere in the store, so this is a report, not a rescue:
-          the text is still here, and trying again is all that is needed. */}
-      {saveError && saveError.path === tab.path ? (
-        <div
-          role="alert"
-          style={{
-            padding: "var(--sp-2) var(--sp-3)",
-            marginInline: "calc(var(--editor-pad-x) + var(--sp-3))",
-            marginBottom: "var(--sp-2)",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--danger-soft)",
-            color: "var(--danger)",
-            fontSize: "var(--fs-sm)",
-            flexShrink: 0,
-          }}
-        >
-          Save failed. Your edit is still here — try again.
+      {/* The 409 question (D-07), and it is a question: the store refused the
+          save, the buffer is exactly what the user typed, and nothing moves
+          until one of these two buttons is pressed. Both actions are spelled
+          the way the UI spec spells them, because the copy IS the contract for
+          a decision this expensive to get wrong.
+
+          `Banner` brings its own margins — the strip's insets — which is why
+          there is no wrapper here: nesting it in a padded box would inset it
+          twice. */}
+      <Banner
+        show={conflict !== null && conflict.path === tab.path}
+        role="alert"
+        className="conflict-banner"
+      >
+        <span>This file changed on disk since you opened it.</span>
+        <div className="banner-actions">
+          <button type="button" onClick={reloadFromDisk}>
+            Reload from disk
+          </button>
+          {/* Re-sends the buffer, rebased on the hash the conflict returned, so
+              the user's text wins deliberately rather than by accident. */}
+          <AsyncButton className="primary" spinnerTone="on-accent" onClick={keepMine}>
+            Keep mine
+          </AsyncButton>
         </div>
-      ) : null}
+      </Banner>
+
+      {/* A save that failed for some other reason. Also a report, not a rescue:
+          the buffer is not rolled back anywhere in the store, so the text is
+          still on screen and trying again is all that is needed. The server's
+          own sentence follows the fixed one — the fixed one says the edit is
+          safe, this one says what refused it. */}
+      <Banner show={saveError !== null && saveError.path === tab.path} role="alert">
+        <span>Save failed. Your edit is still here — try again.</span>
+        {saveError && saveError.path === tab.path ? (
+          <span style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-sm)" }}>
+            {saveError.message}
+          </span>
+        ) : null}
+      </Banner>
 
       <div style={{ flex: 1, minHeight: 0 }}>
         <CodeMirror

@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import { BacklinksPanel } from "../components/BacklinksPanel.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
 import { MarkdownEditor } from "../components/MarkdownEditor.js";
 import { RightPanel } from "../components/RightPanel.js";
@@ -10,6 +11,7 @@ import { ThemeToggle } from "../components/ThemeToggle.js";
 import { VaultTree } from "../components/VaultTree.js";
 import { useSidebarWidth } from "../lib/useSidebarWidth.js";
 import { useStore } from "../store.js";
+import type { Vault } from "../lib/api.js";
 
 /**
  * The Browse screen: the shell, filled in.
@@ -224,9 +226,19 @@ function VaultList() {
   const createVault = useStore((s) => s.createVault);
   const openVault = useStore((s) => s.openVault);
 
+  const removeVault = useStore((s) => s.deleteVault);
+
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // The vault a delete is being confirmed for. `null` means no dialog — the
+  // dialog is a question, and a question with no vault behind it is nothing.
+  const [pendingDelete, setPendingDelete] = useState<Vault | null>(null);
+  /** What the user has typed into the confirmation box. NEVER trimmed: the
+   *  comparison is against the name exactly, and trimming would accept
+   *  `" Studio"`, which the server would then reject as a 400. */
+  const [typedName, setTypedName] = useState("");
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadVaults();
@@ -285,15 +297,24 @@ function VaultList() {
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {vaults.map((v) => (
-            <li key={v.id} style={{ borderBottom: "1px solid var(--border)" }}>
+            <li
+              key={v.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
               <button
                 type="button"
                 className="ghost-pill"
                 style={{
-                  width: "100%",
+                  flex: 1,
+                  minWidth: 0,
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
+                  gap: "var(--sp-3)",
                   padding: "var(--sp-3) var(--sp-2)",
                   fontWeight: 600,
                   color: "var(--text-secondary)",
@@ -304,6 +325,35 @@ function VaultList() {
                 <span style={{ fontWeight: 400, fontSize: "var(--fs-sm)", color: "var(--text-tertiary)" }}>
                   {v.lastOpenedAt ? new Date(v.lastOpenedAt).toLocaleString() : ""}
                 </span>
+              </button>
+              {/* A SIBLING of the open button, never nested inside it: a button
+                  inside a button is invalid, and the inner click would open the
+                  vault as well as asking to delete it. */}
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label={`Delete vault ${v.name}`}
+                title={`Delete vault ${v.name}`}
+                onClick={() => {
+                  setPendingDelete(v);
+                  setTypedName("");
+                  setDeleteError(null);
+                }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
+                  <path d="M10 11v5M14 11v5" />
+                </svg>
               </button>
             </li>
           ))}
@@ -345,6 +395,64 @@ function VaultList() {
         <p role="alert" style={{ color: "var(--danger)", margin: 0 }}>
           {createError}
         </p>
+      ) : null}
+
+      {/* Hard delete behind a typed name (D-06). The vault's directory goes away
+          with it — the `.okf/` job state lives inside the vault — so the
+          question is deliberately expensive to answer by accident: the action
+          stays disabled until the typed text IS the vault name. */}
+      {pendingDelete ? (
+        <ConfirmDialog
+          title={`Delete vault ${pendingDelete.name}?`}
+          confirmLabel="Delete vault permanently"
+          // Exact equality, no `trim()`: a name with a space around it is not
+          // the name, and the server's own check would answer 400 for it.
+          confirmDisabled={typedName !== pendingDelete.name}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            setDeleteError(null);
+            try {
+              await removeVault(pendingDelete.id, typedName);
+              setPendingDelete(null);
+            } catch (e) {
+              // The store already treats a 404 as success (the vault is gone,
+              // which is what was asked for) and rethrows everything else. So
+              // this is a real refusal — a 400 for a name that did not match —
+              // and NOTHING has been removed: the dialog stays open with the
+              // reason, and the list, tree and tabs are untouched.
+              setDeleteError((e as Error).message);
+            }
+          }}
+        >
+          <p style={{ margin: `0 0 var(--sp-3)` }}>
+            {`Type ${pendingDelete.name} to confirm permanent deletion. This cannot be undone.`}
+          </p>
+          <input
+            type="text"
+            value={typedName}
+            onChange={(e) => setTypedName(e.target.value)}
+            // Not `Vault name`: the create form above already owns that label,
+            // and two fields answering to one name is one field too many for a
+            // reader of the accessibility tree.
+            aria-label="Confirm vault name"
+            autoComplete="off"
+            spellCheck={false}
+            style={{
+              width: "100%",
+              padding: "var(--sp-2) var(--sp-3)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--bg-surface)",
+              color: "var(--text-primary)",
+              fontSize: "var(--fs-md)",
+            }}
+          />
+          {deleteError ? (
+            <p role="alert" style={{ color: "var(--danger)", margin: "var(--sp-2) 0 0", fontSize: "var(--fs-sm)" }}>
+              {deleteError}
+            </p>
+          ) : null}
+        </ConfirmDialog>
       ) : null}
     </div>
   );

@@ -119,6 +119,17 @@ export interface AppState {
   saveActive: () => Promise<void>;
   /** A refused save, held until the user chooses one of the two actions. */
   conflict: PendingConflict | null;
+  /**
+   * Take the server's version (D-07, action 1). The ONLY path that replaces the
+   * buffer: the user asked for it, in as many words.
+   */
+  reloadFromDisk: () => void;
+  /**
+   * Send the user's text over the server's (D-07, action 2), rebased on the hash
+   * the CONFLICT returned — not the tab's original base hash, which is the one
+   * that just lost.
+   */
+  keepMine: () => Promise<void>;
   /** A save that failed for any reason other than a conflict. */
   saveError: SaveFailure | null;
   backlinks: BacklinkRef[];
@@ -358,6 +369,73 @@ export const useStore = create<AppState>((set, get) => {
       }
     },
     conflict: null,
+
+    // The two answers to a 409 (D-07). Nothing else in the store replaces the
+    // buffer, and nothing else writes without a base hash the server produced.
+    reloadFromDisk: () => {
+      const { conflict } = get();
+      if (!conflict) return;
+      // The server's bytes become both the reference content and what is on
+      // screen, and the hash that came with them becomes the base — so after
+      // this the tab is clean, and the next save is guarded by the hash that
+      // actually matches the disk rather than the one that just lost.
+      set((s) => ({
+        tabs: patchTabs(s.tabs, conflict.path, {
+          buffer: conflict.currentContent,
+          serverContent: conflict.currentContent,
+          baseHash: conflict.currentHash,
+          error: null,
+          loading: false,
+        }),
+        conflict: null,
+      }));
+    },
+
+    keepMine: async () => {
+      const { conflict, tabs } = get();
+      if (!conflict) return;
+      const tab = tabs.find((t) => t.path === conflict.path);
+      if (!tab || tab.saving) return;
+      const sending = tab.buffer;
+      setTab(conflict.path, { saving: true });
+      try {
+        // `conflict.currentHash`, never `tab.baseHash`: the tab's base is the
+        // hash that just lost, and sending it again is the same 409 twice.
+        const res = await writeFile(tab.vaultId, conflict.path, sending, conflict.currentHash);
+        set((s) => ({
+          tabs: patchTabs(s.tabs, conflict.path, {
+            saving: false,
+            baseHash: res.baseHash,
+            serverContent: sending,
+          }),
+          conflict: null,
+        }));
+      } catch (e) {
+        set((s) => {
+          const tabsNow = patchTabs(s.tabs, conflict.path, { saving: false });
+          if (e instanceof ConflictError) {
+            // It moved again while the user was deciding. One banner carrying
+            // the fresher server state — not a second banner stacked on it.
+            return {
+              tabs: tabsNow,
+              conflict: {
+                path: conflict.path,
+                currentContent: e.currentContent ?? "",
+                currentHash: e.currentHash ?? "",
+              },
+            };
+          }
+          // Failed for some other reason: the question the conflict asked is
+          // still unanswered, so it stays up, and the failure is reported
+          // beside it.
+          return {
+            tabs: tabsNow,
+            saveError: { path: conflict.path, message: (e as Error).message },
+          };
+        });
+      }
+    },
+
     saveError: null,
     backlinks: [],
 

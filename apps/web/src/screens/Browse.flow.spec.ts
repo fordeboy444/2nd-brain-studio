@@ -55,6 +55,12 @@ const WRITE_HASH = "hash-from-write";
 const READ_CONTENT = "# Alpha\n\nfirst line\n";
 const EDITED = "# Alpha\n\nfirst line, edited\n";
 
+/** What the stub reports as being on disk when a save conflicts, and the hash
+ *  that would make the next write land. Different from both READ_HASH and
+ *  WRITE_HASH, so "the conflict's hash was sent" cannot pass by accident. */
+const DISK_CONTENT = "# Alpha\n\nsomeone else got there first\n";
+const DISK_HASH = "hash-from-the-other-writer";
+
 interface Call {
   url: string;
   method: string;
@@ -71,12 +77,25 @@ const INITIAL: Partial<AppState> = {
   overlayOpen: false,
   conflict: null,
   saveError: null,
+  backlinks: [],
   pendingRevealLine: null,
   pendingTreeRefresh: null,
+  // The vaults slice too: it is what the delete tests read off the store, and a
+  // list left over from the previous test would answer for the wrong one.
+  vaults: [],
+  vaultsLoading: false,
+  vaultsError: null,
 };
 
 const originalFetch = globalThis.fetch;
 let calls: Call[] = [];
+
+/** The server's answer to `DELETE /api/vaults/:id`. Replaced by the tests that
+ *  need a vault that is already gone. */
+let deleteAnswer: () => Response = () => json({ deleted: true, id: VAULT.id });
+
+/** When set, the next write answers 409 with this — the file moved on disk. */
+let conflictOnWrite: { currentContent: string; currentHash: string } | null = null;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -102,12 +121,27 @@ function treeFor(url: string) {
 
 function route(url: string, method: string): Response {
   if (url.includes("/api/vaults/v1/tree")) return json(treeFor(url));
+  if (method === "DELETE" && url.includes("/api/vaults/")) return deleteAnswer();
   if (url.includes("/api/vaults")) return json([VAULT]);
   if (url.includes("/api/health")) {
     return json({ ok: true, status: "ok", service: "2nd-brain", version: "0.1.0", uptimeSec: 1, time: "t" });
   }
   if (url.includes("/api/file")) {
-    if (method === "PUT") return json({ path: "Alpha.md", baseHash: WRITE_HASH });
+    if (method === "PUT") {
+      // The file moved on disk: the server refuses the write and hands back
+      // what is there instead. This is the 409 the conflict flow exists for.
+      if (conflictOnWrite) {
+        return json(
+          {
+            error: "conflict",
+            message: "This file changed on disk since you opened it.",
+            ...conflictOnWrite,
+          },
+          409,
+        );
+      }
+      return json({ path: "Alpha.md", baseHash: WRITE_HASH });
+    }
     return json({ path: "Alpha.md", content: READ_CONTENT, baseHash: READ_HASH });
   }
   return json({});
@@ -145,6 +179,8 @@ function stubFetchHoldingTheWrite() {
 
 beforeEach(() => {
   calls = [];
+  conflictOnWrite = null;
+  deleteAnswer = () => json({ deleted: true, id: VAULT.id });
   useStore.setState(INITIAL);
   stubFetch();
 });
@@ -211,6 +247,51 @@ function findRow(host: HTMLElement, label: string): Element {
   );
   expect(row, `no tree row labelled ${label}`).toBeTruthy();
   return row!;
+}
+
+/** Find a button by its exact label, anywhere under `root`. Labels rather than
+ *  classes: the copy IS the contract for these actions. */
+function findButton(root: ParentNode, label: string): HTMLButtonElement {
+  const button = Array.from(root.querySelectorAll("button")).find(
+    (b) => b.textContent?.trim() === label,
+  );
+  expect(button, `no button labelled ${label}`).toBeTruthy();
+  return button as HTMLButtonElement;
+}
+
+/** The per-row delete control, which is a SIBLING of the row's open button. */
+function findDeleteButton(host: HTMLElement, vaultName: string): HTMLButtonElement {
+  const button = host.querySelector<HTMLButtonElement>(`button[aria-label="Delete vault ${vaultName}"]`);
+  expect(button, `no delete button for ${vaultName}`).toBeTruthy();
+  return button!;
+}
+
+/** Type into a controlled input the way a person does: set the value through
+ *  React's own setter, then fire the event React listens for. Writing
+ *  `input.value` directly moves the DOM without React ever hearing about it. */
+async function typeInto(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+/** The confirm dialog is portalled to `document.body`, so it is not inside the
+ *  mounted host and cannot be found through it. */
+function dialog(): HTMLElement {
+  const el = document.querySelector<HTMLElement>(".confirm-dialog");
+  expect(el, "no confirm dialog is open").toBeTruthy();
+  return el!;
+}
+
+function confirmInput(): HTMLInputElement {
+  const input = dialog().querySelector<HTMLInputElement>('input[aria-label="Confirm vault name"]');
+  expect(input, "the confirm dialog has no name input").toBeTruthy();
+  return input!;
 }
 
 describe("Browse, end to end", () => {
@@ -319,5 +400,171 @@ describe("Browse, end to end", () => {
     // Nothing covers the screen, and the editor region is still the editor.
     expect(host.querySelector(".modal-backdrop")).toBeNull();
     expect(host.querySelector(".editor-wrap")).toBeTruthy();
+  });
+});
+
+/** Save a tab that the server is about to refuse, and land on the conflict. */
+async function mountAndConflict(host: HTMLElement) {
+  await settle();
+  await click(findRow(host, "Alpha"));
+  await act(async () => {
+    useStore.getState().setBuffer(EDITED);
+  });
+  await pressSave();
+  expect(useStore.getState().conflict).not.toBeNull();
+}
+
+describe("Browse, the 409 conflict (D-07)", () => {
+  it("keeps the user's text exactly, and offers both answers", async () => {
+    conflictOnWrite = { currentContent: DISK_CONTENT, currentHash: DISK_HASH };
+    const host = await mount();
+    await mountAndConflict(host);
+
+    expect(useStore.getState().conflict).toEqual({
+      path: "Alpha.md",
+      currentContent: DISK_CONTENT,
+      currentHash: DISK_HASH,
+    });
+    // The heart of D-07: the edit is NEITHER discarded NOR overwritten. Nothing
+    // on this path assigns to the buffer, so it is still what the user typed.
+    expect(useStore.getState().tabs[0]!.buffer).toBe(EDITED);
+    expect(isDirty(useStore.getState().tabs[0]!)).toBe(true);
+
+    expect(host.textContent).toContain("This file changed on disk since you opened it.");
+    expect(findButton(host, "Reload from disk")).toBeTruthy();
+    expect(findButton(host, "Keep mine")).toBeTruthy();
+  });
+
+  it("refuses a second save, so an unanswered question is never stacked on", async () => {
+    conflictOnWrite = { currentContent: DISK_CONTENT, currentHash: DISK_HASH };
+    const host = await mount();
+    await mountAndConflict(host);
+
+    const first = useStore.getState().conflict;
+    await pressSave();
+    await pressSave();
+
+    // The same pending conflict, not a newer one and not a second banner.
+    expect(useStore.getState().conflict).toBe(first);
+    expect(host.querySelectorAll(".banner-slot")).toHaveLength(1);
+    expect(callsTo("/api/file").filter((c) => c.method === "PUT").length).toBe(1);
+  });
+
+  it("Reload from disk is the only thing that replaces the buffer", async () => {
+    conflictOnWrite = { currentContent: DISK_CONTENT, currentHash: DISK_HASH };
+    const host = await mount();
+    await mountAndConflict(host);
+
+    await click(findButton(host, "Reload from disk"));
+
+    const tab = useStore.getState().tabs[0]!;
+    expect(tab.buffer).toBe(DISK_CONTENT);
+    expect(tab.serverContent).toBe(DISK_CONTENT);
+    expect(tab.baseHash).toBe(DISK_HASH);
+    expect(isDirty(tab)).toBe(false);
+    expect(useStore.getState().conflict).toBeNull();
+    expect(host.textContent).not.toContain("This file changed on disk since you opened it.");
+    // And the editor is showing what the store holds, not the text it replaced.
+    expect(host.querySelector(".cm-content")?.textContent).toContain("someone else got there first");
+  });
+
+  it("Keep mine re-sends the user's text against the hash the conflict returned", async () => {
+    conflictOnWrite = { currentContent: DISK_CONTENT, currentHash: DISK_HASH };
+    const host = await mount();
+    await mountAndConflict(host);
+
+    // The file has stopped moving, so the deliberate overwrite can land.
+    conflictOnWrite = null;
+    await click(findButton(host, "Keep mine"));
+
+    const writes = callsTo("/api/file").filter((c) => c.method === "PUT");
+    expect(writes.length).toBe(2);
+    const body = JSON.parse(writes[1]!.body) as Record<string, unknown>;
+    // DISK_HASH, not READ_HASH: the tab's own base is the hash that just lost,
+    // and sending it again is the same 409 twice.
+    expect(body.baseHash).toBe(DISK_HASH);
+    expect(body.content).toBe(EDITED);
+    expect(useStore.getState().conflict).toBeNull();
+    expect(useStore.getState().tabs[0]!.baseHash).toBe(WRITE_HASH);
+  });
+});
+
+describe("Browse, deleting a vault (D-06)", () => {
+  /** The vault list is the screen when no vault is open. */
+  async function mountVaultList() {
+    useStore.setState({ currentVault: null });
+    const host = await mount();
+    await settle();
+    expect(findDeleteButton(host, VAULT.name)).toBeTruthy();
+    return host;
+  }
+
+  it("offers no way to delete until the typed name is exactly the vault's", async () => {
+    const host = await mountVaultList();
+    await click(findDeleteButton(host, VAULT.name));
+
+    expect(dialog().textContent).toContain("Delete vault Studio?");
+    expect(dialog().textContent).toContain(
+      "Type Studio to confirm permanent deletion. This cannot be undone.",
+    );
+    const confirm = () => findButton(dialog(), "Delete vault permanently");
+    const input = confirmInput();
+
+    expect(confirm().disabled).toBe(true);
+    await typeInto(input, "studi");
+    expect(confirm().disabled).toBe(true);
+    // Whitespace around the name is NOT the name, and the server would answer
+    // 400 for it — so the button must not offer it as if it would work.
+    await typeInto(input, " Studio ");
+    expect(confirm().disabled).toBe(true);
+    await typeInto(input, "Studio");
+    expect(confirm().disabled).toBe(false);
+  });
+
+  it("deletes on a matching name and reconciles the list", async () => {
+    const host = await mountVaultList();
+    await click(findDeleteButton(host, VAULT.name));
+    await typeInto(confirmInput(), VAULT.name);
+    await click(findButton(dialog(), "Delete vault permanently"));
+    await settle();
+
+    const deletes = callsTo("/api/vaults/v1").filter((c) => c.method === "DELETE");
+    expect(deletes.length).toBe(1);
+    // The key the server's route reads. Anything else is a 400 on every delete.
+    expect(JSON.parse(deletes[0]!.body)).toEqual({ confirmName: VAULT.name });
+    expect(useStore.getState().vaults).toEqual([]);
+    expect(document.querySelector(".confirm-dialog")).toBeNull();
+    expect(host.textContent).toContain("No vaults yet");
+  });
+
+  it("treats an already-gone vault as success rather than an error", async () => {
+    deleteAnswer = () => json({ error: "not_found", message: "No vault with that id." }, 404);
+    const host = await mountVaultList();
+    await click(findDeleteButton(host, VAULT.name));
+    await typeInto(confirmInput(), VAULT.name);
+    await click(findButton(dialog(), "Delete vault permanently"));
+    await settle();
+
+    // The user asked for it gone and it is gone. A 404 is the same outcome, not
+    // a failure — the list reconciles and nothing is reported.
+    expect(useStore.getState().vaults).toEqual([]);
+    expect(document.querySelector(".confirm-dialog")).toBeNull();
+    expect(host.textContent).not.toContain("No vault with that id.");
+  });
+
+  it("leaves everything untouched when the server refuses the confirmation", async () => {
+    deleteAnswer = () =>
+      json({ error: "confirm_mismatch", message: "`confirmName` does not match the vault name." }, 400);
+    const host = await mountVaultList();
+    await click(findDeleteButton(host, VAULT.name));
+    await typeInto(confirmInput(), VAULT.name);
+    await click(findButton(dialog(), "Delete vault permanently"));
+    await settle();
+
+    // A 400 means nothing was removed: the vault is still listed, the dialog is
+    // still up, and the reason is on screen.
+    expect(useStore.getState().vaults).toHaveLength(1);
+    expect(dialog().textContent).toContain("does not match the vault name");
+    expect(host.textContent).not.toContain("No vaults yet");
   });
 });

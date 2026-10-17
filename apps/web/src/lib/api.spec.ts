@@ -109,6 +109,74 @@ describe("createVault", () => {
   });
 });
 
+describe("deleteVault", () => {
+  it("issues DELETE /api/vaults/:id with the confirmation under the server's own key", async () => {
+    // The key is the contract: `apps/server/src/routes/vaults.ts` reads
+    // `confirmName`, and anything else is a 400 on every delete, forever.
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedBody = "";
+    let capturedContentType = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      capturedContentType = readHeader(init?.headers, "content-type") ?? "";
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ deleted: true, id: "v1" });
+    });
+    const { deleteVault } = await load();
+    const out = await deleteVault("v1", "My Vault");
+
+    expect(capturedMethod).toBe("DELETE");
+    expect(capturedUrl).toContain("/api/vaults/v1");
+    expect(capturedContentType).toContain("application/json");
+    expect(JSON.parse(capturedBody)).toEqual({ confirmName: "My Vault" });
+    expect(out).toEqual({ deleted: true, id: "v1" });
+  });
+
+  it("percent-encodes the id into the path", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      capturedUrl = String(input);
+      return jsonResponse({ deleted: true, id: "a b" });
+    });
+    const { deleteVault } = await load();
+    await deleteVault("a b", "Name");
+    expect(capturedUrl).toContain("/api/vaults/a%20b");
+  });
+
+  it("sends the typed name verbatim — it does not trim it into agreement", async () => {
+    let capturedBody = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ deleted: true, id: "v1" });
+    });
+    const { deleteVault } = await load();
+    await deleteVault("v1", " My Vault ");
+    // Trimming here would make the client agree with itself and the server
+    // still answer 400 — the mismatch would look like a server bug.
+    expect(JSON.parse(capturedBody)).toEqual({ confirmName: " My Vault " });
+  });
+
+  it("rejects a 400 with the status intact so the caller knows nothing was removed", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({ error: "confirm_mismatch", message: "`confirmName` does not match the vault name." }, 400),
+    );
+    const { deleteVault, ApiError } = await load();
+    await expect(deleteVault("v1", "Wrong Name")).rejects.toThrow(
+      "`confirmName` does not match the vault name.",
+    );
+    await expect(deleteVault("v1", "Wrong Name")).rejects.toBeInstanceOf(ApiError);
+    await expect(deleteVault("v1", "Wrong Name")).rejects.toMatchObject({ status: 400 });
+  });
+
+  it("rejects a 404 with the status intact so a gone vault can be treated as success", async () => {
+    globalThis.fetch = vi.fn(async () => jsonResponse({ error: "not_found", message: "No vault with that id." }, 404));
+    const { deleteVault } = await load();
+    await expect(deleteVault("v1", "My Vault")).rejects.toMatchObject({ status: 404 });
+  });
+});
+
 describe("listTree", () => {
   it("issues GET /api/vaults/:id/tree with the root as the default dir", async () => {
     let capturedUrl = "";
