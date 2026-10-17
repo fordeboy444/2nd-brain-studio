@@ -18,4 +18,8 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
   },
+  test: {
+    // DOM environment so the theme spec can exercise document + localStorage.
+    environment: "jsdom",
+  },
 });
