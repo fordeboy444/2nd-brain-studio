@@ -628,6 +628,24 @@ describe("Browse, opening a vault (VAULT-02)", () => {
   });
 });
 
+describe("Browse, the outline's reveal request", () => {
+  it("is consumed once, not repeatedly", async () => {
+    await mount();
+    await settle();
+
+    // An outline click asks for a line; the editor takes it and clears it, so a
+    // later render cannot jump the caret back to a heading the user scrolled
+    // away from. Reading is what consumes it — that is the whole contract.
+    await act(async () => {
+      useStore.getState().requestReveal(7);
+    });
+    expect(useStore.getState().pendingRevealLine).toBe(7);
+    expect(useStore.getState().consumeReveal()).toBe(7);
+    expect(useStore.getState().pendingRevealLine).toBeNull();
+    expect(useStore.getState().consumeReveal()).toBeNull();
+  });
+});
+
 describe("Browse, the New file CTA and the Read/Edit toggle", () => {
   it("creates the next unused name, opens it, and re-reads the level its row lands in", async () => {
     const host = await mount();
