@@ -229,6 +229,25 @@ describe("pruned App.css", () => {
     expect(declaration(text, "text-overflow")).toBeNull();
   });
 
+  it("scrolls a long code block and a wide table inside their own box", () => {
+    // The read view's two children that cannot wrap: `pre` keeps the author's
+    // line breaks, and a wide table has no soft-wrap point at all. Before this
+    // rule, the editor region carried the overflow — measured live at
+    // scrollWidth 3794 in a clientWidth of 1016, from a `pre` of 3680 in a 789
+    // column. After it, the region is 1016/1016 and each block scrolls alone.
+    const pre = ruleBody(appCssRules, /\.md-view pre\s*\{([^}]*)\}/);
+    expect(declaration(pre, "overflow-x")).toBe("auto");
+
+    const table = ruleBody(appCssRules, /\.md-view table\s*\{([^}]*)\}/);
+    // `display: block` is not decoration here, and its absence is the failure
+    // mode worth testing: a table box is sized to its content and IGNORES
+    // `overflow`, so an `overflow-x` alone leaves the table 2482px wide with
+    // nothing scrolling. Reverting only this line is what the negative control
+    // does.
+    expect(declaration(table, "display")).toBe("block");
+    expect(declaration(table, "overflow-x")).toBe("auto");
+  });
+
   it("keeps the token import ahead of this stylesheet in main.tsx", () => {
     // Read as text and compared by position: the stylesheet consumes the custom
     // properties tokens.css declares, so App.css must be evaluated second.

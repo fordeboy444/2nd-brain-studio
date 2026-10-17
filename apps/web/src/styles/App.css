@@ -4096,6 +4096,27 @@ button.secondary:active:not(:disabled),
   word-break: break-word;
   overflow-wrap: anywhere;
 }
+/* A fenced code block and a table are the two children that cannot wrap: the
+   `pre` keeps the author's own line breaks, and a wide table has no soft-wrap
+   point at all. Both then overflow their column. The column does not clip, so
+   the overflow travels up to the shell and the whole page moves sideways —
+   measured at 4407px wide in a 1016px host, from a `pre` of 4293px in a 789px
+   column. Each of the two gets its own scroll container instead, so the wide
+   thing moves and the page does not.
+
+   The `pre` is a block already at its column's width, so `overflow-x` is the
+   whole fix. A table is not: as a table box it is sized to its content and
+   ignores `overflow`. `display: block` first makes it a block box that its
+   column can size, and its rows still lay out as an anonymous table inside —
+   the standard responsive-table technique — so the scroll container works and
+   the table keeps its columns. */
+.md-view pre {
+  overflow-x: auto;
+}
+.md-view table {
+  display: block;
+  overflow-x: auto;
+}
 /* Inline links in the read view are where the accent marks a link — the
    UI-SPEC's list of accent uses names exactly this ("inline links in
    MarkdownView"). Without the rule a rendered link lands on the browser's
