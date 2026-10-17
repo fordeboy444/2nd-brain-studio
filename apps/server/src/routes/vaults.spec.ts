@@ -1,4 +1,5 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,16 @@ afterEach(async () => {
   }
   await rm(root, { recursive: true, force: true });
 });
+
+async function createVault(router: Awaited<ReturnType<typeof reload>>["vaults"], name: string): Promise<string> {
+  const res = await router.request("/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  expect(res.status).toBe(201);
+  return (await res.json()).id as string;
+}
 
 describe("GET /api/vaults", () => {
   it("returns 200 with an empty array on an empty registry", async () => {
@@ -142,5 +153,83 @@ describe("POST /api/vaults", () => {
     });
     const dirs = (await readdir(root)).filter((e) => e !== "vaults.json");
     expect(dirs.sort()).toEqual(["one-vault", "two-vault"]);
+  });
+});
+
+describe("DELETE /api/vaults/:id", () => {
+  it("a mismatched confirmName returns 400 and leaves the vault directory on disk", async () => {
+    const { vaults } = await reload();
+    const vaultId = await createVault(vaults, "Real Name");
+    const vaultDir = join(root, vaultId);
+    expect(existsSync(vaultDir)).toBe(true);
+
+    const res = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Wrong Name" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("confirm_mismatch");
+    // The vault directory still exists.
+    expect(existsSync(vaultDir)).toBe(true);
+  });
+
+  it("a missing confirmName returns 400 and removes nothing", async () => {
+    const { vaults } = await reload();
+    const vaultId = await createVault(vaults, "Keep Me");
+    const vaultDir = join(root, vaultId);
+
+    const res = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    expect(existsSync(vaultDir)).toBe(true);
+  });
+
+  it("a matching confirmName returns 200 with {deleted, id} and removes the directory", async () => {
+    const { vaults } = await reload();
+    const vaultId = await createVault(vaults, "Delete Me");
+    const vaultDir = join(root, vaultId);
+
+    const res = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Delete Me" }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.deleted).toBe(true);
+    expect(body.id).toBe(vaultId);
+    expect(existsSync(vaultDir)).toBe(false);
+  });
+
+  it("two sequential deletes produce 200 then 404; the registry afterwards has no entry for the id", async () => {
+    const { vaults } = await reload();
+    const vaultId = await createVault(vaults, "Once Only");
+
+    const first = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Once Only" }),
+    });
+    expect(first.status).toBe(200);
+
+    // The second delete is the 404 case, NOT 500 — idempotent under repetition.
+    const second = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Once Only" }),
+    });
+    expect(second.status).toBe(404);
+    expect((await second.json()).error).toBe("not_found");
+
+    // The registry file contains no entry for this id.
+    const reg = JSON.parse(await readFile(join(root, "vaults.json"), "utf8"));
+    expect(reg.vaults.some((v: { id: string }) => v.id === vaultId)).toBe(false);
+
+    // The second delete did NOT recreate the directory.
+    expect(existsSync(join(root, vaultId))).toBe(false);
   });
 });
