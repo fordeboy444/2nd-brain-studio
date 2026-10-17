@@ -3,3 +3,5 @@ dist/
 .planning/
 baalda/
 cole-medin-knowledge-base/
+*.log
+.DS_Store

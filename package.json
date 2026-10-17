@@ -1,0 +1,14 @@
+{
+  "name": "2nd-brain-studio",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.17.0",
+  "scripts": {
+    "dev": "pnpm --filter @2nd-brain/server dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
