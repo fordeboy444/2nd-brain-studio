@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App.js";
 import { useStore, type AppState } from "./store.js";
 import type { Vault } from "./lib/api.js";
@@ -52,8 +52,51 @@ async function mount(): Promise<{
   return { host, render };
 }
 
+const originalFetch = globalThis.fetch;
+
+/**
+ * The shell now mounts a tree that reads the vault it is showing, so this spec
+ * needs a server to answer it — jsdom has no origin, and a real `fetch` of a
+ * same-origin relative URL fails outright. The stub is the smallest one that
+ * keeps these five assertions about the SHELL honest: an empty vault (so the
+ * sidebar's own empty copy is what renders) and one readable file.
+ */
+function stubFetch() {
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = (payload: unknown, status = 200) =>
+      new Response(JSON.stringify(payload), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    if (url.includes("/api/vaults/v1/tree")) return body({ dir: ".", entries: [] });
+    if (url.includes("/api/vaults")) return body([]);
+    if (url.includes("/api/health")) {
+      return body({
+        ok: true,
+        status: "ok",
+        service: "2nd-brain",
+        version: "0.1.0",
+        uptimeSec: 1,
+        time: "t",
+      });
+    }
+    if (url.includes("/api/file")) {
+      if ((init?.method ?? "GET") === "PUT") return body({ path: "Notes/Alpha.md", baseHash: "h2" });
+      return body({ path: "Notes/Alpha.md", content: "# Alpha", baseHash: "h1" });
+    }
+    return body({});
+  }) as unknown as typeof fetch;
+}
+
 beforeEach(() => {
   useStore.setState(INITIAL);
+  stubFetch();
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
 });
 
 it("renders the three regions with no overlay element while none is open", async () => {

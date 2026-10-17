@@ -25,10 +25,36 @@ export interface Vault {
 /** Error carrying the HTTP status and the server's `message` field. */
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The parsed response body, when it was JSON. Carried so a subclass can
+   *  read the fields a specific failure shape adds (see `ConflictError`). */
+  body: unknown;
+  constructor(status: number, message: string, body: unknown = undefined) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * A 409 from `PUT /api/file`: the file on disk is not the one the caller read.
+ *
+ * Distinct type rather than a status check at the call site, because the two
+ * things the caller must do with it — keep the user's text and offer them the
+ * server's version — depend on fields only this failure carries. It extends
+ * `ApiError` so the generic handler (a toast, a message) still works unchanged.
+ */
+export class ConflictError extends ApiError {
+  /** What is on disk now, verbatim. */
+  currentContent: string | null;
+  /** SHA-256 of what is on disk now; the base hash that would let a write land. */
+  currentHash: string | null;
+  constructor(message: string, body: unknown = undefined) {
+    super(409, message, body);
+    this.name = "ConflictError";
+    const b = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+    this.currentContent = typeof b.currentContent === "string" ? b.currentContent : null;
+    this.currentHash = typeof b.currentHash === "string" ? b.currentHash : null;
   }
 }
 
@@ -57,7 +83,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof body === "object" && body !== null && "message" in body && typeof (body as { message: unknown }).message === "string"
         ? (body as { message: string }).message
         : `request failed with status ${res.status}`;
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, body);
   }
   return body as T;
 }
@@ -87,4 +113,92 @@ export interface HealthPayload {
 /** GET /api/health — the boot/status probe. Resolves to the parsed payload. */
 export function getHealth(): Promise<HealthPayload> {
   return request<HealthPayload>("/health");
+}
+
+/** DELETE /api/vaults/:id — the typed-name confirmation. Body key `confirmName`
+ *  must match the server's route exactly, or every delete is a 400. */
+export function deleteVault(
+  vaultId: string,
+  confirmName: string,
+): Promise<{ deleted: boolean; id: string }> {
+  return request<{ deleted: boolean; id: string }>(`/vaults/${encodeURIComponent(vaultId)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmName }),
+  });
+}
+
+/**
+ * One entry of one directory level, mirroring the server's shape exactly
+ * (`apps/server/src/vaults/fsTree.ts`). `id` and `path` are both the
+ * vault-relative path, so nothing here ever holds a host path.
+ */
+export interface TreeEntry {
+  id: string;
+  name: string;
+  path: string;
+  isDir: boolean;
+  /** Always false from the endpoint — the tree is one level, fetched on expand. */
+  childrenLoaded: boolean;
+  /** `stat.mtimeMs` for files; absent for directories. Never rendered raw. */
+  modified?: number;
+}
+
+export interface TreeListing {
+  /** The directory the listing is for, vault-relative (`.` for the root). */
+  dir: string;
+  entries: TreeEntry[];
+}
+
+/**
+ * GET /api/vaults/:id/tree?dir= — exactly one directory level (VAULT-03).
+ *
+ * `dir` is omitted for the root: the endpoint's own default is `.`, and sending
+ * an empty value would be a jail rejection rather than a root listing.
+ */
+export function listTree(vaultId: string, dir?: string): Promise<TreeListing> {
+  const q = new URLSearchParams({ dir: dir && dir.length > 0 ? dir : "." });
+  return request<TreeListing>(`/vaults/${encodeURIComponent(vaultId)}/tree?${q.toString()}`);
+}
+
+export interface FileRead {
+  path: string;
+  content: string;
+  /** SHA-256 of the raw bytes the server read — the ONLY hash a save may send. */
+  baseHash: string;
+}
+
+/** GET /api/file?vault=&path= — the read half of the hash-guarded pair. */
+export function readFile(vaultId: string, path: string): Promise<FileRead> {
+  const q = new URLSearchParams({ vault: vaultId, path });
+  return request<FileRead>(`/file?${q.toString()}`);
+}
+
+/**
+ * PUT /api/file — the write half of the hash-guarded pair (VAULT-05).
+ *
+ * `baseHash` is the hash the file was READ with, never one computed in the
+ * browser: a client-computed hash would agree with the server always, and the
+ * conflict check would be unfalsifiable. `null` is the create form, and only
+ * for a path that does not exist yet (the server answers 409 otherwise).
+ *
+ * A 409 is rethrown as a `ConflictError` carrying both the on-disk content and
+ * its hash, so the caller branches on the type without reading a status code.
+ */
+export async function writeFile(
+  vaultId: string,
+  path: string,
+  content: string,
+  baseHash: string | null,
+): Promise<{ path: string; baseHash: string }> {
+  try {
+    return await request<{ path: string; baseHash: string }>("/file", {
+      method: "PUT",
+      body: JSON.stringify({ vault: vaultId, path, content, baseHash }),
+    });
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 409) {
+      throw new ConflictError(e.message, e.body);
+    }
+    throw e;
+  }
 }
