@@ -5,3 +5,8 @@ baalda/
 cole-medin-knowledge-base/
 *.log
 .DS_Store
+
+# Environment files hold live credentials and never enter the repository.
+.env
+.env.*
+!.env.example
