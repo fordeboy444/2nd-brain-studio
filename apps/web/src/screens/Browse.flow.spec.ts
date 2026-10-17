@@ -597,6 +597,37 @@ describe("Browse, deleting a vault (D-06)", () => {
   });
 });
 
+describe("Browse, opening a vault (VAULT-02)", () => {
+  it("opens the chosen vault and reads its root level, one level at a time", async () => {
+    // The list is the whole screen while no vault is open.
+    useStore.setState({ currentVault: null });
+    const host = await mount();
+    await settle();
+    expect(callsTo("/api/vaults/v1/tree").length).toBe(0);
+
+    const openButton = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button.ghost-pill"),
+    ).find((b) => b.querySelector("span")?.textContent === VAULT.name);
+    expect(openButton, "no row for the vault").toBeTruthy();
+
+    await click(openButton!);
+    await settle();
+
+    expect(useStore.getState().currentVault?.id).toBe(VAULT.id);
+    // The tree is read only NOW — and only the root. `Notes` comes back as an
+    // unexpanded directory, so its children are not walked up front; that one
+    // level per expand is the whole point of VAULT-02.
+    const treeReads = callsTo("/api/vaults/v1/tree");
+    expect(treeReads.length).toBe(1);
+    expect(decodeURIComponent(treeReads[0]!.url)).toContain("dir=.");
+    expect(findRow(host, "Alpha")).toBeTruthy();
+    expect(
+      callsTo("/api/vaults/v1/tree").filter((c) => decodeURIComponent(c.url).includes("dir=Notes"))
+        .length,
+    ).toBe(0);
+  });
+});
+
 describe("Browse, the New file CTA and the Read/Edit toggle", () => {
   it("creates the next unused name, opens it, and re-reads the level its row lands in", async () => {
     const host = await mount();
