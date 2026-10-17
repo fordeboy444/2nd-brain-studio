@@ -1,0 +1,4050 @@
+/* ============================================================
+   Baalda — App shell styles
+   Atomize PLUS: light-first layered surfaces, pill actions,
+   violet accent, soft diffuse shadows, 4pt grid.
+   Every value consumes a token from styles/tokens.css.
+   ============================================================ */
+
+/* color-scheme is set per theme in styles/tokens.css (light on :root,
+   dark on [data-theme="dark"]) so native controls + scrollbars follow the
+   in-app theme toggle rather than only the OS. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--fs-md);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* Native selections (inputs, labels, and non-CodeMirror views). The editor
+   uses drawSelection and consumes the related editor tokens separately. */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-text);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Subtle, thin scrollbars that match the surfaces */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: var(--radius-pill);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+.booting {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--fs-md);
+  letter-spacing: 0.01em;
+}
+
+/* ============================================================
+   Buttons — pills
+   ============================================================ */
+button.primary {
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-pill);
+  padding: var(--sp-2) var(--sp-4);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  box-shadow: var(--shadow-sm);
+  transition:
+    background var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+button.primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+button.primary:disabled {
+  opacity: 0.55;
+  cursor: default;
+  box-shadow: none;
+}
+button.primary.sm {
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-sm);
+}
+
+/* The single hero CTA (vault picker) — gradient fill */
+button.primary.hero {
+  background: var(--accent-gradient);
+  padding: var(--sp-3) var(--sp-6);
+  font-size: var(--fs-lg);
+  box-shadow: var(--shadow-md);
+}
+button.primary.hero:hover:not(:disabled) {
+  background: var(--accent-gradient);
+  filter: brightness(1.05);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Secondary / ghost text button */
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  border-radius: var(--radius-pill);
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.link-btn:hover {
+  color: var(--accent-hover);
+  background: var(--bg-hover);
+}
+.link-btn.danger:hover {
+  background: var(--danger-soft);
+}
+.link-btn.danger {
+  color: var(--danger);
+}
+
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-lg);
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  transition: color var(--t-fast) var(--ease);
+}
+.icon-btn:hover {
+  color: var(--text-primary);
+}
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+}
+/* Graph view toggle in the main header — nudge toward accent so it reads as a
+   navigable affordance rather than a passive status glyph. */
+.graph-btn {
+  color: var(--text-secondary);
+}
+.graph-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+/* ---- Theme toggle ---- */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-pill);
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+.theme-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.theme-toggle-icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+.theme-toggle-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* ============================================================
+   Inputs — filled wells
+   ============================================================ */
+.modal input,
+.modal select {
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-md);
+  width: 100%;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.modal input::placeholder {
+  color: var(--text-tertiary);
+}
+.modal input:hover,
+.modal select:hover {
+  border-color: var(--border-strong);
+}
+.modal input:focus,
+.modal select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+  background: var(--bg-surface);
+}
+
+/* ============================================================
+   App shell — canvas + floating editor sheet
+   ============================================================ */
+/* Column wrapper so the window-global update banner can slide in ABOVE the
+   sidebar+main grid (and above the vault picker) and push it down, instead of
+   living inside one pane. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.app-shell > .app,
+.app-shell > .vault-picker {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.app {
+  display: grid;
+  /* Width is user-set (see SidebarResizer); the fallback is the default so the
+     layout is correct for one paint before React sets the variable. */
+  --sidebar-layout-w: var(--sidebar-w, 264px);
+  grid-template-columns: var(--sidebar-layout-w) minmax(0, 1fr);
+  height: 100%;
+  background: var(--bg-app);
+  position: relative;
+  transition: grid-template-columns 220ms var(--ease);
+}
+.app.sidebar-hidden {
+  --sidebar-layout-w: 0px;
+}
+
+/* ---- Window drag regions ----
+   macOS uses an overlay titlebar and Windows disables native decorations,
+   so their webviews own the full height. The trade Tauri makes
+   for that is that nothing is draggable by default, so the rows that sit along
+   the top edge opt in with `data-tauri-drag-region`. Text inside them must not
+   select, or a drag reads as a botched selection instead of moving the window. */
+[data-tauri-drag-region] {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* Bare strip for screens with no header row of their own (the vault picker). */
+.titlebar-drag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* Fixed rather than `--titlebar-inset`, which is 0 off macOS and would leave
+     nothing to grab. The picker is vertically centred, so this strip only ever
+     covers empty margin. */
+  height: 28px;
+  z-index: 2;
+}
+
+/* Sidebar visibility lives in the titlebar strip. On macOS it sits immediately
+   after the traffic lights; elsewhere it occupies the leading edge of the main
+   header. It remains outside both drag regions, so the icon clicks while the
+   empty chrome around it still moves the window. */
+.titlebar-tools {
+  position: absolute;
+  /* Centred on the chrome row (the tools are 28px tall). */
+  top: calc(var(--chrome-row-h) / 2 - 14px);
+  left: calc(var(--sidebar-layout-w) + 8px);
+  z-index: 60;
+  display: flex;
+  gap: 2px;
+  transition: left 220ms var(--ease);
+}
+.titlebar-tool {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.titlebar-tool:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.titlebar-tool:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.titlebar-tool svg {
+  width: 18px;
+  height: 18px;
+}
+html[data-platform="macos"] .titlebar-tools {
+  left: 84px;
+}
+
+/* Windows owns one blended chrome row, with navigation over the sidebar and
+   caption buttons at the window's right edge. */
+html[data-platform="windows"] .titlebar-tools {
+  /* Inset the navigation slightly within the vault tile's left edge. */
+  left: 16px;
+}
+html[data-platform="windows"] .titlebar-tool.graph-btn svg {
+  /* This drawing fills more of its viewBox than the sidebar/search glyphs. */
+  width: 16px;
+  height: 16px;
+}
+html[data-platform="windows"] .sidebar-header {
+  padding-top: var(--chrome-row-h);
+}
+html[data-platform="windows"] .main {
+  border-top-left-radius: 0;
+}
+html[data-platform="windows"] .main-header {
+  padding-left: var(--sp-3);
+  padding-right: 146px;
+  gap: var(--sp-2);
+}
+html[data-platform="windows"] .sidebar-hidden .main-header {
+  /* Sidebar, search and graph remain above the expanded content. */
+  padding-left: 114px;
+}
+html[data-platform="windows"] .header-actions {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+html[data-platform="windows"] .global-banner {
+  padding-right: 150px;
+}
+.windows-controls {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: var(--chrome-row-h);
+  display: flex;
+  z-index: 10001;
+}
+/* The open side panel owns the top-right close action until it slides away. */
+html[data-platform="windows"]:has(.right-panel) .windows-controls {
+  display: none;
+}
+.windows-controls button {
+  width: 46px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+}
+.windows-controls button:hover {
+  background: var(--bg-hover);
+}
+.windows-controls button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.windows-controls button.windows-close:hover {
+  background: #c42b1c;
+  color: white;
+}
+.windows-controls svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+html[data-platform="windows"]:has(.graph-view) .windows-controls {
+  color: white;
+  background: #080910;
+}
+html[data-platform="windows"]:has(.graph-view) .windows-controls button {
+  color: white;
+}
+html[data-platform="windows"]:has(.graph-view) .windows-controls button:not(.windows-close):hover {
+  background: #282b35;
+}
+.windows-boot-drag {
+  display: none;
+  position: fixed;
+  inset: 0 138px auto 0;
+  height: var(--chrome-row-h);
+  z-index: 2;
+}
+html[data-platform="windows"]:has(.booting):not(:has(.app)) .windows-boot-drag {
+  display: block;
+}
+
+/* ---- Sidebar resize handle ----
+   Rides on top of the seam rather than taking a grid column of its own, so the
+   two panes stay flush and the hit area can be wider than the seam itself.
+   Purely a cursor affordance: it draws nothing, because a line down the middle
+   of a layout that otherwise floats panes on one canvas is a line too many. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-w, 264px) - 3px);
+  width: 7px;
+  z-index: 40;
+  cursor: col-resize;
+  background: transparent;
+  /* The handle is never text; without this a drag that starts on it can still
+     seed a selection in the panes either side. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+/* While dragging, the pointer owns the window: the resize cursor holds as it
+   passes over the editor, and nothing anywhere can be selected by the sweep. */
+body:has(.sidebar-resizer.dragging) {
+  cursor: col-resize;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---- Sidebar rail (sits on the canvas) ---- */
+.sidebar {
+  --sidebar-toolbar-end: 36px;
+  position: relative;
+  /* The collapse transform creates a stacking context. Keep that context above
+     the later-painted main pane so account/vault popovers can still extend
+     across the seam instead of the editor covering their right-hand side. */
+  z-index: 1;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* A grid item's default `min-width: auto` refuses to shrink past its content,
+     which would let a long note title override the width the user dragged. */
+  min-width: 0;
+  padding: 0 var(--sp-1) 0 var(--sp-2);
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 160ms var(--ease),
+    transform 220ms var(--ease);
+}
+.sidebar-hidden .sidebar {
+  opacity: 0;
+  transform: translateX(-12px);
+  pointer-events: none;
+  overflow: hidden;
+}
+/* The window has no system title bar of its own (`titleBarStyle: "Overlay"`),
+   so this row starts at y=0 and the macOS traffic lights float over it — hence
+   the inset on top of the normal padding. It doubles as the window's drag
+   handle on this side; see `data-tauri-drag-region` in SidebarHeader.tsx. */
+.sidebar-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: calc(var(--sp-6) + var(--titlebar-inset)) var(--sp-3) var(--sp-3);
+}
+.sidebar-header-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.vault-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--fs-lg);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* No active vault (signed out / folder-only): a quiet placeholder, not a
+   vault title — muted and lighter so it never reads as a real vault. */
+.vault-name.none {
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+/* "Open in file manager" — sits at the end of the path row, always visible
+   but quiet: tertiary until hovered, so it reads as part of the path line
+   rather than a second focal point next to the title. */
+.vault-reveal {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin-left: auto;
+  /* Centred on the tree rows' sync-dot column (49px in from the sidebar's
+     right edge; this button already sits 26px in): see `.filetree-head`. */
+  margin-right: 23px;
+  color: var(--text-tertiary);
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+/* Scoped past the generic `.vault-line svg` (12px) rule below. */
+.vault-line .vault-reveal svg {
+  width: 14px;
+  height: 14px;
+}
+.vault-reveal:hover,
+.vault-reveal:focus-visible {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+/* Where the vault lives on disk, minus the home prefix. A storage detail, so
+   it sits a size below the rest of the line. A plain end-ellipsis is right
+   here even though it eats the tail: the tail is the vault folder, whose name
+   is already the title directly above. The tooltip has it all. */
+.vault-path {
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The local folder backing the vault — a quiet storage detail. */
+.vault-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+.vault-line .vault-path {
+  flex: 1;
+  min-width: 0;
+}
+.vault-path-copy {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.vault-path-copy .vault-path { flex: 0 1 auto; }
+.vault-path-copy[aria-disabled="true"] { cursor: default; }
+.vault-path-copied { color: var(--success); }
+.vault-line svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+.vault-line-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vault-line .link-btn {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* ---- Vault switcher (the sidebar header's name row) ---- */
+.vault-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 100%;
+  margin-left: calc(-1 * var(--sp-1));
+  padding: 1px var(--sp-1);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+/* The chevron follows a short name; a long name hides it (SidebarHeader
+   measures). The button is capped so the name stops on the tree rows' sync-dot
+   column: a 20px box centred 33px in from the right edge, i.e. 23px clear of
+   it — 19px here plus this button's own 4px right padding. The chevron's 3px
+   side padding makes its box those 20px. */
+.sidebar-header-main .vault-switch-btn {
+  max-width: calc(100% - 19px);
+}
+.vault-switch-btn .vault-name {
+  min-width: 0;
+  text-align: left;
+}
+.vault-switch-chevron {
+  box-sizing: content-box;
+  width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--t-fast) var(--ease);
+}
+.vault-switch-btn.open .vault-switch-chevron {
+  transform: rotate(180deg);
+}
+/* Tile on the left spanning both lines; name row + path line on the right. */
+.sidebar-header-id {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sidebar-header-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Balance the title/path glyphs optically against the centred tile. */
+  transform: translateY(-2px);
+}
+.vault-switch-tile {
+  /* Match the tile's height exactly: an inline child otherwise leaves a
+     baseline gap, pushing the adjacent name/path below its visual centre. */
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+/* A playful little wiggle on hover — it invites a click without the heavy
+   hover fill the name used to have. */
+.vault-switch-tile:hover .vault-tile {
+  animation: vault-tile-wiggle 520ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+@keyframes vault-tile-wiggle {
+  0% { transform: rotate(0) scale(1); }
+  20% { transform: rotate(-8deg) scale(1.06); }
+  45% { transform: rotate(6deg) scale(1.06); }
+  70% { transform: rotate(-3deg) scale(1.03); }
+  100% { transform: rotate(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vault-switch-tile:hover .vault-tile {
+    animation: none;
+  }
+}
+.vault-switch-tile .vault-tile {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-lg);
+}
+.vault-tile {
+  overflow: hidden;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--tile-fill, var(--accent-soft));
+  color: var(--tile-ink, var(--accent));
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.vault-icon-svg,
+.vault-icon-svg svg,
+.vault-tile.image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.vault-tile.image img {
+  object-fit: cover;
+}
+/* An uploaded image is shown as-is — no coloured square behind it, which
+   used to show through a logo's transparent corners. */
+.vault-tile.image {
+  background: none;
+}
+/* "None" colour: just the glyph, in the surrounding text colour. */
+.vault-tile.none {
+  background: none;
+  color: var(--text-secondary);
+}
+
+/* ---- Vault switching ---- */
+/* The header renames itself to the destination at once; these two rules are the
+   supporting evidence that the rename is a *pending* claim, not a finished one. */
+.sidebar-header.is-switching .vault-path {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.vault-switch-spinner {
+  margin-left: var(--sp-1);
+}
+/* A real flex item in BOTH states, never `display: contents` switching to
+   `block`: the tree measures itself with a ResizeObserver, so a wrapper that
+   changes box type mid-switch would resize the tree and make it jump at exactly
+   the moment we're trying to say "nothing here is changing yet". */
+.sidebar-tree-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  transition:
+    opacity var(--t-med) var(--ease),
+    filter var(--t-med) var(--ease);
+}
+.sidebar-tree-wrap.is-switching {
+  opacity: 0.38;
+  pointer-events: none;
+  filter: saturate(0.6);
+}
+
+/* Small uppercase section labels shared across sidebar sections */
+.section-label,
+.panel-title,
+.panel-header {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+/* ---- Search ----
+   A centered overlay (see SearchPanel): the field is the whole chrome, and
+   results grow beneath it only once you've typed, so an empty search is just
+   one box on a dimmed window rather than a large hollow card. */
+.search-backdrop {
+  /* A little above centre: centred vertically, then lifted by reserving space
+     at the bottom. The list grows downward, so starting dead centre would push
+     the field below the middle as results arrive. */
+  align-items: center;
+  padding-bottom: 12vh;
+}
+.search-modal {
+  width: 560px;
+  max-width: min(92vw, 560px);
+  background: var(--bg-surface);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  padding: var(--sp-2);
+  animation: rise-in var(--t-med) var(--ease) both;
+}
+.search-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-field .search-icon {
+  position: absolute;
+  left: var(--sp-3);
+  color: var(--text-tertiary);
+  pointer-events: none;
+  display: inline-flex;
+}
+.search-field .search-icon svg {
+  width: 17px;
+  height: 17px;
+}
+/* Inside the modal the input IS the header — no border or fill of its own, so
+   the panel reads as one surface instead of a box within a box. */
+.search-box {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: var(--sp-3) var(--sp-8) var(--sp-3) calc(var(--sp-8) + var(--sp-1));
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-lg);
+  outline: none;
+}
+.search-box::placeholder {
+  color: var(--text-tertiary);
+}
+/* The field is auto-focused on open, so a focus ring here would only ever be
+   decoration — the caret already says where you are. */
+.search-esc {
+  position: absolute;
+  right: var(--sp-3);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  pointer-events: none;
+}
+.search-results {
+  list-style: none;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) 0 0;
+  border-top: 1px solid var(--border);
+  max-height: min(52vh, 420px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.search-result {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+/* One highlight, driven by the keyboard cursor — hover moves that cursor
+   rather than painting a second, competing one. */
+.search-result.active {
+  background: var(--accent-soft);
+}
+.search-title {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+/* The name truncates; the badge never does — a `.docx` hit must stay legible as
+   a document however long its file name is. */
+.search-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The kind tag on a FILE hit. Same quiet pill the vault list uses
+   (`.ws-badge.local`), so search does not invent a third badge style. */
+.search-ext {
+  text-transform: uppercase;
+}
+.search-snippet {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: var(--lh-body);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.search-snippet mark {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 0 2px;
+  font-weight: 600;
+}
+.search-none,
+.filetree-empty {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  /* Same left inset as the Notes label in `.filetree-head`. */
+  padding: var(--sp-3) var(--sp-3) var(--sp-3) calc(var(--sp-3) + var(--sp-2));
+}
+
+/* ============================================================
+   File tree
+   ============================================================ */
+/* The tree bleeds to the sidebar's edges so row hovers read full-width. */
+.filetree {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-2) 0 0;
+  margin-left: calc(-1 * var(--sp-2));
+  margin-right: calc(-1 * var(--sp-1));
+  /* A file tree is never selectable text. Covers react-arborist's own row
+     wrapper divs (our rows set this too) so a double-click to rename can't
+     leave stray blue text-selection bands between rows — and so a drag that
+     the OS refuses can't fall back to smearing a selection across the rows.
+     Prefixed too: this runs in WKWebView, where the unprefixed property is
+     only honoured on recent versions. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+/* react-arborist otherwise widens its scroll area to the longest row so long
+   names scroll horizontally. Clip that and pin the inner list + rows to the
+   visible width so each row's `.tree-label` fades out at its right edge instead
+   of forcing a horizontal scrollbar. */
+.filetree-scroll {
+  overflow-x: hidden !important;
+  /* A reveal (`tree.scrollTo`) lands on react-window assigning `scrollTop`,
+     which honours `scroll-behavior`, so the list glides to the revealed row
+     instead of jumping while the freshly expanded rows are still settling
+     into place. Wheel/trackpad scrolling is unaffected by this property. */
+  scroll-behavior: smooth;
+}
+.filetree-scroll > div {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+.tree-rowwrap {
+  width: 100% !important;
+  /* Arborist also sets `min-width: max-content` inline on every row wrapper
+     (its #10: keep a row's highlight spanning a horizontally scrolled list).
+     We never scroll sideways, so here it only let a long name widen the row
+     past the sidebar — the label never truncated, and the row's sync dot and
+     presence faces slid out of their column (or off-screen). Pin it. */
+  min-width: 0 !important;
+}
+/* OS files dragged over the tree: a dashed accent frame + soft wash invite the
+   drop. Purely a hint — the actual routing happens on the Tauri drop event.
+   Only a drag from OUTSIDE the app gets here; dragging a row around inside the
+   sidebar is suppressed in FileTree, or this frame would cover the insertion
+   line the user is aiming with. */
+.filetree.drop-active {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+/* Rows are draggable, so press-and-hold reads as picking one up — the closed
+   hand is the whole feedback that a row is now "in your grip", before it has
+   moved far enough to show a drop cursor. Held for the length of the drag by
+   the container class, since the pointer leaves the source row immediately. */
+.tree-row:active {
+  cursor: grabbing;
+}
+.filetree.row-dragging,
+.filetree.row-dragging * {
+  cursor: grabbing !important;
+}
+/* Transient outcome pill after an import (menu or drop). Sits at the bottom of
+   the sidebar, out of the way, and fades itself out. */
+/* The sidebar's private status pill used to live here. It is now the shared
+   toast (see "Toasts" below), so an import result and a failed export speak the
+   same language instead of the sidebar owning its own notification surface. */
+/* Section header: "Notes" label on the left, the tree's action icons on the
+   right (create note/folder · fold/unfold). One tidy row, nothing stretches. */
+.filetree-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--sp-1);
+  /* Left pad lines the label roughly under the row glyphs (the tree is nudged
+     left by sp-2). Right pad 36px centres the last button (26px wide) on the
+     rows' sync-dot column at ANY sidebar width, 49px in from the tree's right
+     edge: row pad 12 + the 22px ⋯ button + 8px gap + half the 14px dot slot.
+     The Reveal-in-Finder button above sits on the same column (`.vault-reveal`). */
+  padding: 0 var(--sidebar-toolbar-end) var(--sp-1) calc(var(--sp-3) + var(--sp-2));
+  min-height: 24px;
+}
+.filetree-head .section-label {
+  white-space: nowrap;
+  /* The label yields first if the row ever runs short, so the buttons stay
+     inside the sidebar instead of the last one being pushed out past its edge. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.filetree-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  /* Right end of the row, on the sync-dot column. */
+  margin-left: auto;
+}
+.filetree-actions .tree-tool {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+/* Frozen-root: reads as unavailable but still takes the click, so the toast
+   in `rootBlocked` can say WHY instead of the button silently doing nothing. */
+.filetree-actions .tree-tool.blocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.filetree-actions .tree-tool:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.filetree-actions .tree-tool:active {
+  background: var(--bg-active);
+}
+.filetree-actions .tree-tool:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.filetree-actions .tree-tool svg {
+  width: 16px;
+  height: 16px;
+}
+/* The fold toggle holds both icons stacked; the inactive one fades + spins
+   away so a click reads as the button flipping into its opposite. */
+.filetree-actions .tree-fold-toggle {
+  position: relative;
+}
+.tree-fold-toggle .fold-icon {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    opacity var(--t-med) var(--ease),
+    transform var(--t-med) var(--ease);
+}
+.tree-fold-toggle .fold-expand {
+  opacity: 0;
+  transform: scale(0.5) rotate(90deg);
+}
+.tree-fold-toggle.collapsed .fold-collapse {
+  opacity: 0;
+  transform: scale(0.5) rotate(-90deg);
+}
+.tree-fold-toggle.collapsed .fold-expand {
+  opacity: 1;
+  transform: none;
+}
+/* Hairline splitting the "create" pair from the "fold/unfold" pair. */
+.filetree-actions .tool-divider {
+  width: 1px;
+  height: 15px;
+  /* 2px, not 4: with the right-hand inset, "NOTES" still fits whole beside
+     the full-size toolbar at the default sidebar width. */
+  margin: 0 2px;
+  background: var(--border);
+  flex: 0 0 auto;
+}
+/* The active Select toggle reads as "on" (accent-tinted) while selecting. */
+.filetree-actions .tree-tool.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.filetree-actions .tree-tool.on:hover {
+  background: var(--accent-soft-hover);
+}
+
+/* Bulk-action bar — only mounted while selecting, so it never crowds browsing. */
+.filetree-selectbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  /* Same 17px inset as the tree rows (`TreeRowView`'s paddingLeft), so the
+     select-all box sits in the rows' checkbox column. */
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 17px;
+  min-height: 30px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--sp-1);
+}
+.selbar-check {
+  flex: 0 0 auto;
+  /* Same size as the rows' `.tree-check`, so the column lines up exactly. */
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1.5px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+.selbar-check:hover {
+  border-color: var(--accent);
+}
+.selbar-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.selbar-check svg {
+  width: 11px;
+  height: 11px;
+}
+.selbar-count {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.selbar-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+/* Compact icon actions — same glyph language as the header tools, so three of
+   them fit a narrow sidebar without the text buttons colliding with the count. */
+.selbar-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.selbar-icon svg {
+  width: 16px;
+  height: 16px;
+}
+.selbar-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.selbar-icon:active {
+  background: var(--bg-active);
+}
+.selbar-icon:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.selbar-icon.danger:hover {
+  background: color-mix(in srgb, var(--danger, #e5484d) 14%, transparent);
+  color: var(--danger, #e5484d);
+}
+/* Armed = one more click deletes; make the trash unmistakably hot. */
+.selbar-icon.danger.armed {
+  background: var(--danger, #e5484d);
+  color: #fff;
+}
+.selbar-icon.danger.armed:hover {
+  background: var(--danger, #e5484d);
+  color: #fff;
+}
+
+/* Bulk-delete progress — the count text plus a determinate fill bar so a big
+   delete reads as "working through N", not frozen. */
+.filetree-selectbar.deleting .selbar-count {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+.selbar-progress {
+  flex: 1;
+  min-width: 40px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--danger, #e5484d) 20%, transparent);
+  overflow: hidden;
+}
+.selbar-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--danger, #e5484d);
+  transition: width var(--t-med) var(--ease);
+}
+
+/* Per-row checkbox shown only in select mode (leads the row, before the glyph). */
+.tree-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+.tree-check:hover {
+  border-color: var(--accent);
+}
+.tree-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.tree-check svg {
+  width: 11px;
+  height: 11px;
+}
+.tree-row.checked {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+.tree-row.checked:hover {
+  background: var(--accent-soft-hover);
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-right: var(--sp-3);
+  font-size: var(--fs-md);
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+/* Flat, edge-to-edge fills — no pills, no shadows, no rounding. The glyph is
+   the first thing in every row, so all rows on a level share one left edge. */
+/* Hover is a lighter step of the selected row's violet, so the two states read
+   as one family instead of a grey hover beside a violet selection. */
+.tree-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/* A one-shot "here it is" pulse on a row the app just revealed (store
+   `revealedPath`). Subtle by design: the row's own `.selected` highlight is the
+   lasting signal, this only catches the eye once.
+
+   The keyframes END on the selection fill, not on transparent. An animation's
+   held end state (`both`) outranks `.selected`'s normal declaration whatever
+   the source order, so a pulse that faded to transparent left the row bare
+   until the class dropped and then snapped it back to accent — the "blink" on
+   every click. Landing on `--accent-soft` makes the class drop invisible. A
+   revealed row that is NOT the selection (a folder) gets the variant below. */
+@keyframes tree-reveal {
+  0% {
+    background: var(--accent-soft);
+  }
+  30% {
+    background: var(--accent-soft-hover);
+  }
+  100% {
+    background: var(--accent-soft);
+  }
+}
+@keyframes tree-reveal-unselected {
+  0% {
+    background: var(--accent-soft);
+  }
+  30% {
+    background: var(--accent-soft-hover);
+  }
+  100% {
+    background: transparent;
+  }
+}
+/* Length is mirrored by the clear timer in `FileTree`'s reveal effect
+   (`REVEAL_PULSE_MS`); keep them together. */
+.tree-row.revealed {
+  animation: tree-reveal 900ms var(--ease) both;
+}
+.tree-row.revealed:not(.selected) {
+  animation-name: tree-reveal-unselected;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tree-row.revealed {
+    animation: none;
+  }
+}
+.tree-row.selected {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.tree-row.selected:hover {
+  background: var(--accent-soft-hover);
+}
+/* Folder about to receive a dragged note */
+/* "Release here and it goes inside this folder." Faded in rather than snapped
+   on, so brushing past a folder on the way somewhere else doesn't strobe. */
+.tree-row.drop-target {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  transition:
+    background 120ms var(--ease),
+    box-shadow 120ms var(--ease);
+}
+
+/* The row wrapper is absolutely positioned by react-window via `top`; since
+   arborist keys rows by node id, the same element is reused when the order
+   changes, so animating `top` glides rows to their new home on a reorder (and
+   settles siblings when a folder expands/collapses). */
+.tree-rowwrap {
+  transition: top var(--t-med) var(--ease);
+  will-change: top;
+}
+
+/* The row you've picked up — lift and dim it so the drag reads as tactile. */
+/* The row you picked up: it stays in place and recedes, so the line is the
+   thing your eye follows. Eased out slowly and in quickly — a gentle lift, a
+   clean settle. */
+.tree-row.dragging {
+  opacity: 0.4;
+  transform: scale(0.985);
+  transition:
+    opacity 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Honor reduced-motion: keep the reorder instant, drop the lift animation. */
+@media (prefers-reduced-motion: reduce) {
+  .filetree-scroll {
+    scroll-behavior: auto;
+  }
+  .tree-rowwrap {
+    transition: none;
+  }
+  .tree-row.dragging {
+    transition: none;
+  }
+  /* A pulsing dot on every syncing row is a lot of motion; the colour alone
+     still distinguishes the state. */
+  .tree-sync.syncing .sync-dot {
+    animation: none;
+  }
+}
+
+/* Type glyph — folder (closed/open) or document */
+.tree-glyph {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  color: var(--text-tertiary);
+  transition:
+    color var(--t-fast) var(--ease),
+    transform var(--t-med) var(--ease-spring);
+}
+/* The icon's own box. While a slow open shows the spinner the icon is hidden,
+   not unmounted (`OpeningGlyph`), so the 18px glyph box — and the row — keeps
+   its exact layout and the icon returns without a remount blink. */
+.tree-glyph-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.tree-glyph-icon[data-hidden] {
+  opacity: 0;
+}
+/* Centred in the glyph box in place of the icon. Two classes deep on purpose:
+   `.spinner-xs` is declared later in this file, so a single-class rule here
+   lost the size/border to it and pinned a 12px ring to the box's top-left
+   corner, half over the icon. */
+.tree-glyph .tree-opening-spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 14px;
+  height: 14px;
+  border-width: 1.6px;
+  pointer-events: none;
+}
+.tree-glyph svg {
+  width: 15px;
+  height: 15px;
+}
+.tree-row:hover .tree-glyph {
+  color: var(--text-secondary);
+  transform: scale(1.08);
+}
+.tree-row.is-dir:hover .tree-glyph,
+.tree-row.selected .tree-glyph {
+  color: var(--accent);
+}
+.tree-glyph.is-empty {
+  opacity: 0.5;
+}
+/* Colored items are filled, not just outlined — folders read like Finder
+   tags (near-solid), notes get a soft wash so their detail lines stay legible. */
+/* baalda.com's pairing: the pastel inside, the deeper tone as the outline. */
+.tree-glyph.colored svg {
+  fill: var(--glyph-fill, currentColor);
+}
+
+/* The label takes whatever width the badges leave, so its right edge always
+   sits just before the sync dot / presence column. A name that reaches that
+   edge fades out over the last 24px instead of ending in an ellipsis — the
+   badges stay in their column and the name reappears as the sidebar widens.
+   Short names never touch the fade region, so they are unaffected. */
+.tree-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  transition: transform var(--t-fast) var(--ease);
+}
+.tree-row:hover .tree-label {
+  transform: translateX(1px);
+}
+
+/* Lock badge — always visible on locked folders/notes; tooltip explains. */
+.tree-lock {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+.tree-lock svg {
+  width: 12px;
+  height: 12px;
+}
+/* A lock that actually restricts YOU reads as a warning tone. `.member` stays
+   tertiary: it is someone else's restriction, shown for awareness only.
+   `.vault` is the whole-vault Read-only posture — it restricts you too. */
+.tree-lock.all,
+.tree-lock.vault,
+.tree-lock.you {
+  color: var(--warning);
+}
+
+/* Per-row sync mark — "is this on the server?" — sized like .tree-lock so the
+   two status glyphs share one column rhythm, and built from the same .sync-dot
+   element + semantic tone tokens as the vault-level .sync-badge, so "synced"
+   reads identically everywhere. Absent entirely when sync is off. */
+.tree-sync {
+  flex-shrink: 0;
+  min-width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+.tree-sync .sync-dot {
+  width: 5px;
+  height: 5px;
+}
+/* Synced is the normal state, so it whispers: present enough to scan a column
+   of them, quiet enough not to decorate every row. */
+.tree-sync.synced {
+  color: var(--success);
+}
+.tree-sync.synced .sync-dot {
+  opacity: 0.6;
+}
+.tree-sync.syncing {
+  color: var(--warning);
+}
+.tree-sync.syncing .sync-dot {
+  animation: sync-pulse 1.3s var(--ease) infinite;
+}
+.tree-sync.queued .sync-dot {
+  opacity: 0.7;
+}
+/* Not on the server: a hollow ring — the "absence" reading of the same dot. */
+.tree-sync.unsynced .sync-dot {
+  width: 7px;
+  height: 7px;
+  background: none;
+  border: 1.5px solid currentColor;
+  box-sizing: border-box;
+  opacity: 0.55;
+}
+.tree-sync.error {
+  color: var(--danger);
+}
+/* A folder mid-sync shows its real progress instead of a dot; tabular figures
+   keep the width steady as the number climbs. */
+.tree-sync-pct {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ⋯ actions — whispers in on row hover; its own hover stays small and faint */
+.tree-more {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition:
+    opacity var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.tree-more svg {
+  width: 17px;
+  height: 17px;
+}
+.tree-row:hover .tree-more,
+.tree-more:focus-visible {
+  opacity: 0.7;
+}
+.tree-more:hover {
+  opacity: 0.9;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+/* Whispered "empty" tag — only appears while hovering an empty folder */
+.tree-hint {
+  flex-shrink: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-pill);
+  padding: 1px var(--sp-2);
+  opacity: 0;
+  transform: translateX(2px);
+  transition:
+    opacity var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+.tree-row:hover .tree-hint {
+  opacity: 1;
+  transform: translateX(0);
+}
+.tree-rename-input {
+  flex: 1;
+  min-width: 0;
+  user-select: text;
+  background: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--fs-md);
+  padding: 1px var(--sp-2);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Drag-and-drop insertion line (replaces react-arborist's default blue).
+   Fades/grows in so the drop target reads clearly as you drag over it, with a
+   soft glow and a leading dot to anchor the eye. */
+/* The insertion line. It lives for the whole drag and is moved by transform
+   from the pointer handler, so it GLIDES from slot to slot on the compositor —
+   the difference between a marker that tracks your hand and one that blinks
+   from place to place. `top: 0` because the transform carries the whole offset;
+   `left` is set inline to match the destination's indent. */
+.drop-cursor {
+  position: absolute;
+  top: 0;
+  right: var(--sp-2);
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform;
+  /* ONLY the transform is animated, and only vertically. `left` is snapped,
+     never transitioned: it runs on the main thread while the transform runs on
+     the compositor, and the two desync under any load — the line then bows out
+     sideways and curves back instead of stepping straight up the list. `left`
+     also changes the line's WIDTH (it is anchored right), so animating it
+     morphs the line's shape mid-move on top of that.
+
+     Short and near-linear on purpose. This marks a slot, and a slot is a
+     discrete thing: it should step from row to row a beat behind your hand,
+     not glide or ease. */
+  transition:
+    transform 90ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 90ms linear;
+}
+.drop-cursor::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  transform: translateY(-50%);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Snap rather than glide — but keep the fade, which carries no motion. */
+  .drop-cursor {
+    transition: opacity 110ms var(--ease);
+  }
+}
+
+/* ---- Context menu — floating card ---- */
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1);
+  min-width: 176px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  animation: rise-in var(--t-fast) var(--ease) both;
+  /* `placeMenu` flips the menu above its anchor when it won't fit below; this is
+     the last resort for a menu taller than the whole window, which would
+     otherwise run off both edges at once. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.context-menu li {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  color: var(--text-primary);
+  cursor: pointer;
+  /* One line per row: the menu widens to its longest label instead of
+     wrapping one ("Recently modified") over two. */
+  white-space: nowrap;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.tree-context-menu {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.tree-context-menu li:focus-visible {
+  background: var(--bg-hover);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.context-menu li:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/* Unavailable action (e.g. create at a frozen root). Still clickable so the
+   refusal toast can explain why, but visibly not a live option. */
+.context-menu li.disabled {
+  opacity: 0.45;
+}
+.context-menu li.disabled:hover {
+  background: none;
+  color: inherit;
+}
+/* A thin rule above an item groups it apart from the ones above (Import/Export
+   sit below the create actions). */
+.context-menu li.menu-sep-item {
+  position: relative;
+  margin-top: 9px;
+}
+/* The rule is its own straight line above the row, not the row's top border:
+   a border on a rounded row bent up at both ends into a faint box. */
+.context-menu li.menu-sep-item::before {
+  content: "";
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  top: -5px;
+  height: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+.context-menu li.danger {
+  color: var(--danger);
+}
+.context-menu li.danger:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* ---- Sort menu (toolbar popover + the ⋯ menu's sort group) ----
+   A non-clickable group label. Not a heading element: this is a menu, and the
+   label names the radio group below it rather than starting a document section. */
+.context-menu li.menu-heading {
+  padding: var(--sp-1) var(--sp-3) var(--sp-1) calc(var(--sp-3) + 18px);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  cursor: default;
+  /* One line: the menu widens to fit "Sort this folder by" instead of
+     breaking it over two. */
+  white-space: nowrap;
+}
+.context-menu li.menu-heading:hover {
+  background: none;
+}
+/* As a group start inside the ⋯ menu it keeps the rule but not the sep's own
+   padding, which would double up with the heading's tighter one. */
+.context-menu li.menu-heading.menu-sep-item {
+  padding-top: var(--sp-2);
+}
+/* Fixed-width tick gutter, so the two options' labels line up whether or not
+   they carry the check — and so the heading above can align to the same text. */
+.menu-tick {
+  display: inline-block;
+  width: 18px;
+  flex-shrink: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+.context-menu li.is-on {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+/* Trailing explanatory line — the one place the two-layer arrangement rule is
+   stated in the UI, so it reads as prose, not as another thing to click. */
+.context-menu li.menu-note {
+  margin-top: var(--sp-1);
+  padding-top: calc(var(--sp-2) + 1px);
+  border-top: 1px solid var(--border);
+  max-width: 230px;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  white-space: normal;
+  cursor: default;
+}
+.context-menu li.menu-note:hover {
+  background: none;
+}
+.context-menu li.menu-note.menu-link {
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.context-menu li.menu-note.menu-link:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+/* The toolbar popover hangs off its button instead of the pointer, so it is
+   absolute within the wrapper rather than fixed like the row menu. */
+.tree-sort-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.context-menu.tree-sort-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  /* Opens down-and-right from the button. The toolbar is left-anchored (it sits
+     just after the "Notes" label, not at the sidebar's right edge), so
+     right-aligning would walk the menu off the sidebar's LEFT edge instead.
+     Overhanging to the right is fine — nothing in the sidebar clips, and a
+     popover laid briefly over the editor is what a popover is. */
+  left: 0;
+  min-width: 210px;
+}
+
+/* ---- MenuSelect — the shared button-anchored menu primitive ----
+   Used by the app's own selects (see components/MenuSelect.tsx). */
+.role-select-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+/* Positioning is done in JS (`MenuSelect` → `placeMenu`) in viewport
+   coordinates, so the menu can flip above its trigger and can't be clipped by a
+   scrolling ancestor. Only the sizing belongs here. */
+.context-menu.role-menu {
+  min-width: 150px;
+}
+/* Portalled to <body>, so it is no longer nested inside whatever opened it and
+   has to out-rank those layers by hand: the settings modal is 200 and a modal
+   backdrop is 300. A popover always belongs above the surface it was opened
+   from. */
+.context-menu.menu-portal {
+  z-index: 400;
+}
+.context-menu.role-menu li {
+  text-transform: capitalize;
+}
+.role-caret {
+  color: var(--text-tertiary);
+  font-size: 0.75em;
+  line-height: 1;
+}
+/* Second line on an option — says what the choice does, so "Private" doesn't
+   have to be guessed at. */
+.menu-option-hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  margin-top: 1px;
+}
+.role-menu li .role-option-label {
+  display: inline-block;
+}
+
+/* ---- Range slider — the app's one ----
+   Lifted out of `components/graph.css`, where it was the graph panel's private
+   restyling of the native control, when Settings → Appearance needed the same
+   slider for Content width. Same look, one definition: a hairline track and a
+   small accent thumb ringed in the surface colour so it reads as lifted off
+   the line. `.range-value` is its readout — tabular mono, right-aligned, so a
+   number changing under a dragging thumb doesn't shift the row.
+
+   Only the WebKit thumb is styled: Tauri renders in WKWebView, WebKitGTK and
+   WebView2, so the `::-moz-range-thumb` half of the graph's original rule had
+   no target to reach and did not come along.
+
+   Ranges are exempted from `.settings-page input` further down, or the settings
+   card would repaint the track as a text field. */
+.range-input {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  cursor: pointer;
+}
+.range-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-surface);
+  transition: transform var(--t-fast) var(--ease);
+}
+.range-input::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+.range-value {
+  min-width: 32px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Color swatch row inside the ⋯ menu (Finder-tag style) */
+.context-menu li.menu-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 18px);
+  align-items: center;
+  justify-content: start;
+  gap: var(--sp-2);
+  cursor: default;
+}
+.context-menu li.menu-swatches:hover {
+  background: none;
+}
+/* ⋯ menu rows that open a fly-out (Sort by, Color): label · current value · ›. */
+.context-menu li.menu-sub-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.menu-sub-label {
+  flex: 1;
+}
+.menu-sub-value {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+.menu-sub-chevron {
+  color: var(--text-tertiary);
+  line-height: 1;
+}
+.menu-sub-auto {
+  margin-right: var(--sp-2);
+  font-size: var(--fs-xs);
+}
+.context-menu li.menu-sub-row.open {
+  background: var(--accent-soft);
+}
+/* The fly-out itself: the same card, its own layer beside the menu. */
+.context-menu.context-submenu {
+  z-index: 101;
+  min-width: 0;
+  animation: fade-in var(--t-fast) var(--ease) both;
+}
+.context-submenu li.menu-swatches {
+  padding: var(--sp-2);
+}
+.context-submenu li.menu-navigation-option { display:flex; align-items:center; justify-content:space-between; gap:12px; text-align:left; }
+.context-submenu .menu-navigation-option .menu-tick { width:auto; }
+.swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition:
+    transform var(--t-med) var(--ease-spring),
+    border-color var(--t-fast) var(--ease);
+}
+.swatch:hover {
+  transform: scale(1.25);
+}
+.swatch.on {
+  border-color: var(--text-primary);
+}
+.swatch.clear {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  position: relative;
+}
+.swatch.clear.on {
+  border-color: var(--text-primary);
+}
+.swatch.clear::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  top: 50%;
+  height: 1px;
+  background: var(--border-strong);
+  transform: rotate(-45deg);
+}
+/* ============================================================
+   Main pane — floating white sheet
+   ============================================================ */
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  background: var(--bg-surface);
+  border-top-left-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+  /* Plain `hidden`, NOT `clip`: clip triggered a WKWebView compositing bug
+     that blanked sibling layers (the sidebar footer vanished when a synced
+     note's editor layers came up). Programmatic focus-scroll into the
+     off-screen version panel is prevented at the source instead — the panel
+     focuses with preventScroll and skips its mount-time scrollIntoView. */
+  overflow: hidden;
+  /* Anchors the version-history panel, which slides in over the editor. */
+  position: relative;
+}
+
+/* ============================================================
+   Version history panel — slides in from the right, OVER the
+   editor rather than beside it: the list is read against the
+   note (hover previews in place), so the note must stay put.
+   ============================================================ */
+.version-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(320px, 85vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  z-index: 120; /* over the editor + backlinks, under overlays/modals (200+) */
+  outline: none;
+}
+.version-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+}
+.version-panel-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.version-panel-title strong {
+  font-size: var(--fs-md);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.version-panel-hint {
+  margin: 0;
+  padding: 0 var(--sp-4) var(--sp-2);
+  font-size: var(--fs-xs);
+}
+.version-panel-empty {
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-sm);
+}
+.version-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-2);
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.version-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-md);
+}
+.version-row.active {
+  background: var(--bg-hover);
+}
+/* Current-buffer pseudo-row: an accent dot where the others carry a face. */
+.version-dot {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.version-dot::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.version-avatar {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.version-avatar svg,
+.version-avatar img {
+  object-fit: cover;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.version-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.version-row-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.version-row-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.version-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--success-soft);
+  color: var(--success);
+}
+/* Revert whispers in like .tree-more: an answer for the row you're on. */
+.version-revert {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.version-row:hover .version-revert,
+.version-row.active .version-revert {
+  opacity: 1;
+}
+.version-revert:disabled {
+  opacity: 0.45;
+}
+
+/* Settings → Versioning: the vault checkpoint list. */
+.checkpoint-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.checkpoint-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.checkpoint-row:last-child {
+  border-bottom: none;
+}
+.checkpoint-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-right: auto;
+}
+.checkpoint-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.checkpoint-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.checkpoint-note {
+  margin-top: var(--sp-3);
+  font-size: var(--fs-xs);
+}
+
+/* Post-auto-update "What's New" modal. Rides the shared .modal/.modal-backdrop
+   chrome; everything below is the celebratory dressing. */
+.whats-new {
+  /* Wide and short rather than a tower: a long release list must never push
+     the dialog past the viewport (it used to clip top AND bottom). The card
+     caps its height, the notes list scrolls, hero + CTA stay pinned. */
+  width: 580px;
+  max-width: min(580px, 92vw);
+  max-height: min(72vh, 620px);
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+  padding: var(--sp-6) var(--sp-6) var(--sp-5);
+  /* A soft accent wash from the top so the moment reads as good news, not a
+     system dialog — same trick as the welcome screen's radial. */
+  background:
+    radial-gradient(320px 180px at 50% -30px, var(--accent-soft) 0%, transparent 70%),
+    var(--bg-surface);
+}
+.whats-new-hero {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.whats-new-glyph {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  background: var(--accent-gradient, var(--accent));
+  box-shadow: var(--shadow-md);
+  animation: whats-new-pop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
+}
+.whats-new-title {
+  margin: var(--sp-2) 0 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.whats-new-version {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--sp-3);
+}
+.whats-new-sub {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.whats-new-notes {
+  list-style: none;
+  margin: var(--sp-4) 0 0;
+  padding: var(--sp-4);
+  /* The one flexible region: eats the leftover height and scrolls past it. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  text-align: left;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.whats-new-notes li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  line-height: 1.45;
+  /* Each line settles in a beat after the previous one (delay set inline). */
+  animation: whats-new-line 320ms var(--ease) both;
+}
+.whats-new-notes li svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--accent);
+}
+.whats-new-cta {
+  width: 100%;
+  flex: none;
+  margin-top: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4);
+}
+@keyframes whats-new-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.5) rotate(-12deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+@keyframes whats-new-line {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .whats-new-glyph,
+  .whats-new-notes li {
+    animation: none;
+  }
+}
+/* The tab strip is the header's title row (see App.tsx): tabs on the left, the
+   sync badge and the icon buttons on the right. The row has no chrome of its
+   own — no fill, no bottom rule — so it is part of the white note sheet; the
+   tabs are pills and the controls float as one pill (`.header-actions`). */
+.main-header {
+  container-type: inline-size;
+  container-name: dashboard-header;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  /* Same centre line as the traffic lights and the sidebar/search tools; the
+     row is taller than the pill, so the pill also clears the window's top. */
+  min-height: var(--chrome-row-h);
+  padding: 0 var(--sp-4) 0 calc(var(--sp-3) + 66px);
+  background: transparent;
+}
+html[data-platform="macos"] .main-header {
+  padding-left: var(--sp-3);
+}
+html[data-platform="macos"] .sidebar-hidden .main-header {
+  /* Traffic lights + sidebar and search stay clear of the first tab. */
+  padding-left: 154px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app,
+  .sidebar,
+  .titlebar-tools {
+    transition-duration: 0ms;
+  }
+}
+/* The controls keep their own box: never shrink, never wrap, sit centred — the
+   strip is the flexible child, and it scrolls instead of squeezing the badge. */
+.main-header > :not(.tab-strip) {
+  flex: none;
+  align-self: center;
+  white-space: nowrap;
+}
+/* The floating pill around the sync badge and the icon buttons. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* More air on the left so the badge's tint never kisses the pill's edge. */
+  padding: 4px var(--sp-2) 4px var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+/* ---- Open-file tabs (TabBar) ---- */
+.tab-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* The strip scrolls (wheel/trackpad/drag-into-view), but a scrollbar under
+     a row of tabs reads as clutter, so it's hidden in both engines. */
+  scrollbar-width: none;
+}
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+/* Inside the header: take the row and shrink rather than push the controls off.
+   The mask fades the last tabs out before they reach the badge, so overflow
+   reads as "more to the right". */
+.main-header > .tab-strip {
+  flex: 1 1 auto;
+  min-width: 0;
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.tab {
+  position: relative; /* the travelling card anchors here */
+  display: flex;
+  align-items: center;
+  flex: none;
+  max-width: 220px;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+}
+/* No hover fill on an inactive tab: the only thing that changes under the
+   pointer is the × appearing (see `.tab:hover .tab-close`). A grey card
+   behind the label read as a second, half-selected tab. */
+/* The active tab's card SLIDES between tabs (one shared-layout motion element,
+   see TabBar.tsx) — the tabs themselves never move. The card is a pill in the
+   sidebar's grey (`--bg-app`) on the white row. */
+.tab-active-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--bg-app);
+  border-radius: var(--radius-pill);
+}
+.tab > .tab-label,
+.tab > .tab-close {
+  position: relative;
+  z-index: 1;
+}
+.tab.active {
+  color: var(--text-primary);
+}
+/* Click acknowledged, open in flight (same signal as the sidebar row). */
+.tab.opening {
+  opacity: 0.6;
+}
+/* `+` new note, after the last tab. */
+.tab-new {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  align-self: center;
+  margin: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.tab-new:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tab-new svg {
+  width: 13px;
+  height: 13px;
+}
+.tab-label {
+  background: none;
+  border: 0;
+  padding: 7px 0 7px var(--sp-4);
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tab.active .tab-label {
+  font-weight: 600;
+}
+.tab-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  /* Equal air on both sides of the ×, and no UA button padding: the glyph is
+     centred by the grid, so any padding only shifts the hover square. */
+  margin: 0 var(--sp-2);
+  padding: 0;
+  border: 0;
+  /* Round, to sit inside the round tab pill (a rounded square read as a
+     second, mismatched shape). */
+  border-radius: 50%;
+  background: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  /* Transparent, not absent: the space stays reserved so tabs don't change
+     width as the pointer moves across the strip. */
+  opacity: 0;
+}
+.tab:hover .tab-close,
+.tab.active .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+.tab-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.tab-close svg {
+  width: 11px;
+  height: 11px;
+}
+
+.save-indicator {
+  font-size: var(--fs-sm);
+  color: var(--text-tertiary);
+}
+.save-indicator.saving {
+  color: var(--accent);
+}
+.save-indicator.error {
+  color: var(--danger);
+}
+
+.editor-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.editor-host {
+  height: 100%;
+}
+.editor-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--text-tertiary);
+  font-size: var(--fs-md);
+}
+
+/* ---- Image / PDF preview ---- */
+.file-preview {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.file-preview-image .file-preview-body {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+}
+.file-preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+}
+.file-preview-pdf .file-preview-body {
+  overflow: hidden;
+}
+.file-preview-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* ---- Viewer leaves (components/viewers/*) ----
+   Every non-note file opens into one of these. They all sit inside the same
+   `.file-preview` / `.file-preview-body` frame above, so the pane's scrolling
+   and sizing are declared once. */
+
+/* Video / audio: the media is the content, centred on the pane's background. */
+.file-preview-video .file-preview-body,
+.file-preview-audio .file-preview-body {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+}
+.file-preview-video .file-preview-media {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.18);
+  background: #000;
+}
+.file-audio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  align-items: center;
+  width: min(560px, 100%);
+}
+.file-audio-name {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-preview-audio .file-preview-media {
+  width: 100%;
+}
+
+/* Read-only CodeMirror (CodeView). The host fills the pane; the view's own
+   theme (see CodeView) carries the type and gutter colours. */
+.file-preview-code .file-preview-body {
+  overflow: hidden;
+}
+.file-code-host {
+  height: 100%;
+}
+.file-code-host .cm-editor {
+  height: 100%;
+}
+.file-code-host .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* ---- Tabular viewers (CSV/TSV + XLSX) ----
+   The same borders, `--bg-subtle` header and `--sp-*` padding as a rendered
+   markdown table in the editor (`editor/theme.ts` `.cm-md-table`), restated
+   here because that one is a CodeMirror theme scoped inside `.cm-editor`. */
+.file-preview-csv .file-preview-body,
+.file-preview-xlsx .file-preview-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.file-sheet-tabs {
+  padding: var(--sp-3) var(--sp-4) 0;
+}
+.file-sheet-tabs .segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.file-sheet-tabs .segmented button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.file-table-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-4);
+  gap: var(--sp-2);
+}
+.file-table-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+.file-table {
+  border-collapse: collapse;
+  /* Natural column widths, like the editor's tables: a wide sheet scrolls
+     inside the wrapper instead of crushing its columns. */
+  width: max-content;
+  font-size: var(--fs-sm);
+}
+.file-table th,
+.file-table td {
+  border: 1px solid var(--border);
+  padding: var(--sp-1) var(--sp-3);
+  text-align: left;
+  vertical-align: top;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+}
+.file-table th {
+  background: var(--bg-subtle);
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.file-table .file-table-gutter {
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.file-table-footer {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+.file-table-empty {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+/* ---- Document viewer (docx) ---- */
+.file-preview-docx .file-preview-body {
+  padding: var(--sp-6) var(--sp-4);
+}
+.file-doc {
+  max-width: 72ch;
+  margin: 0 auto;
+  color: var(--text-primary);
+  line-height: var(--lh-body);
+}
+.file-doc-body img {
+  max-width: 100%;
+  height: auto;
+}
+.file-doc-body table {
+  border-collapse: collapse;
+}
+.file-doc-body th,
+.file-doc-body td {
+  border: 1px solid var(--border);
+  padding: var(--sp-1) var(--sp-2);
+}
+.file-doc-warnings {
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.file-doc-warnings summary {
+  cursor: pointer;
+}
+
+/* The inline "large file — render anyway?" prompt (docx / xlsx). A button, not
+   a modal: it is a question about this pane, answered in this pane. */
+.file-ask {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--sp-3);
+  height: 100%;
+  padding: var(--sp-6);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+/* ---- The card (viewers/FileCard) ---- */
+.file-preview-card .file-preview-body {
+  display: grid;
+  place-items: center;
+  padding: var(--sp-6);
+}
+.file-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 420px;
+  padding: var(--sp-6);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+}
+.file-card-icon {
+  width: 40px;
+  height: 40px;
+  color: var(--text-tertiary);
+}
+.file-card-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.file-card-meta {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.file-card-hash {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+.file-card-reason {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.file-card-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* ---- Removed-on-disk banner ---- */
+.banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin: var(--sp-4) var(--sp-6) 0;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--warning-soft);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+.banner-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--sp-2);
+}
+/* Banner buttons are compact pills of one height. The primary keeps its accent
+   fill; everything else (an unclassed button was the browser's grey box) is a
+   quiet outlined pill that picks up the strip's own tint. */
+.banner .banner-actions button:not(.link-btn) {
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: none;
+}
+.banner .banner-actions button:not(.primary):not(.link-btn) {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+.banner .banner-actions button:not(.primary):not(.link-btn):hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, currentColor 36%, transparent);
+}
+.banner .banner-actions button:not(.primary):not(.link-btn):disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* Update banner: same shape as the removed-note banner, but an accent tint so
+   it reads as informational rather than a warning. */
+.update-banner {
+  background: var(--accent-soft, var(--warning-soft));
+}
+
+/* The update banner sits at the very top of the WINDOW (see .app-shell), so it
+   trades the floating-card look for a flush full-width strip. Content is
+   centered and the side padding is wide enough that nothing lands under the
+   macOS traffic lights, which float over the top-left corner when the strip
+   becomes the topmost thing on screen. */
+.global-banner {
+  margin: 0;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  justify-content: center;
+  padding: var(--sp-3) 96px;
+}
+
+/* Ring spinner shown inside the button while a check/download is in flight. */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text-on-accent) 35%, transparent);
+  border-top-color: var(--text-on-accent);
+  animation: btn-spin 0.6s linear infinite;
+}
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-spinner {
+    animation-duration: 1.4s;
+  }
+}
+.mono {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-sm);
+}
+
+/* ============================================================
+   Backlinks
+   ============================================================ */
+.backlinks-float {
+  /* Bottom-right of the note, inside .main (position: relative). Below the
+     slide-over right panel (120), above the editor. */
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  z-index: 20;
+}
+/* Same shape as the header's floating controls pill. */
+.backlinks-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 5px var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.backlinks-pill:hover,
+.backlinks-pill.active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.backlinks-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.backlinks-pill svg {
+  width: 13px;
+  height: 13px;
+}
+/* The shared popover card, opening upward from the pill, right-aligned. */
+/* The popover card, opening upward from the pill, right-aligned. Split out of
+   the removed account popover's rule group so this one survives on its own. */
+.backlinks-popover {
+  position: absolute;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  animation: rise-in var(--t-fast) var(--ease) both;
+  top: auto;
+  bottom: calc(100% + var(--sp-2));
+  left: auto;
+  right: 0;
+  width: 300px;
+  max-height: min(420px, 60vh);
+  overflow-y: auto;
+}
+/* Heading and rows share one left edge: the row's padding. */
+.backlinks-popover-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-2) var(--sp-2);
+}
+.backlinks-popover-head .subhead {
+  margin: 0;
+}
+.backlinks-popover-count {
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 18px;
+}
+.backlinks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.backlink {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.backlink:hover {
+  background: var(--bg-hover);
+}
+.backlink-icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-tertiary);
+}
+.backlink-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.backlink-title,
+.backlink-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.backlink-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.backlink-meta {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+/* The row opens the note; the chevron says so on hover. */
+.backlink-go {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-md);
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.backlink:hover .backlink-go {
+  opacity: 1;
+}
+
+/* Error boundary fallback (e.g. a crashed graph panel) */
+.error-boundary {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--bg-base, #000) 70%, transparent);
+  z-index: 50;
+}
+.error-boundary-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  align-items: flex-start;
+  max-width: 24rem;
+  padding: var(--sp-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 12px);
+  box-shadow: var(--shadow-lg, 0 8px 32px rgba(0, 0, 0, 0.3));
+}
+
+/* ============================================================
+   Modal — base primitives (.modal-backdrop, .modal, .modal-header)
+   ============================================================ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 30, 0.4);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Above the settings modal's own backdrop (`.settings-backdrop`, 200) so a
+     dialog opened from within Settings — Sign in from the Turn-on-sync card,
+     Upgrade, a confirm — sits on top of it regardless of DOM order. */
+  z-index: 300;
+  animation: fade-in var(--t-med) var(--ease) both;
+}
+.modal {
+  background: var(--bg-surface);
+  border-radius: var(--radius-xl);
+  padding: var(--sp-6);
+  width: 420px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-lg);
+  animation: rise-in var(--t-med) var(--ease) both;
+}
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.modal-header .muted {
+  font-family: var(--font-body);
+  font-weight: 400;
+}
+/* ============================================================
+   Motion
+   ============================================================ */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* ---- Appearance → Content width ----
+   The one settings row with a control too big for the right-hand side: a
+   slider, its readout, and a live miniature of the editor under both. It stays
+   a `.menu-row` (so it keeps the panel's spacing and hairlines) and wraps
+   instead: label and slider share the first line, the preview takes a full one
+   of its own. */
+.settings-content > .menu-row.measure-row {
+  flex-wrap: wrap;
+}
+.measure-row .menu-row-label {
+  flex: 1 1 200px;
+}
+.range-field {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex: 1 1 220px;
+  max-width: 320px;
+}
+.range-field .range-input {
+  flex: 1;
+  min-width: 0;
+}
+/* Fixed width, in the readout's own monospace: "Full width" and "120
+   characters" must not move the slider's right edge as you drag past the last
+   stop. */
+.measure-row .range-value {
+  flex: 0 0 14ch;
+}
+.measure-row .width-preview {
+  flex: 0 0 100%;
+}
+
+/* The miniature. The frame is the app's ground and the page inside it is the
+   editor's surface — the same two colours the real window puts side by side —
+   so the column's air reads as margin rather than as emptiness. Its width and
+   margins are set inline from `computePreviewColumn` (real pane, real `ch`,
+   scaled down); everything here is the picture frame around that arithmetic. */
+.width-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.width-preview-frame {
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-2);
+}
+.width-preview-page {
+  height: 104px;
+  padding: var(--sp-4) 0;
+  overflow: hidden;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+}
+.width-preview-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  /* Follows the thumb rather than jumping to each stop. The app-wide
+     reduced-motion rule already flattens this to nothing. */
+  transition:
+    width var(--t-med) var(--ease),
+    margin var(--t-med) var(--ease);
+}
+/* Borrowed from the editor's loading skeleton, at miniature scale and holding
+   still: a shimmer here would say "loading" on a panel that is not loading. */
+.width-preview .skel-line {
+  height: 6px;
+  animation: none;
+}
+.width-preview .skel-title {
+  height: 9px;
+  margin-bottom: var(--sp-1);
+}
+.width-preview-caption {
+  text-align: center;
+}
+
+.field-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+.field-hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+/* Notification toggle row */
+.toggle-row {
+  cursor: pointer;
+}
+.toggle-row input[type="checkbox"] {
+  width: auto;
+  flex: none;
+  cursor: pointer;
+}
+
+/* ── Switch ──────────────────────────────────────────────────────────────
+   A real checkbox, visually replaced. The input keeps its size and sits on
+   top at zero opacity so it stays the hit target and the focus owner — the
+   track below is pure paint. */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 40px;
+  height: 24px;
+}
+.switch .switch-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+.switch.is-disabled .switch-input {
+  cursor: not-allowed;
+}
+/* The OFF track has to read as a control that is off, not as a control that
+   is disabled. `--bg-subtle` over a `--bg-surface` card is almost the same
+   white, and `--border` at 9% alpha didn't draw an edge, so the switch
+   disappeared and only the knob's shadow hinted at it. `--bg-active` is the
+   deepest neutral fill we have and `--border-strong` gives it a real rim; in
+   dark both tokens flip to lighter values against the darker card, so the
+   contrast survives the theme without the track glowing. Disabled stays
+   distinguishable because `.switch.is-disabled` dims the whole control. */
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-pill);
+  background: var(--bg-active);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  transition:
+    background var(--t-med) var(--ease),
+    box-shadow var(--t-med) var(--ease);
+}
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-surface);
+  /* A rim as well as a drop shadow: the knob is `--bg-surface`, and now that
+     the off track is a real fill the two are close together in dark mode
+     (where a shadow alone reads as nothing). The ring is what keeps the thumb
+     visible on the off track AND on the accent one, in both themes. */
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--border-strong);
+  /* The knob is what makes the change read as a decision rather than a blink,
+     so it gets a slight overshoot on the way across. */
+  transition: transform var(--t-med) cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+.switch.on .switch-track {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.switch.on .switch-knob {
+  transform: translateX(16px);
+}
+.switch.is-disabled {
+  opacity: 0.5;
+}
+.switch .switch-input:focus-visible + .switch-track {
+  box-shadow: var(--focus-ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .switch-knob,
+  .switch-track {
+    transition: none;
+  }
+}
+
+/* ============================================================
+   Loading states & micro-interactions
+   ------------------------------------------------------------
+   Feedback for asynchronous work, in one place so the same wait looks the same
+   everywhere. Three rules the whole section follows:
+
+   1. A press is acknowledged instantly (`:active`), a *wait* is only labelled
+      once it outlives ~140ms (`useAsyncAction`). Under that, an indicator
+      flashes and reads as a glitch rather than as progress.
+   2. Nothing changes size mid-action. Spinners are laid out beside a label whose
+      width is already reserved, so a control never resizes under the cursor and
+      pulls a different button into the click.
+   3. Every animation has a `prefers-reduced-motion` answer. The information has
+      to survive the motion being switched off.
+   ============================================================ */
+
+/* ---- Spinner (the app's one ring) ---- */
+.spinner {
+  flex: none;
+  display: inline-block;
+  border-radius: 50%;
+  border-style: solid;
+  border-color: color-mix(in srgb, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  animation: btn-spin 0.62s linear infinite;
+}
+.spinner-xs {
+  width: 12px;
+  height: 12px;
+  border-width: 1.7px;
+}
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+.spinner-md {
+  width: 22px;
+  height: 22px;
+  border-width: 2.4px;
+}
+/* `.spinner-inherit` needs no rule — the base above is already currentColor,
+   which is the right answer for a spinner inside a button (a red Delete spins
+   red). The rest exist only where currentColor would be wrong or absent. */
+.spinner-accent {
+  color: var(--accent);
+}
+.spinner-on-accent {
+  border-color: color-mix(in srgb, var(--text-on-accent) 35%, transparent);
+  border-top-color: var(--text-on-accent);
+}
+.spinner-neutral {
+  border-color: var(--border-strong);
+  border-top-color: var(--text-secondary);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Slowed rather than stopped: a frozen ring says "hung", and the one thing
+     this element must never do is imply the app has died. */
+  .spinner {
+    animation-duration: 1.5s;
+  }
+}
+
+/* ---- Success tick: draws itself in, so it reads as "just completed" ---- */
+.checkmark {
+  flex: none;
+  color: var(--success);
+  stroke-dasharray: 26;
+  animation: check-draw 0.26s var(--ease) both;
+}
+.checkmark-xs {
+  width: 13px;
+  height: 13px;
+}
+.checkmark-sm {
+  width: 16px;
+  height: 16px;
+}
+.checkmark-md {
+  width: 20px;
+  height: 20px;
+}
+@keyframes check-draw {
+  from {
+    stroke-dashoffset: 26;
+    opacity: 0.4;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .checkmark {
+    animation: none;
+    stroke-dasharray: none;
+  }
+}
+
+/* ---- AsyncButton layout ---- */
+/* Applies to any button that can grow a spinner, including the hand-rolled
+   sign-in submit — hence the bare selectors rather than a component class. */
+button:has(> .async-btn-label),
+button.is-busy,
+button.is-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+/* A busy button stays interactive-looking rather than greying out: it IS doing
+   what you asked, and the standard 0.55 disabled opacity reads as "rejected". */
+button.is-busy:disabled,
+button.is-done:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+button.is-done:disabled {
+  cursor: default;
+}
+/* `.selbar-icon` and friends are 28px squares; a spinner swapping in for the
+   glyph must not stretch them. */
+.selbar-icon.is-busy,
+.selbar-icon.is-done {
+  gap: 0;
+}
+
+/* ---- Confirm dialog (destructive access changes, etc.) ---- */
+.confirm-dialog {
+  width: 440px;
+  padding: var(--sp-8) var(--sp-8) var(--sp-6);
+  text-align: center;
+}
+/* The card takes focus on open (so Esc lands in it), not as a control. */
+.confirm-dialog:focus-visible {
+  outline: none;
+}
+.confirm-badge {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin: 0 auto var(--sp-4);
+  border-radius: var(--radius-lg);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.confirm-dialog.tone-accent .confirm-badge {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.confirm-title {
+  margin: 0 0 var(--sp-3);
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.confirm-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0 auto var(--sp-6);
+  max-width: 38ch;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+}
+.confirm-body p {
+  margin: 0;
+}
+.confirm-body strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+/* The "make local only" confirm lists exactly what the server loses, then makes
+   you type the vault's name. Both reuse the confirm body's own tokens — nothing
+   here is a new control, only the two shapes `.confirm-body` had no rule for. */
+.confirm-body .confirm-list {
+  margin: 0;
+  padding-left: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.confirm-body .confirm-type {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+  text-align: left;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+.confirm-actions .primary,
+.confirm-actions .ghost-pill {
+  min-width: 128px;
+  padding: var(--sp-3) var(--sp-5);
+  font-size: var(--fs-md);
+}
+.confirm-actions .primary.danger {
+  background: var(--danger);
+}
+.confirm-actions .primary.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 88%, black);
+}
+
+/* ---- A row whose note is being opened ---- */
+/* Selection is applied optimistically on click, so the row highlights before
+   the server has confirmed the note — the same trick as the vault rename. */
+.tree-row.opening {
+  background: var(--accent-soft);
+}
+.tree-row.opening .tree-label {
+  color: var(--text-primary);
+}
+
+/* ---- Banners: the slot animates its own height ---- */
+/* `overflow: hidden` is what makes the height animation possible — without it
+   the banner's content spills out of the collapsing box mid-transition. */
+.banner-slot {
+  overflow: hidden;
+  flex: none;
+}
+
+/* ---- Toasts ---- */
+.toast-viewport {
+  position: fixed;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  /* Above every modal, dialog and overlay layer (settings 200, dialogs 300,
+     update gate 400, lightbox 1000): a toast raised from inside Vault
+     Settings must be readable over it. */
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  /* The viewport itself must not swallow clicks meant for the editor beneath;
+     each toast re-enables them for its own box. */
+  pointer-events: none;
+  max-width: min(380px, calc(100vw - var(--sp-8)));
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+/* A 6px dot rather than a coloured background: the tone is legible at a glance
+   without the toast shouting over the note you're reading. */
+.toast-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.toast-success .toast-dot {
+  background: var(--success);
+}
+.toast-error .toast-dot {
+  background: var(--danger);
+}
+.toast-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+.toast-close {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-lg);
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.toast-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover, color-mix(in srgb, var(--text-primary) 8%, transparent));
+}
+
+/* ---- Press feedback on the controls that had none ---- */
+/* Rule 1 of this section: a click is acknowledged in the same frame it happens,
+   whatever the action goes on to do. `.primary` already did this; these are the
+   controls where pressing produced no physical response at all. */
+.ghost-pill:active:not(:disabled),
+button.secondary:active:not(:disabled),
+.wf-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.icon-btn:active:not(:disabled),
+.selbar-icon:active:not(:disabled),
+.tree-more:active {
+  transform: scale(0.9);
+}
+.icon-btn,
+.selbar-icon,
+.tree-more {
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ghost-pill:active:not(:disabled),
+  button.secondary:active:not(:disabled),
+  .wf-btn:active:not(:disabled),
+  .icon-btn:active:not(:disabled),
+  .selbar-icon:active:not(:disabled),
+  .tree-more:active {
+    transform: none;
+  }
+}
+
+/* Keep the agent entry recognisable even when another settings tab is active. */
+.settings-nav .settings-ai-item .menu-icon {
+  color: var(--accent);
+  fill: color-mix(in srgb, var(--accent) 22%, transparent);
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 35%, transparent));
+}
+
+.settings-nav .settings-ai-item .menu-icon svg {
+  fill: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* #228 — the open vault's folder is missing. */
+.vault-line .vault-path.is-missing {
+  color: var(--danger);
+}
+.wf-switch {
+  display: block;
+  margin: var(--sp-3) auto 0;
+}
+
+/* ---- Row overflow menu (⋯): a row keeps one primary action visible and puts
+   the rest behind this trigger (Settings → Vaults). */
+.row-more {
+  display: inline-flex;
+}
+.row-more-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease);
+}
+.row-more-btn:hover:not(:disabled),
+.row-more-btn.open {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.row-more-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.row-more-menu {
+  min-width: 200px;
+}
+
+/* Reconnect summary: one line per kind, stacked. */
+.reconcile-banner-lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+/* The user removed their own access: a neutral notice, not a warning. */
+.banner.reconcile-banner--quiet {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+/* ---- Right panel (RightPanel.tsx): Activity / Versions ----
+   Same container as the old version panel (`.version-panel`), wider because
+   the Activity feed holds Health-style rows with actions. */
+.version-panel.right-panel {
+  width: min(420px, 92vw);
+}
+.right-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) var(--sp-2) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.right-panel-tabs {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.right-panel-tabs {
+  align-items: center;
+}
+.right-panel-tab {
+  position: relative;
+}
+.right-panel-tab-name {
+  margin-left: var(--sp-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.right-panel-count {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--fs-xs);
+  line-height: 16px;
+  text-align: center;
+}
+.right-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.version-tab {
+  display: flex;
+  flex-direction: column;
+  outline: none;
+}
+.panel-btn {
+  position: relative;
+}
+/* Unread Activity rows: the same pill as the panel's tab count
+   (.right-panel-count), ringed so it reads over the icon. */
+.panel-btn-badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--bg-surface);
+  pointer-events: none;
+}
+.right-panel-tab.active,
+.panel-btn.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* Activity feed (ActivityFeed.tsx). Same side inset as VersionPanel's head
+   (--sp-4), so the header, the list and the empty state share one left edge. */
+.activity-feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-height: 100%;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  container-type: inline-size;
+}
+.activity-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 24px;
+}
+.activity-updating {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+}
+/* Clear sits at the right edge; after "Updating…" it just follows it. A quiet
+   text button: it only empties this list, so it shouldn't shout. */
+.activity-clear {
+  margin-left: auto;
+  padding: 3px var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    color var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.activity-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.activity-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.activity-updating + .activity-clear {
+  margin-left: 0;
+}
+.activity-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+/* Rows share one grid, so every chip, path and action column lines up. */
+.activity-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.activity-row {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: start;
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.activity-row:last-child {
+  border-bottom: none;
+}
+/* Collapsed: chip | message + time on line 1, the path on line 2. The head
+   spans both grid columns as a subgrid, so chips and text align across rows.
+   Expanded: the full path, the explanation, facts, exact time and actions. */
+.activity-row-head {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: start;
+  column-gap: var(--sp-3);
+  margin: calc(-1 * var(--sp-1)) calc(-1 * var(--sp-2));
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.activity-row-head:hover {
+  background: var(--bg-hover);
+}
+.activity-row-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.activity-row-chip {
+  justify-self: start;
+  margin-top: 1px;
+}
+.activity-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.activity-row-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.activity-row-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.activity-row-time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.activity-row-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: center;
+  transition: transform var(--t-fast) var(--ease);
+}
+.activity-row[data-open] .activity-row-chevron {
+  transform: rotate(180deg);
+}
+/* The folder part gives way first; the filename only shrinks once the folder
+   is gone, so the name that identifies the row stays readable. */
+.activity-row-path {
+  display: flex;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.activity-row-dir {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-tertiary);
+}
+.activity-row-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-row-detail {
+  display: flex;
+  grid-column: 2;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-top: var(--sp-1);
+}
+.activity-row-paths {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.activity-row-explain,
+.activity-row-fact {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.activity-row-explain {
+  color: var(--text-secondary);
+}
+.activity-row-fact {
+  font-size: var(--fs-xs);
+}
+.activity-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-top: var(--sp-1);
+}
+.activity-row-actions:empty {
+  display: none;
+}
+.activity-row-actions .health-missing-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.activity-more {
+  align-self: flex-start;
+}
+.activity-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+}
+.activity-empty-icon {
+  display: inline-flex;
+  margin-bottom: var(--sp-1);
+  color: var(--text-tertiary);
+}
+.activity-empty-title {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.activity-empty-hint {
+  max-width: 28ch;
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+}
+
+/* Image file preview: open/reveal actions above the image (#238). */
+.file-preview-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) 0;
+}
+.file-preview-image:focus {
+  outline: none;
+}
+.file-preview-image .file-preview-img {
+  cursor: zoom-in;
+}
+.cm-md-img {
+  cursor: zoom-in;
+}
+
+/* Image lightbox (lib/imageLightbox.ts): wheel/pinch zoom, drag pan, Esc or
+   backdrop click closes. Above modals (300). */
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.82);
+  cursor: grab;
+  touch-action: none;
+}
+.image-lightbox.dragging {
+  cursor: grabbing;
+}
+.image-lightbox:focus {
+  outline: none;
+}
+.image-lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  user-select: none;
+  transform-origin: center center;
+  will-change: transform;
+}
