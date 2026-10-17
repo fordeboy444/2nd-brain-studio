@@ -4,6 +4,20 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Spy on the two fs functions the file route + jail call, while delegating to
+// the real implementation so every other test (and vault creation) works. The
+// empty-path test reads these spies to prove the jail short-circuits before any
+// filesystem call. vi.mock is hoisted above the imports above; the factory only
+// uses `importActual` and `vi.fn` (no late bindings).
+vi.mock("node:fs/promises", async (importActual) => {
+  const actual = (await importActual()) as typeof import("node:fs/promises");
+  return {
+    ...actual,
+    readFile: vi.fn(actual.readFile),
+    realpath: vi.fn(actual.realpath),
+  };
+});
+
 const ORIG_ENV = { ...process.env };
 
 let root = "";
@@ -224,5 +238,58 @@ describe("hashContent", () => {
     // And it must NOT equal the hash of a CRLF-normalised version.
     const normalised = Buffer.from(text.replace(/\r\n/g, "\n"), "utf8");
     expect(hashContent(buf)).not.toBe(createHash("sha256").update(normalised).digest("hex"));
+  });
+});
+
+describe("empty path parameter (input-shape rejection boundary)", () => {
+  it("an empty `path` query returns 400 and records zero node:fs calls for the path resolution", async () => {
+    // The file-level vi.mock("node:fs/promises") wraps readFile/realpath in
+    // vi.fn(actual.*) so real behaviour is preserved and calls are recorded.
+    // reloadApp() calls vi.resetModules(), which re-runs the factory, so the
+    // spies for THIS app instance are the ones the cached mocked module
+    // exposes right now — import it to read them.
+    const { app } = await reloadApp();
+    const vaultId = await createVaultViaApi(app, "Empty Path");
+    const vaultDir = join(root, vaultId);
+
+    // Snapshot the spy call counts AFTER vault creation (which itself uses fs
+    // via the registry/scaffold) so only calls attributable to the empty-path
+    // request are measured.
+    const fsMod = await import("node:fs/promises");
+    const realpathBefore = vi.mocked(fsMod.realpath).mock.calls.length;
+    const readFileBefore = vi.mocked(fsMod.readFile).mock.calls.length;
+
+    // Empty path query.
+    const res = await app.request(`/api/file?vault=${vaultId}&path=`);
+    expect(res.status).toBe(400);
+
+    // The jail's empty-check (step 1) must short-circuit BEFORE any filesystem
+    // call: no new realpath call (the jail never reached realpath(vaultDir)),
+    // and no new readFile call on a path under the vault dir (the route never
+    // reached the file read). readRegistry's readFile on the registry file is
+    // incidental and never touches the vault dir.
+    expect(vi.mocked(fsMod.realpath).mock.calls.length).toBe(realpathBefore);
+    const newReadCalls = vi.mocked(fsMod.readFile).mock.calls.slice(readFileBefore);
+    expect(
+      newReadCalls.some(([p]) => typeof p === "string" && p.startsWith(vaultDir)),
+    ).toBe(false);
+  });
+
+  it("a missing `path` query returns 400", async () => {
+    const { app } = await reloadApp();
+    const vaultId = await createVaultViaApi(app, "Missing Path");
+    const res = await app.request(`/api/file?vault=${vaultId}`);
+    expect(res.status).toBe(400);
+  });
+
+  it("an empty `path` in a PUT body returns 400", async () => {
+    const { app } = await reloadApp();
+    const vaultId = await createVaultViaApi(app, "Put Empty Path");
+    const res = await app.request("/api/file", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ vault: vaultId, path: "", content: "x", baseHash: null }),
+    });
+    expect(res.status).toBe(400);
   });
 });
