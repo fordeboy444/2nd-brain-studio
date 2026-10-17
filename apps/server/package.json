@@ -11,6 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@2nd-brain/okf": "workspace:*",
     "@hono/node-server": "2.1.5",
     "hono": "4.13.13",
     "pino": "10.4.0",
