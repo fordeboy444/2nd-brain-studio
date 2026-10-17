@@ -148,6 +148,7 @@ export function VaultTree() {
   const openFile = useStore((s) => s.openFile);
   const pendingRefresh = useStore((s) => s.pendingTreeRefresh);
   const consumeTreeRefresh = useStore((s) => s.consumeTreeRefresh);
+  const setTreeState = useStore((s) => s.setTreeState);
 
   const [state, setState] = useState<TreeState>(EMPTY_TREE);
   /** Directories in flight or already landed, per mount. The synchronous truth
@@ -204,8 +205,16 @@ export function VaultTree() {
     return () => ro.disconnect();
   }, [vaultId]);
 
-  const data = useMemo(() => treeData(state), [state]);
-  const busy = isBusy(state);
+  // Publish the levels this tree has read into the store (UI-10). The tree stays
+  // the owner: this is a one-way projection so `MarkdownView` can tell a link
+  // into a directory nobody has opened from a link into one that was read and
+  // does not hold the target (`lib/linkResolve.ts`). Publishing is cheap — the
+  // object identity changes only when a level lands, fails or is forgotten.
+  useEffect(() => {
+    setTreeState(state);
+  }, [state, setTreeState]);
+
+  const data = useMemo(() => treeData(state), [state]);  const busy = isBusy(state);
   const rootLoaded = isLoaded(state, ROOT);
   const rootError = errorAt(state, ROOT);
 

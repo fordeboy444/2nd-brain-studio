@@ -1,15 +1,19 @@
 import { useEffect, useRef } from "react";
 import { useStore } from "../store.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
+import { FrontmatterPanel } from "./FrontmatterPanel.js";
+import { OutlinePanel } from "./OutlinePanel.js";
 import { RIGHT_PANEL_TAB_LABEL, RIGHT_PANEL_TABS, type RightPanelTab } from "./rightPanelTab.js";
 
 /**
  * The right panel: Backlinks, Outline, Frontmatter, Lint, in that fixed order.
  *
- * Four tabs over one panel, and every one of them is empty this phase — the
- * data behind them lands with the tree (Phase 2), the document (Phase 4) and the
- * backlink index (Phase 5). The empty copy is the real Phase 1 rendering, not a
- * placeholder: "No backlinks yet" is what a vault with no links in it says.
+ * Two of the four tabs are live against the open document (Outline and
+ * Frontmatter, both reading the active tab's buffer); the other two are not, and
+ * the empty copy is the real Phase 1 rendering rather than a placeholder — "No
+ * backlinks yet" is what a vault with no links in it says, and the backlink
+ * index is Phase 5. Nothing here says "coming soon": the two tabs whose data
+ * does not exist yet state the fact that is true of the vault.
  *
  * The panel keeps the reference's pop-out geometry (`.version-panel.right-panel`,
  * absolutely positioned over the editor) and its three closing gestures —
@@ -74,6 +78,18 @@ const TAB_EMPTY: Record<RightPanelTab, string> = {
   lint: "No issues",
 };
 
+/**
+ * The tab's body. Two tabs are components bound to the open document, two are
+ * their own empty sentence — and the empty copy stays reachable for the two live
+ * tabs too, because each component owns its own "nothing to show" state (an
+ * empty document has no headings; a document without frontmatter has none).
+ */
+function TabBody({ tab }: { tab: RightPanelTab }) {
+  if (tab === "outline") return <OutlinePanel />;
+  if (tab === "frontmatter") return <FrontmatterPanel />;
+  return <p className="version-panel-empty">{TAB_EMPTY[tab]}</p>;
+}
+
 function PanelBody({ tab }: { tab: RightPanelTab }) {
   const ref = useRef<HTMLElement | null>(null);
 
@@ -134,7 +150,7 @@ function PanelBody({ tab }: { tab: RightPanelTab }) {
       </header>
       <div className="right-panel-body">
         <ErrorBoundary label={TAB_TITLE[tab]} resetKeys={[tab]}>
-          <p className="version-panel-empty">{TAB_EMPTY[tab]}</p>
+          <TabBody tab={tab} />
         </ErrorBoundary>
       </div>
     </aside>

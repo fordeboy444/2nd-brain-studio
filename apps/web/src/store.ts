@@ -11,7 +11,7 @@ import {
   type HealthPayload,
 } from "./lib/api.js";
 import { readLastTab, writeLastTab, type RightPanelTab } from "./components/rightPanelTab.js";
-import { dirOf } from "./lib/tree/lazyTree.js";
+import { dirOf, EMPTY_TREE, type TreeState } from "./lib/tree/lazyTree.js";
 
 /**
  * The app store. Baalda's panel model — `sidebar`, `editor`, `rightPanel` plus
@@ -144,6 +144,21 @@ export interface AppState {
   requestTreeRefresh: (dir: string) => void;
   consumeTreeRefresh: () => string | null;
 
+  /**
+   * What the sidebar has actually read, mirrored here for readers that are not
+   * the sidebar (UI-10).
+   *
+   * The tree OWNS this: `VaultTree` holds the real state and publishes every
+   * change through `setTreeState`, and nothing else ever writes it. It is in the
+   * store because `MarkdownView` has to answer "does this link's target exist?"
+   * while rendering a document, and the only honest answer is the set of
+   * directories that have been read (`lib/linkResolve.ts`). Passing it down
+   * through the editor region would mean four intermediate components learning
+   * about the tree; a read-only projection is the smaller lie.
+   */
+  treeState: TreeState;
+  setTreeState: (state: TreeState) => void;
+
   // Vaults slice.
   vaults: Vault[];
   vaultsLoading: boolean;
@@ -249,6 +264,7 @@ export const useStore = create<AppState>((set, get) => {
         saveError: null,
         pendingRevealLine: null,
         pendingTreeRefresh: null,
+        treeState: EMPTY_TREE,
       });
     },
     closeVault: () =>
@@ -261,6 +277,7 @@ export const useStore = create<AppState>((set, get) => {
         saveError: null,
         pendingRevealLine: null,
         pendingTreeRefresh: null,
+        treeState: EMPTY_TREE,
       }),
 
     tabs: [],
@@ -454,6 +471,9 @@ export const useStore = create<AppState>((set, get) => {
       return dir;
     },
 
+    treeState: EMPTY_TREE,
+    setTreeState: (state) => set({ treeState: state }),
+
     vaults: [],
     vaultsLoading: false,
     vaultsError: null,
@@ -497,6 +517,7 @@ export const useStore = create<AppState>((set, get) => {
               activeTabPath: null,
               conflict: null,
               saveError: null,
+              treeState: EMPTY_TREE,
             }
           : {}),
       }));

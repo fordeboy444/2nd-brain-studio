@@ -1,17 +1,21 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { AsyncButton } from "../components/AsyncButton.js";
 import { BacklinksPanel } from "../components/BacklinksPanel.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
 import { MarkdownEditor } from "../components/MarkdownEditor.js";
+import { MarkdownView } from "../components/MarkdownView.js";
 import { RightPanel } from "../components/RightPanel.js";
 import { SidebarHeader } from "../components/SidebarHeader.js";
 import { Spinner } from "../components/Spinner.js";
 import { TabBar } from "../components/TabBar.js";
 import { ThemeToggle } from "../components/ThemeToggle.js";
 import { VaultTree } from "../components/VaultTree.js";
+import { writeFile, type Vault } from "../lib/api.js";
+import { ROOT } from "../lib/tree/lazyTree.js";
+import { toast } from "../lib/toast.js";
 import { useSidebarWidth } from "../lib/useSidebarWidth.js";
 import { useStore } from "../store.js";
-import type { Vault } from "../lib/api.js";
 
 /**
  * The Browse screen: the shell, filled in.
@@ -34,6 +38,9 @@ import type { Vault } from "../lib/api.js";
  * The sidebar width is a CSS variable on the grid, not a React width on a child,
  * so dragging only repaints the row that moved (`lib/useSidebarWidth.ts`).
  */
+/** Read the whole row, or edit it. The editor region renders one or the other. */
+type ViewMode = "edit" | "read";
+
 export function Browse() {
   const { width } = useSidebarWidth();
   const currentVault = useStore((s) => s.currentVault);
@@ -42,6 +49,44 @@ export function Browse() {
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const openRightPanel = useStore((s) => s.openRightPanel);
   const closeRightPanel = useStore((s) => s.closeRightPanel);
+  const [mode, setMode] = useState<ViewMode>("edit");
+
+  /**
+   * Create a document in the vault root and open it (`New file`).
+   *
+   * The name is derived, never asked for: a dialog for a filename is a dialog
+   * between the user and a blank file they are about to rename anyway, and the
+   * first name nobody has taken is always the right answer. The ROOT LEVEL's
+   * listing is the authority on what is taken — the only listing this client
+   * has — and a name it cannot see is caught by the server's own 409 for a
+   * create against an existing path, which is why a failure here is a toast
+   * rather than a second guess at the name.
+   *
+   * `null` as the base hash IS the create form (01-02): "I believe this does not
+   * exist yet, make it". It is not a bypass of the conflict check — a create
+   * onto a path that exists is refused for exactly that reason.
+   */
+  async function createFile() {
+    const state = useStore.getState();
+    const vaultId = state.currentVault?.id;
+    if (!vaultId) return;
+    const root = state.treeState.levels[ROOT] ?? [];
+    const taken = new Set(root.map((entry) => entry.name.toLowerCase()));
+    let name = "untitled.md";
+    for (let n = 2; taken.has(name); n++) name = `untitled-${n}.md`;
+    try {
+      await writeFile(vaultId, name, "", null);
+    } catch (e) {
+      toast((e as Error).message, "error");
+      return;
+    }
+    // Opening before refreshing: the tab appears immediately from the file that
+    // was just written, and the tree's row lands when the level comes back. The
+    // other order would leave the user waiting on a listing to open a file the
+    // app already has.
+    state.openFile(vaultId, name);
+    state.requestTreeRefresh(ROOT);
+  }
 
   const healthLabel = healthError
     ? "Server unreachable"
@@ -76,6 +121,54 @@ export function Browse() {
       <main className="main">
         <header className="main-header">
           <TabBar />
+          {/* Read or edit the open document (UI-03). The mode belongs to the
+              screen, not to a document: switching to read while a note is open
+              and then opening another one keeps the reader in read mode, which
+              is what someone comparing notes in a bundle wants. Edit is the
+              default — the cursor should land where the last one was. */}
+          {currentVault && (
+            <div
+              role="group"
+              aria-label="Document view"
+              style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}
+            >
+              {(["edit", "read"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className="ghost-pill"
+                  aria-pressed={mode === m}
+                  onClick={() => setMode(m)}
+                  style={{
+                    padding: "var(--sp-1) var(--sp-3)",
+                    borderRadius: "var(--radius-pill)",
+                    border: 0,
+                    fontSize: "var(--fs-sm)",
+                    fontWeight: 600,
+                    background: mode === m ? "var(--accent-soft)" : "none",
+                    color: mode === m ? "var(--text-primary)" : "var(--text-secondary)",
+                  }}
+                >
+                  {m === "edit" ? "Edit" : "Read"}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* The phase's primary action, and the only saturated control in this
+              row (UI-SPEC's primary visual anchor for the browse screen). It
+              lives here rather than in the sidebar footer because it acts on the
+              vault, not on the selection — and while it is in flight it is
+              disabled, so the one-file-per-click promise is the button's, not
+              the handler's. */}
+          {currentVault && (
+            <AsyncButton
+              className="primary sm"
+              spinnerTone="on-accent"
+              onClick={createFile}
+            >
+              New file
+            </AsyncButton>
+          )}
           <div className="header-actions">
             <span
               title={healthError ?? undefined}
@@ -148,7 +241,7 @@ export function Browse() {
 
         <div className="editor-wrap">
           <div className="editor-host" style={{ overflow: "auto" }}>
-            <EditorRegion />
+            <EditorRegion mode={mode} />
           </div>
         </div>
 
@@ -161,8 +254,8 @@ export function Browse() {
 
 /** What the middle region shows, in the one order the states can be in: no
  *  vault, then no file, then a file that is still loading, then a file whose
- *  read failed, then the editor. */
-function EditorRegion() {
+ *  read failed, then the document — read or edited. */
+function EditorRegion({ mode }: { mode: ViewMode }) {
   const currentVault = useStore((s) => s.currentVault);
   const tab = useStore((s) => s.tabs.find((t) => t.path === s.activeTabPath) ?? null);
 
@@ -213,6 +306,11 @@ function EditorRegion() {
     );
   }
 
+  // Read mode is for notes. A `.json` or an `.html` file stays in the editor
+  // whatever the toggle says: rendering it through a markdown renderer would
+  // present the file as this app's idea of prose, and the editor at least shows
+  // its bytes as bytes.
+  if (mode === "read" && /\.(md|markdown)$/i.test(tab.path)) return <MarkdownView />;
   return <MarkdownEditor />;
 }
 

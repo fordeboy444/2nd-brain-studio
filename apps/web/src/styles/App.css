@@ -4067,3 +4067,49 @@ button.secondary:active:not(:disabled),
   transform-origin: center center;
   will-change: transform;
 }
+
+/* ============================================================
+   Rendered markdown — the read view (UI-10)
+   ============================================================ */
+/* A heading is one unbroken token as far as the layout is concerned: an
+   LLM-written title, a URL, or a long German compound all arrive as a single
+   word, and a single word wider than the column scrolls the view sideways
+   instead of wrapping. `break-word` is the approved fix, and `overflow-wrap:
+   anywhere` is its companion for the case `break-word` declines — a word with
+   no soft-wrap point at all. Deliberately no color and no spacing: this rule is
+   about geometry, and D-10's rule is that a color added here has to be a token
+   that already exists. */
+.md-view :is(h1, h2, h3, h4, h5, h6) {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+/* Inline links in the read view are where the accent marks a link — the
+   UI-SPEC's list of accent uses names exactly this ("inline links in
+   MarkdownView"). Without the rule a rendered link lands on the browser's
+   default blue, which is not a token in this theme and reads as a different
+   app. Every value is a token, never a literal. */
+.md-view a {
+  color: var(--accent);
+}
+/* The two inert forms the sanitizer produces for a link that was refused a href
+   or resolved to a target that is definitively missing: they keep the author's
+   words and lose the link's promise, so they are text, not a control. */
+.md-view .md-link-broken,
+.md-view .md-link-blocked {
+  color: var(--text-tertiary);
+  text-decoration: none;
+  cursor: default;
+}
+
+/* ---- Outline tab rows (UI-03) ---- */
+/* The row shape lives on the element (a `<button>` carrying no chrome), and
+   this is the hover it cannot express inline: secondary text that lifts to
+   primary under the cursor, in the same family as `.tree-row:hover`. */
+.outline-row:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.outline-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
