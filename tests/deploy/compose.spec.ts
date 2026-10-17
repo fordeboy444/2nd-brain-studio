@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -31,6 +31,7 @@ const compose = readRepoFile(COMPOSE_PATH);
 const dockerfile = readRepoFile("Dockerfile");
 const dockerignore = readRepoFile(".dockerignore");
 const envExample = readRepoFile("deploy/coolify/.env.example");
+const runbook = readRepoFile("deploy/coolify/README.md");
 
 /** The runtime stage, from its FROM line to the end of the file. */
 const runtimeStage = dockerfile.slice(
@@ -59,6 +60,51 @@ function withoutComments(text: string): string {
 
 /** The compose file as configuration, ignoring explanatory comments. */
 const composeCode = withoutComments(compose);
+
+/**
+ * The credential shapes a build or a commit should never carry. The leading word
+ * boundaries keep the check quiet about long base64 strings that merely contain
+ * the same letters.
+ */
+const CREDENTIAL_PATTERNS =
+  /\bsk-[A-Za-z0-9]{20,}\b|\bghp_[A-Za-z0-9]{20,}\b|\bAIza[0-9A-Za-z_-]{30,}\b|\bAKIA[0-9A-Z]{16}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|-----BEGIN [A-Z]+ PRIVATE KEY-----/;
+
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "coverage",
+  ".claude",
+  ".gsd",
+  ".planning",
+  "baalda",
+  "cole-medin-knowledge-base",
+]);
+
+/** Generated, never authored: its integrity hashes are not secrets. */
+const SKIP_FILES = new Set(["pnpm-lock.yaml"]);
+
+const BINARY_EXTENSIONS =
+  /\.(png|jpe?g|gif|webp|ico|svg|woff2?|ttf|otf|mp4|webm|pdf|zip|gz|wasm)$/i;
+
+/** Every text file this repository authors, as `{file, text}`. */
+function readFirstPartyFiles(
+  dir: string,
+  found: Array<{ file: string; text: string }> = [],
+): Array<{ file: string; text: string }> {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = resolve(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name)) readFirstPartyFiles(path, found);
+      continue;
+    }
+    if (!entry.isFile() || SKIP_FILES.has(entry.name)) continue;
+    if (BINARY_EXTENSIONS.test(entry.name)) continue;
+    if (statSync(path).size > 1_000_000) continue;
+    found.push({ file: relative(REPO_ROOT, path), text: readFileSync(path, "utf8") });
+  }
+  return found;
+}
 
 /** The names of every `${NAME...}` reference in a document. */
 function interpolatedNames(text: string): string[] {
@@ -273,5 +319,49 @@ describe("secret material", () => {
         /^[A-Za-z0-9_\-+/=]{40,}$/,
       );
     }
+  });
+
+  it("leaves no plausible credential anywhere in the first-party tree", () => {
+    // The deployment reads credentials from the environment, so nothing in the
+    // repository needs to carry one. The two reference checkouts and the local
+    // planning directory are excluded: they are third-party or local-only
+    // content, not artifacts this repository ships.
+    const offenders = readFirstPartyFiles(REPO_ROOT).filter(({ text }) =>
+      CREDENTIAL_PATTERNS.test(text),
+    );
+    expect(offenders.map(({ file }) => file)).toEqual([]);
+  });
+});
+
+describe("the runbook", () => {
+  it("gives the deployer the resource settings and the variable defaults", () => {
+    expect(runbook).toMatch(/Docker Compose/); // the resource type
+    expect(runbook).toMatch(/Base Directory/);
+    expect(runbook).toContain("/deploy/coolify/docker-compose.yml");
+    for (const name of interpolatedNames(composeCode)) {
+      expect(runbook, `${name} is missing from the runbook`).toContain(name);
+    }
+  });
+
+  it("names the session-secret file's location and its restrictive permissions", () => {
+    expect(runbook).toMatch(/\/data\/[^\s`]*cookie/i); // outside every vault directory
+    expect(runbook).toMatch(/chmod 600/);
+    expect(runbook).toMatch(/never returned to the browser/i);
+  });
+
+  it("never instructs placing a session-secret file inside a vault directory", () => {
+    // A line may only mention a secret file and a vault path together when it is
+    // forbidding exactly that: the vault is browsable, so the file would be
+    // listed and opened along with the notes.
+    const offenders = runbook
+      .split("\n")
+      .filter((line) => {
+        const namesSecretFile = /cookie|session secret|session-secret/i.test(line);
+        const namesVaultPath = /vaults?\b/i.test(line);
+        const forbids = /\bnever\b|\bnot\b|\boutside\b|\bmust not\b|\bwarning\b/i.test(line);
+        return namesSecretFile && namesVaultPath && !forbids;
+      })
+      .filter(Boolean);
+    expect(offenders).toEqual([]);
   });
 });
