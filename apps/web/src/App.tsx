@@ -1,18 +1,11 @@
 import { useEffect, useState } from "react";
-
-type HealthPayload = {
-  ok: boolean;
-  status: "healthy" | "degraded";
-  service: string;
-  version: string;
-  uptimeSec: number;
-  time: string;
-};
+import { Browse } from "./screens/Browse.js";
+import { getHealth, type HealthPayload } from "./lib/api.js";
 
 /**
- * Tracer shell. Calls GET /api/health on mount and renders the status so the
- * walking skeleton has a visible end-to-end signal. Task 3 swaps the body for
- * the Browse screen but keeps this status indicator.
+ * App shell. Renders the Browse screen as the body and keeps the health-status
+ * indicator from the tracer task so the end-to-end signal stays visible. The
+ * health probe goes through the lib/api boundary — no direct fetch in views.
  */
 export function App() {
   const [health, setHealth] = useState<HealthPayload | null>(null);
@@ -20,9 +13,8 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/health")
-      .then((r) => r.json())
-      .then((h: HealthPayload) => {
+    getHealth()
+      .then((h) => {
         if (!cancelled) setHealth(h);
       })
       .catch((e: unknown) => {
@@ -34,15 +26,18 @@ export function App() {
   }, []);
 
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: "1rem" }}>
-      <h1>2nd Brain Studio</h1>
-      <p>
+    <div style={{ fontFamily: "system-ui, sans-serif" }}>
+      <header style={{ padding: "0.5rem 1rem", borderBottom: "1px solid #eee", fontSize: 13, color: "#666" }}>
+        2nd Brain Studio —{" "}
         {err
           ? `health: ${err}`
           : health
             ? `health: ${health.status} (${health.service} v${health.version})`
             : "health: …"}
-      </p>
+      </header>
+      <main>
+        <Browse />
+      </main>
     </div>
   );
 }

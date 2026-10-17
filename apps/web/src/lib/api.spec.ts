@@ -3,8 +3,7 @@ import type { Vault } from "./api.js";
 
 // We import the module under test fresh per case so stubs are isolated. The
 // RED phase: api.ts does not exist yet, so this import fails and every test
-// errors — that is the expected RED state. GREEN lands when api.ts implements
-// the contract below.
+// errors. GREEN lands when api.ts implements the contract below.
 
 async function load() {
   return (await import("./api.js")) as typeof import("./api.js");
@@ -13,7 +12,6 @@ async function load() {
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
-  // Default stub: a 200 JSON response. Individual tests override.
   globalThis.fetch = vi.fn(async () => new Response("[]", { status: 200, headers: { "content-type": "application/json" } }));
 });
 
@@ -30,13 +28,24 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+/** Read a header value from either a Headers object, a string[][], or a record. */
+function readHeader(headers: HeadersInit | undefined, name: string): string | null {
+  if (!headers) return null;
+  if (headers instanceof Headers) return headers.get(name);
+  if (Array.isArray(headers)) {
+    for (const [k, v] of headers) if (k.toLowerCase() === name.toLowerCase()) return v;
+    return null;
+  }
+  for (const [k, v] of Object.entries(headers)) if (k.toLowerCase() === name.toLowerCase()) return String(v);
+  return null;
+}
+
 describe("listVaults", () => {
   it("issues GET /api/vaults and resolves to the parsed array", async () => {
     const data = [{ id: "a", name: "A", path: "a", sourceKind: "manual", createdAt: "x", lastOpenedAt: "x" }];
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const req = new Request(input);
-      expect(req.method).toBe("GET");
-      expect(String(req.url)).toContain("/api/vaults");
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain("/api/vaults");
+      expect(init?.method ?? "GET").toBe("GET");
       return jsonResponse(data);
     });
     const { listVaults } = await load();
@@ -67,11 +76,10 @@ describe("createVault", () => {
     let capturedContentType = "";
     let capturedBody = "";
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const req = new Request(input, init);
-      capturedMethod = req.method;
-      capturedUrl = String(req.url);
-      capturedContentType = req.headers.get("content-type") ?? "";
-      capturedBody = await req.text();
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      capturedContentType = readHeader(init?.headers, "content-type") ?? "";
+      capturedBody = typeof init?.body === "string" ? init.body : "";
       return jsonResponse(created, 201);
     });
     const { createVault } = await load();
@@ -92,8 +100,7 @@ describe("createVault", () => {
   it("trims the name before sending", async () => {
     let capturedBody = "";
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const req = new Request(input, init);
-      capturedBody = await req.text();
+      capturedBody = typeof init?.body === "string" ? init.body : "";
       return jsonResponse({ id: "t", name: "T", path: "t", sourceKind: "manual", createdAt: "t", lastOpenedAt: "t" }, 201);
     });
     const { createVault } = await load();
@@ -103,7 +110,7 @@ describe("createVault", () => {
 });
 
 describe("request helper (no real network)", () => {
-  it("never performs a real network call (fetch is stubbed)", async () => {
+  it("never performs a real network call (fetch is stubbed, URL is same-origin relative)", async () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       calls.push(String(input));
@@ -112,6 +119,8 @@ describe("request helper (no real network)", () => {
     const { listVaults } = await load();
     await listVaults();
     expect(calls.length).toBe(1);
+    // The URL is a same-origin relative path, not an absolute http(s) URL.
     expect(calls[0]).not.toMatch(/^https?:\/\//);
+    expect(calls[0]).toContain("/api/vaults");
   });
 });
