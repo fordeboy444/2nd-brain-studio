@@ -3569,6 +3569,12 @@ button.is-done:disabled {
   box-shadow: var(--shadow-lg);
   font-size: var(--fs-sm);
   color: var(--text-primary);
+  /* A toast sizes to its content. `max-width: 100%` clamps it to the limit the
+     viewport above declares; without it one unbreakable token — a long path or
+     hash inside a server message — measures its whole width and drags the box
+     off the LEFT edge of the window (measured live: 4569px wide at x = -3305,
+     so 3305px of the message sat outside the screen). */
+  max-width: 100%;
 }
 /* A 6px dot rather than a coloured background: the tone is legible at a glance
    without the toast shouting over the note you're reading. */
@@ -3591,6 +3597,13 @@ button.is-done:disabled {
 .toast-text {
   flex: 1;
   min-width: 0;
+  /* `anywhere`, NOT `break-word`: only `anywhere` feeds its soft-wrap
+     opportunity into the element's MIN-CONTENT width, which is the width the
+     fit-content sizing above resolves against. `break-word` would break the
+     line for the reader but leave min-content — and so the toast box — at the
+     token's full width. Ordinary prose is untouched either way: a break is
+     taken only where no other opportunity exists. */
+  overflow-wrap: anywhere;
 }
 .toast-close {
   flex: none;

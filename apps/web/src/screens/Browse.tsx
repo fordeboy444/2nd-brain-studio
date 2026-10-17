@@ -419,8 +419,33 @@ function VaultList() {
                 }}
                 onClick={() => openVault(v)}
               >
-                <span>{v.name}</span>
-                <span style={{ fontWeight: 400, fontSize: "var(--fs-sm)", color: "var(--text-tertiary)" }}>
+                {/* A vault name has no length limit, so this cell has to be
+                    able to shrink below its own text. Without `minWidth: 0`
+                    and the ellipsis a 121-character name set the row's
+                    min-content width, and the list measured scrollWidth 888
+                    against clientWidth 600 — the name ran out of the panel.
+                    `title` keeps the full name reachable once it is cut. */}
+                <span
+                  title={v.name}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {v.name}
+                </span>
+                <span
+                  style={{
+                    flex: "none",
+                    whiteSpace: "nowrap",
+                    fontWeight: 400,
+                    fontSize: "var(--fs-sm)",
+                    color: "var(--text-tertiary)",
+                  }}
+                >
                   {v.lastOpenedAt ? new Date(v.lastOpenedAt).toLocaleString() : ""}
                 </span>
               </button>

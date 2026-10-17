@@ -6,7 +6,11 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "noEmit": true,
-    "types": ["vitest/globals"]
+    /* `types` is an ALLOW-LIST, not a hint: naming only vitest/globals keeps
+       @types/node out, and the two stylesheet specs read files with node:fs.
+       "node" is the package name under @types/, which is what this array
+       takes. */
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

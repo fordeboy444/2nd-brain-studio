@@ -47,6 +47,22 @@ const ROW_HEIGHT = 30;
  *  layout). Not a design value — the tree re-renders on the first resize. */
 const FALLBACK_HEIGHT = 480;
 
+/** The retry affordance, shared by the root failure and the per-directory
+ *  strip. Given its own shape inline because the pruned App.css carries no base
+ *  `.ghost-pill` rule (deferred-items.md item 5), so the class alone would
+ *  render bare text with a hover-only affordance. */
+const RETRY_BUTTON_STYLE: CSSProperties = {
+  flex: "none",
+  padding: "var(--sp-1) var(--sp-3)",
+  borderRadius: "var(--radius-pill)",
+  border: "1px solid var(--border-strong)",
+  background: "var(--bg-surface)",
+  color: "var(--text-secondary)",
+  fontSize: "var(--fs-sm)",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 const ICON_PROPS = {
   viewBox: "0 0 24 24",
   fill: "none",
@@ -155,7 +171,12 @@ export function VaultTree() {
    *  behind the "one request per level" rule. */
   const requested = useRef<Set<string>>(new Set());
   const [height, setHeight] = useState(FALLBACK_HEIGHT);
-  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** The rows' own scroll box, held in state rather than a ref so the measuring
+   *  effect re-attaches the moment that box mounts. It mounts LATE — the first
+   *  paint is the spinner, and the box appears only when the root level lands.
+   *  Measuring the panel instead was the earlier shape and it over-sized the
+   *  virtualised list by whatever the panel carried above the rows. */
+  const [treeBox, setTreeBox] = useState<HTMLDivElement | null>(null);
 
   const loadLevel = useCallback(
     async (dir: string, force = false) => {
@@ -193,17 +214,17 @@ export function VaultTree() {
     void loadLevel(dir, true);
   }, [pendingRefresh, consumeTreeRefresh, loadLevel]);
 
-  // Measure the panel so the virtualised list knows its viewport. Under jsdom
-  // there is no layout and no ResizeObserver; the fallback keeps rows rendering.
+  // Measure the rows' scroll box so the virtualised list knows its viewport.
+  // Under jsdom there is no layout and no ResizeObserver; the fallback keeps
+  // rows rendering.
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => setHeight(el.clientHeight || FALLBACK_HEIGHT);
+    if (!treeBox || typeof ResizeObserver === "undefined") return;
+    const measure = () => setHeight(treeBox.clientHeight || FALLBACK_HEIGHT);
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    ro.observe(treeBox);
     measure();
     return () => ro.disconnect();
-  }, [vaultId]);
+  }, [treeBox, vaultId]);
 
   // Publish the levels this tree has read into the store (UI-10). The tree stays
   // the owner: this is a one-way projection so `MarkdownView` can tell a link
@@ -214,9 +235,16 @@ export function VaultTree() {
     setTreeState(state);
   }, [state, setTreeState]);
 
-  const data = useMemo(() => treeData(state), [state]);  const busy = isBusy(state);
+  const data = useMemo(() => treeData(state), [state]);
+  const busy = isBusy(state);
   const rootLoaded = isLoaded(state, ROOT);
   const rootError = errorAt(state, ROOT);
+  /** Failures BELOW the root. These had nowhere to render before: the panel
+   *  branch below tests the ROOT's error only, so a subdirectory that failed to
+   *  load left its row closed and said nothing at all. The row is a fixed 30px,
+   *  so the message cannot live inside it — this list feeds the strip above the
+   *  rows. `markLoading` clears an entry, so a retry empties the strip. */
+  const childErrors = Object.keys(state.errors).filter((dir) => dir !== ROOT);
 
   const onToggle = useCallback(
     (id: string) => {
@@ -273,17 +301,63 @@ export function VaultTree() {
 
   return (
     <div
-      ref={scrollRef}
       className="vault-tree"
       style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
     >
+      {childErrors.length > 0 && (
+        <div
+          role="alert"
+          className="tree-error-strip"
+          style={{
+            padding: "var(--sp-2) var(--sp-3)",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--danger-soft)",
+            flex: "none",
+            maxHeight: "40%",
+            overflowY: "auto",
+          }}
+        >
+          {childErrors.map((dir) => (
+            <div
+              key={dir}
+              style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)", margin: "var(--sp-1) 0" }}
+            >
+              <span
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflowWrap: "anywhere",
+                  color: "var(--danger)",
+                  fontSize: "var(--fs-sm)",
+                }}
+              >
+                {`Couldn't open ${dir}. `}
+                {errorAt(state, dir)}
+              </span>
+              <button
+                type="button"
+                className="ghost-pill"
+                style={RETRY_BUTTON_STYLE}
+                onClick={() => void loadLevel(dir, true)}
+              >
+                Try again
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {rootError ? (
         <div
           role="alert"
           style={{ padding: "var(--sp-4) var(--sp-3)", color: "var(--text-tertiary)", fontSize: "var(--fs-sm)" }}
         >
           <p style={{ margin: "0 0 var(--sp-2)", color: "var(--danger)" }}>{rootError}</p>
-          <button type="button" className="ghost-pill" onClick={() => void loadLevel(ROOT, true)}>
+          <button
+            type="button"
+            className="ghost-pill"
+            style={RETRY_BUTTON_STYLE}
+            onClick={() => void loadLevel(ROOT, true)}
+          >
             Try again
           </button>
         </div>
@@ -293,7 +367,7 @@ export function VaultTree() {
       ) : rootLoaded && data.length === 0 ? (
         emptyState
       ) : (
-        <div className="filetree-scroll" style={{ flex: 1, minHeight: 0 }}>
+        <div className="filetree-scroll" ref={setTreeBox} style={{ flex: 1, minHeight: 0 }}>
           {busy && loadingRow}
           <Tree<TreeRowData>
             aria-label="Vault files"

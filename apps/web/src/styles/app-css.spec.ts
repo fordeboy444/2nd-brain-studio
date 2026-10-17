@@ -101,7 +101,12 @@ function countOccurrences(haystack: string, needle: string): number {
 function declaredProperties(css: string): Set<string> {
   const names = new Set<string>();
   for (const match of css.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)) {
-    names.add(match[1]);
+    // A capture group is `string | undefined` to the compiler, and this repo
+    // runs with noUncheckedIndexedAccess. The first group of this pattern cannot
+    // actually be empty — the group IS the match — so the guard is only here to
+    // keep the type honest.
+    const name = match[1];
+    if (name !== undefined) names.add(name);
   }
   return names;
 }
@@ -116,10 +121,12 @@ function collectVarRefs(css: string): { hard: Set<string>; withFallback: Set<str
   const hard = new Set<string>();
   const withFallback = new Set<string>();
   for (const match of css.matchAll(/var\(\s*(--[A-Za-z0-9_-]+)\s*([,)])/g)) {
+    const name = match[1];
+    if (name === undefined) continue;
     if (match[2] === ",") {
-      withFallback.add(match[1]);
+      withFallback.add(name);
     } else {
-      hard.add(match[1]);
+      hard.add(name);
     }
   }
   return { hard, withFallback };
@@ -158,6 +165,25 @@ describe("pruned App.css", () => {
     const { hard } = collectVarRefs(appCss);
     const orphans = [...hard].filter((name) => !declared.has(name));
     expect(orphans).toEqual([]);
+  });
+
+  it("lets a toast shrink to the viewport and wrap an unbreakable token", () => {
+    // Measured live before the fix: a toast carrying a long unbreakable token
+    // was 4569.1px wide at x = -3305.1, so most of its message sat outside the
+    // window. Both halves matter — the clamp bounds the box, and the wrap is
+    // what lets the box actually reach that bound, because a fit-content box
+    // never goes below its own min-content width.
+    const toast = /\.toast\s*\{([^}]*)\}/.exec(appCss);
+    expect(toast?.[1]).toContain("max-width: 100%");
+
+    const text = /\.toast-text\s*\{([^}]*)\}/.exec(appCss);
+    expect(text?.[1]).toContain("min-width: 0");
+    expect(text?.[1]).toContain("overflow-wrap: anywhere");
+    // `anywhere` and not `break-word`: only `anywhere` lowers min-content.
+    expect(text?.[1]).not.toContain("overflow-wrap: break-word");
+    // The message must WRAP, never be cut. An ellipsis here would silently drop
+    // the tail of a server error — the one line the user needs in full.
+    expect(text?.[1]).not.toContain("text-overflow: ellipsis");
   });
 
   it("keeps the token import ahead of this stylesheet in main.tsx", () => {

@@ -30,7 +30,13 @@
   /* Text */
   --text-primary: #1a1a1e;
   --text-secondary: #6b6b76;
-  --text-tertiary: #9a9aa5;
+  /* 4.72:1 on the #faf9f8 canvas and 4.97:1 on the white surface. It was
+     #9a9aa5 — 2.65:1, below the 4.5:1 WCAG AA floor for body text. This is the
+     LIGHTEST value that clears the floor, and that is forced: --text-secondary
+     sits at 5.00:1, so the passing band is only ~0.3 of a ratio wide. Lighter
+     fails AA again; darker and the quietest tier outranks the second one. The
+     old value's +11 blue offset is kept. */
+  --text-tertiary: #6f6f7a;
   /* The faint tier: markdown syntax markers (#, **, `, >, -), the fold
      chevrons and the line-number gutter. One step quieter than tertiary —
      present enough to find, quiet enough that prose reads as prose. Every
@@ -39,9 +45,18 @@
   --text-faint: #bfbfc8;
   --text-on-accent: #ffffff;
 
-  /* Accent (Atomize violet — from the Figma kit) */
-  --accent: #7f73ff;
-  --accent-hover: #6a5cf5;
+  /* Accent (Atomize violet — from the Figma kit).
+     4.91:1 on the #faf9f8 canvas and 5.16:1 on white; the old #7f73ff was
+     3.44:1, below AA. The accent is ALSO a fill behind --text-on-accent
+     (`button.primary`), and there the same darkening raises white-on-accent
+     from 3.62:1 to 5.16:1 — the two requirements agree instead of trading off.
+     The two decorative gradients below keep the old hex: they paint hero art
+     and never carry text. */
+  --accent: #6257ea;
+  /* One step DARKER than --accent, the direction this pair already ran
+     (#7f73ff -> #6a5cf5). Keeping the old hover hex would have made hover
+     LIGHTER than rest, which inverts the press feedback. */
+  --accent-hover: #5247d8;
   --accent-soft: #efedff;       /* soft fills, selection tints */
   --accent-soft-hover: #e4e0ff;
   --accent-gradient: linear-gradient(135deg, #9a8fff 0%, #7f73ff 100%);
@@ -254,6 +269,12 @@
   --text-secondary: #b8b8c0;
   --text-tertiary: #9d9da7;
   --text-faint: #85858f;
+  /* The dark accent is a LIGHT violet, so the label on it must be dark — the
+     inherited #ffffff measured 2.38:1 here, below AA, on the app's own primary
+     button. A violet-black rather than a plain black keeps the brand hue in the
+     fill's own family: 7.48:1 on --accent and 9.41:1 on the lighter
+     --accent-hover. */
+  --text-on-accent: #17152b;
 
   --accent: #a69cff;
   --accent-hover: #bbb4ff;
@@ -314,6 +335,9 @@
     --text-secondary: #b8b8c0;
     --text-tertiary: #9d9da7;
     --text-faint: #85858f;
+    /* Kept in step with the [data-theme="dark"] block above: the label on this
+       light accent must be dark, or it measures 2.38:1 on the primary button. */
+    --text-on-accent: #17152b;
 
     --accent: #a69cff;
     --accent-hover: #bbb4ff;

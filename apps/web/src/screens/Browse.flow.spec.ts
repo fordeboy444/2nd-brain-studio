@@ -124,6 +124,14 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** The vault list the stub answers with. Replaced by the test that needs a name
+ *  long enough to run out of its row. */
+let vaultList: Vault[] = [];
+
+/** A CHILD directory whose listing fails, and the message the server sends with
+ *  it. `null` means every level answers normally. */
+let failDir: { dir: string; message: string } | null = null;
+
 /** A directory's children are a DIFFERENT listing from the root's — a stub that
  *  answered every level with the root level would describe a vault whose every
  *  folder contains itself, which is not a vault any server returns. */
@@ -140,9 +148,16 @@ function treeFor(url: string) {
 }
 
 function route(url: string, method: string): Response {
-  if (url.includes("/api/vaults/v1/tree")) return json(treeFor(url));
+  if (url.includes("/api/vaults/v1/tree")) {
+    // The real route answers 500 with a `message`, which `ApiError` carries
+    // through to the strip (apps/server + lib/api.ts `request`).
+    if (failDir && decodeURIComponent(url).includes(`dir=${failDir.dir}`)) {
+      return json({ error: "server_error", message: failDir.message }, 500);
+    }
+    return json(treeFor(url));
+  }
   if (method === "DELETE" && url.includes("/api/vaults/")) return deleteAnswer();
-  if (url.includes("/api/vaults")) return json([VAULT]);
+  if (url.includes("/api/vaults")) return json(vaultList);
   if (url.includes("/api/health")) {
     return json({ ok: true, status: "ok", service: "2nd-brain", version: "0.1.0", uptimeSec: 1, time: "t" });
   }
@@ -229,6 +244,8 @@ beforeEach(() => {
   createConflictOnWrite = false;
   created = null;
   deleteAnswer = () => json({ deleted: true, id: VAULT.id });
+  vaultList = [VAULT];
+  failDir = null;
   useStore.setState(INITIAL);
   stubFetch();
 });
@@ -789,5 +806,83 @@ describe("Browse, the New file CTA and the Read/Edit toggle", () => {
     // Switching modes is not an edit: nothing was saved, nothing was discarded.
     expect(useStore.getState().tabs[0]!.buffer).toBe(EDITED);
     expect(isDirty(useStore.getState().tabs[0]!)).toBe(true);
+  });
+});
+
+describe("Browse, a long vault name", () => {
+  /** Longer than any panel, and with no space in it — the shape that broke the
+   *  row. Measured live before the fix: the list read scrollWidth 888 against
+   *  clientWidth 600 and the name ran out of the panel. */
+  const LONG_NAME = "A-quarterly-review-of-every-decision-the-team-made-in-Q4-2026-and-the-reasons-behind-each-one";
+
+  it("cuts the name in the row instead of letting the name set the row's width", async () => {
+    vaultList = [{ ...VAULT, id: "v-long", name: LONG_NAME }];
+    // The vault list is the no-vault-open state of this screen.
+    useStore.setState({ currentVault: null });
+    const host = await mount();
+    await settle();
+
+    const cell = host.querySelector<HTMLElement>("ul li > button span[title]");
+    expect(cell, "the vault list painted no name cell").toBeTruthy();
+    expect(cell!.textContent).toBe(LONG_NAME);
+
+    // jsdom has no layout, so the widths cannot be measured here. What is
+    // asserted is the declaration the browser acts on: `min-width: 0` is what
+    // lets a flex cell shrink BELOW its own text, and the ellipsis is what the
+    // browser then draws in the space left. Drop `min-width` and the row goes
+    // back to 888px wide in a 600px list. The widths themselves were re-measured
+    // in a browser against the deployed build.
+    // Each assertion names the declaration, because "NaN is not 0" tells a
+    // reader nothing about which of the five went missing.
+    const style = cell!.style;
+    expect(parseFloat(style.minWidth), "minWidth must be 0 to allow the shrink").toBe(0);
+    expect(style.overflow, "overflow: hidden clips the cut text").toBe("hidden");
+    expect(style.textOverflow, "the ellipsis marks the cut").toBe("ellipsis");
+    expect(style.whiteSpace, "nowrap keeps the name on one line").toBe("nowrap");
+    expect(style.flexGrow, "the cell takes the width the date leaves").toBe("1");
+    // The name is cut on screen, never lost: the whole string stays reachable.
+    expect(cell!.getAttribute("title")).toBe(LONG_NAME);
+
+    // The date cell must not shrink — it would wrap to three lines instead.
+    const date = cell!.nextElementSibling as HTMLElement;
+    expect(date.style.whiteSpace).toBe("nowrap");
+  });
+});
+
+describe("Browse, a child directory that fails to load", () => {
+  it("says so, and offers a retry that really re-requests the level", async () => {
+    const host = await mount();
+    await settle();
+
+    // Before the fix a failed SUBdirectory rendered nothing at all: only the
+    // root's error had a branch, so the row stayed closed and the panel said
+    // nothing. The user saw a folder that would not open, with no reason.
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+
+    failDir = { dir: "Notes", message: "Couldn't read that folder." };
+    await click(findRow(host, "Notes"));
+    await settle();
+
+    const alert = host.querySelector<HTMLElement>('[role="alert"]');
+    expect(alert, "a failed child directory still renders no message").toBeTruthy();
+    // It names WHICH folder failed, and repeats the server's reason.
+    expect(alert!.textContent).toContain("Notes");
+    expect(alert!.textContent).toContain("Couldn't read that folder.");
+
+    // A message with no way out is half a fix: the retry must reach the wire.
+    const before = callsTo("/api/vaults/v1/tree").length;
+    failDir = null;
+    await click(findButton(alert!, "Try again"));
+    await settle();
+
+    const after = callsTo("/api/vaults/v1/tree").filter((c) =>
+      decodeURIComponent(c.url).includes("dir=Notes"),
+    );
+    expect(after.length).toBe(2);
+    expect(callsTo("/api/vaults/v1/tree").length).toBe(before + 1);
+
+    // The retry landed: the message is gone and the level's own rows are here.
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(findRow(host, "Deep")).toBeTruthy();
   });
 });

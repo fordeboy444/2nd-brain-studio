@@ -405,16 +405,21 @@ export const useStore = create<AppState>((set, get) => {
       // so there is nothing to reload. Letting this run would assign `null` to
       // both the buffer and the base hash, blanking the editor and marking the
       // tab clean with the user's text gone.
-      if (conflict.currentContent === null || conflict.currentHash === null) return;
+      //
+      // Bound to LOCALS first: TypeScript drops a narrowing on an object's
+      // property once that property is read inside a callback, because the
+      // callback can run long after the guard. The locals keep the narrowing.
+      const { path, currentContent, currentHash } = conflict;
+      if (currentContent === null || currentHash === null) return;
       // The server's bytes become both the reference content and what is on
       // screen, and the hash that came with them becomes the base — so after
       // this the tab is clean, and the next save is guarded by the hash that
       // actually matches the disk rather than the one that just lost.
       set((s) => ({
-        tabs: patchTabs(s.tabs, conflict.path, {
-          buffer: conflict.currentContent,
-          serverContent: conflict.currentContent,
-          baseHash: conflict.currentHash,
+        tabs: patchTabs(s.tabs, path, {
+          buffer: currentContent,
+          serverContent: currentContent,
+          baseHash: currentHash,
           error: null,
           loading: false,
         }),
