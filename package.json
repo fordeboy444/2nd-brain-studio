@@ -2,11 +2,16 @@
   "name": "2nd-brain-studio",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@11.17.0",
   "scripts": {
     "dev": "pnpm --filter @2nd-brain/server dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test"
+    "test": "vitest run tests/",
+    "test:all": "pnpm -r test && vitest run tests/"
+  },
+  "devDependencies": {
+    "vitest": "5.0.5"
   },
   "engines": {
     "node": ">=22"

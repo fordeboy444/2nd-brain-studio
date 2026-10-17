@@ -1,0 +1,48 @@
+# What never enters a build context.
+#
+# This keeps the image small, and more importantly keeps secrets and the two
+# read-only reference checkouts out of the image entirely.
+
+# Deployment-local configuration. Every env variant, at the root or nested, is a
+# file for the operator. The image reads configuration from the environment.
+.env
+.env.*
+*.env
+.envrc
+
+# Live YouTube session secrets. The cookie file belongs under /data at run time,
+# owned by the service user with mode 600 (see deploy/coolify/README.md). It is
+# never part of a build context and never part of an image.
+cookies.txt
+cookies.json
+*.cookies
+*cookie*.txt
+
+# Read-only references: kept in the repo for study, never shipped.
+baalda/
+cole-medin-knowledge-base/
+
+# Planning artifacts and local agent configuration.
+.planning/
+.gsd/
+.claude/
+
+# Version control, editor and OS files.
+.git
+.gitignore
+.dockerignore
+*.swp
+.DS_Store
+
+# Dependencies and build output: both are produced inside the image from the
+# lockfile and the sources, so a stale local copy must never be copied in.
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+
+# Logs and incremental build state.
+*.log
+**/*.tsbuildinfo

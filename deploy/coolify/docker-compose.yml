@@ -1,0 +1,61 @@
+# 2nd Brain Studio — the Coolify resource.
+#
+# Deploy this file as a Docker Compose resource with the repository root as its
+# Base Directory; see deploy/coolify/README.md for the steps. It is the whole
+# deployment: one service, one named volume, no published port.
+#
+# Every variable below uses the defaulted interpolation form (${VAR:-default}).
+# The other form — a name, a colon, then a question mark and a message — is never
+# used: Coolify reads that text as a value the operator already supplied,
+# prefills it, and the container then starts with the literal message in place of
+# the real value.
+name: 2nd-brain-studio
+
+services:
+  app:
+    build:
+      # The repository root, with the Dockerfile named explicitly, so both the
+      # pnpm workspace layout and the lockfile are inside the build context.
+      context: .
+      dockerfile: Dockerfile
+    # The proxy in front reaches the container over the internal network. The
+    # port is exposed and never published: publishing binds a host port and
+    # collides with the proxy that is supposed to own it.
+    expose:
+      - "3010"
+    environment:
+      PORT: "3010"
+      VAULT_ROOT: /data/vaults
+      # Credentials arrive from the deployment's environment, never from the
+      # image and never from this file. An unset key stays an empty string, which
+      # config.ts reads as "not configured": the container serves and
+      # /api/health reports degraded instead of exiting.
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-https://ollama.com}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
+      SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      # Coolify's domain variable: leave it empty and Coolify assigns a domain
+      # and terminates TLS for it.
+      SERVICE_FQDN_APP: ${SERVICE_FQDN_APP:-}
+    volumes:
+      # The only state: vault markdown, the registry and job state. A redeploy
+      # replaces the container and keeps this volume.
+      - okf_vaults:/data/vaults
+    healthcheck:
+      # GET /api/health, the route apps/server mounts. That endpoint answers 200
+      # even when a credential is missing (status: degraded), so an incomplete
+      # configuration is reported by the application's own signal rather than the
+      # container being killed for it.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3010/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  okf_vaults:
