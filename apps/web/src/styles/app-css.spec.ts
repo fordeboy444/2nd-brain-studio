@@ -19,6 +19,16 @@ const TOKENS_CSS_PATH = resolve(HERE, "tokens.css");
 const appCss = readFileSync(APP_CSS_PATH, "utf8");
 const tokensCss = readFileSync(TOKENS_CSS_PATH, "utf8");
 
+/* The same stylesheet with every comment removed. This is NOT a convenience.
+   The comments in this file QUOTE the declarations they explain — the `.toast`
+   comment literally contains the string "max-width: 100%" — so a substring test
+   over the raw text can pass on the prose alone and report a missing declaration
+   as present. That happened: the toast assertion below was green with
+   `max-width` deleted from the rule, and only the comment kept it alive. Every
+   structural test here reads this version; only the line-count test, which is
+   about the file's real size, reads the raw one. */
+const appCssRules = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
+
 /* The reference desktop stylesheet this file was copied from and pruned
    (baalda/app/apps/desktop/src/App.css at the time of the copy). Recorded as a
    number, not read from disk: the reference tree is a local read-only copy that
@@ -98,6 +108,31 @@ function countOccurrences(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
+/** The body of the rule whose selector `pattern` matches, with comments already
+ *  gone. Braces cannot nest inside a CSS rule body at this level, so stopping at
+ *  the first `}` is correct. */
+function ruleBody(css: string, pattern: RegExp): string {
+  const match = pattern.exec(css);
+  expect(match, `no rule matches ${pattern}`).not.toBeNull();
+  return match?.[1] ?? "";
+}
+
+/** The value of the LAST declaration of `property` in a rule body — the one the
+ *  cascade uses when a property is set twice. `null` when the rule does not
+ *  declare it at all, which is a different assertion from "declares it empty".
+ *
+ *  Split on `;` rather than matched with a regex: `startsWith` on the exact
+ *  `property:` form cannot be satisfied by a longer name that merely ends with
+ *  it, and it cannot be satisfied by anything but a real declaration. */
+function declaration(body: string, property: string): string | null {
+  const hit = body
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${property}:`))
+    .at(-1);
+  return hit === undefined ? null : hit.slice(property.length + 1).trim();
+}
+
 function declaredProperties(css: string): Set<string> {
   const names = new Set<string>();
   for (const match of css.matchAll(/(--[A-Za-z0-9_-]+)\s*:/g)) {
@@ -134,14 +169,19 @@ function collectVarRefs(css: string): { hard: Set<string>; withFallback: Set<str
 
 describe("pruned App.css", () => {
   it("carries no rule from the removed feature families", () => {
+    // Read without comments, which is the whole point of the rule above: prose
+    // ABOUT a removed family is not a rule from it, and it must not fail the
+    // prune. A comment that named one used to fail this test anyway.
     const survivors = REMOVED_FAMILIES.filter(
-      (prefix) => countOccurrences(appCss, prefix) > 0,
+      (prefix) => countOccurrences(appCssRules, prefix) > 0,
     );
     expect(survivors).toEqual([]);
   });
 
   it("still carries every selector the Phase 1 screens use", () => {
-    const missing = REQUIRED_SELECTORS.filter((selector) => !appCss.includes(selector));
+    // Without comments: a selector named only in a comment must not count as
+    // present, or a prune that deleted the rule would pass.
+    const missing = REQUIRED_SELECTORS.filter((selector) => !appCssRules.includes(selector));
     expect(missing).toEqual([]);
   });
 
@@ -151,18 +191,17 @@ describe("pruned App.css", () => {
   });
 
   it("resolves the selected tree row to an --accent-soft fill with --text-primary text", () => {
-    const rule = /\.tree-row\.selected\s*\{([^}]*)\}/.exec(appCss);
-    expect(rule).not.toBeNull();
-    expect(rule?.[1]).toContain("var(--accent-soft)");
-    expect(rule?.[1]).toContain("var(--text-primary)");
+    const rule = ruleBody(appCssRules, /\.tree-row\.selected\s*\{([^}]*)\}/);
+    expect(declaration(rule, "background")).toContain("var(--accent-soft)");
+    expect(declaration(rule, "color")).toContain("var(--text-primary)");
   });
 
   it("references no custom property whose only declaration was pruned", () => {
     const declared = new Set([
-      ...declaredProperties(appCss),
+      ...declaredProperties(appCssRules),
       ...declaredProperties(tokensCss),
     ]);
-    const { hard } = collectVarRefs(appCss);
+    const { hard } = collectVarRefs(appCssRules);
     const orphans = [...hard].filter((name) => !declared.has(name));
     expect(orphans).toEqual([]);
   });
@@ -173,17 +212,21 @@ describe("pruned App.css", () => {
     // window. Both halves matter — the clamp bounds the box, and the wrap is
     // what lets the box actually reach that bound, because a fit-content box
     // never goes below its own min-content width.
-    const toast = /\.toast\s*\{([^}]*)\}/.exec(appCss);
-    expect(toast?.[1]).toContain("max-width: 100%");
+    //
+    // Asserted on the DECLARATIONS, never on the rule's text. Each of these four
+    // strings appears in the comment that explains it, so a substring test is
+    // satisfied by the explanation alone.
+    const toast = ruleBody(appCssRules, /\.toast\s*\{([^}]*)\}/);
+    expect(declaration(toast, "max-width")).toBe("100%");
 
-    const text = /\.toast-text\s*\{([^}]*)\}/.exec(appCss);
-    expect(text?.[1]).toContain("min-width: 0");
-    expect(text?.[1]).toContain("overflow-wrap: anywhere");
-    // `anywhere` and not `break-word`: only `anywhere` lowers min-content.
-    expect(text?.[1]).not.toContain("overflow-wrap: break-word");
+    const text = ruleBody(appCssRules, /\.toast-text\s*\{([^}]*)\}/);
+    expect(declaration(text, "min-width")).toBe("0");
+    expect(declaration(text, "overflow-wrap")).toBe("anywhere");
+    // `anywhere` and not `break-word`: only `anywhere` lowers min-content, which
+    // is the width the fit-content box above resolves against.
     // The message must WRAP, never be cut. An ellipsis here would silently drop
     // the tail of a server error — the one line the user needs in full.
-    expect(text?.[1]).not.toContain("text-overflow: ellipsis");
+    expect(declaration(text, "text-overflow")).toBeNull();
   });
 
   it("keeps the token import ahead of this stylesheet in main.tsx", () => {
