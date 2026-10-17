@@ -810,10 +810,12 @@ describe("Browse, the New file CTA and the Read/Edit toggle", () => {
 });
 
 describe("Browse, a long vault name", () => {
-  /** Longer than any panel, and with no space in it — the shape that broke the
-   *  row. Measured live before the fix: the list read scrollWidth 888 against
-   *  clientWidth 600 and the name ran out of the panel. */
-  const LONG_NAME = "A-quarterly-review-of-every-decision-the-team-made-in-Q4-2026-and-the-reasons-behind-each-one";
+  /** 121 characters, one unbroken token with no space anywhere in it — the shape
+   *  that broke the row. The same exact string is the live vault the deployed
+   *  build was re-measured against, so the number in the comment below belongs
+   *  to THIS name and not to some other one. */
+  const LONG_NAME =
+    "A-quarterly-review-of-every-decision-the-team-made-in-Q4-2026-and-the-reasons-behind-each-one-and-the-quarters-after-that";
 
   it("cuts the name in the row instead of letting the name set the row's width", async () => {
     vaultList = [{ ...VAULT, id: "v-long", name: LONG_NAME }];
