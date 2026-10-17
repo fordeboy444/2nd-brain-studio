@@ -6,6 +6,7 @@ import pino from "pino";
 import { config } from "../config.js";
 import { health } from "../routes/health.js";
 import { vaults } from "../routes/vaults.js";
+import { files } from "../routes/file.js";
 
 const log = pino({ name: config.serviceName, level: config.llmConfigured ? "info" : "warn" });
 
@@ -27,6 +28,7 @@ app.use("*", async (c, next) => {
 // API routes.
 app.route("/api/health", health);
 app.route("/api/vaults", vaults);
+app.route("/api/file", files);
 
 // SPA static assets + SPA fallback. Only mounted when the build exists.
 const webDist = resolve(process.cwd(), "apps/web/dist");
