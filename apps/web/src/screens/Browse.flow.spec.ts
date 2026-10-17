@@ -97,6 +97,14 @@ let deleteAnswer: () => Response = () => json({ deleted: true, id: VAULT.id });
 /** When set, the next write answers 409 with this — the file moved on disk. */
 let conflictOnWrite: { currentContent: string; currentHash: string } | null = null;
 
+/**
+ * The server's OTHER 409. A hash was sent for a path that is not on disk, so
+ * there is no server version to compare against or reload. The real route
+ * answers `code: "create_conflict"` with neither `currentContent` nor
+ * `currentHash` (`apps/server/src/routes/file.ts`).
+ */
+let createConflictOnWrite = false;
+
 /** A file a create PUT put on the server. The stub's root listing carries it
  *  afterwards, so "the new row appeared without a reload" is asserted against a
  *  listing that CHANGED rather than against the same listing read twice. */
@@ -140,6 +148,17 @@ function route(url: string, method: string): Response {
   }
   if (url.includes("/api/file")) {
     if (method === "PUT") {
+      // The file is GONE, and the caller sent a hash for it. No server bytes.
+      if (createConflictOnWrite) {
+        return json(
+          {
+            error: "conflict",
+            code: "create_conflict",
+            message: "This file no longer exists on disk. Recreate it, or save under another name.",
+          },
+          409,
+        );
+      }
       // The file moved on disk: the server refuses the write and hands back
       // what is there instead. This is the 409 the conflict flow exists for.
       if (conflictOnWrite) {
@@ -207,6 +226,7 @@ function stubFetchHoldingTheWrite() {
 beforeEach(() => {
   calls = [];
   conflictOnWrite = null;
+  createConflictOnWrite = false;
   created = null;
   deleteAnswer = () => json({ deleted: true, id: VAULT.id });
   useStore.setState(INITIAL);
@@ -441,6 +461,54 @@ async function mountAndConflict(host: HTMLElement) {
   await pressSave();
   expect(useStore.getState().conflict).not.toBeNull();
 }
+
+describe("Browse, a 409 that carries no server version (CR-02)", () => {
+  it("keeps the text, offers no reload, and never invents a hash", async () => {
+    createConflictOnWrite = true;
+    const host = await mount();
+    await mountAndConflict(host);
+
+    const conflict = useStore.getState().conflict;
+    expect(conflict).not.toBeNull();
+    // The absent fields stay absent. `""` can never equal a SHA-256, so a
+    // retry built on a coerced hash would fail forever.
+    expect(conflict!.currentContent).toBeNull();
+    expect(conflict!.currentHash).toBeNull();
+
+    // The heart of it: the edit is still exactly what the user typed.
+    expect(useStore.getState().tabs[0]!.buffer).toBe(EDITED);
+
+    // Reload is not offered — there is no server version to reload. Reloading
+    // would blank the editor and mark the tab clean with the text gone.
+    const labels = [...host.querySelectorAll("button")].map((b) => b.textContent?.trim());
+    expect(labels).not.toContain("Reload from disk");
+    expect(labels).toContain("Recreate");
+    expect(labels).not.toContain("Keep mine");
+
+    // And the action refuses even when reached directly.
+    useStore.getState().reloadFromDisk();
+    expect(useStore.getState().tabs[0]!.buffer).toBe(EDITED);
+    expect(useStore.getState().conflict).not.toBeNull();
+  });
+
+  it("Recreate re-sends the buffer with baseHash null, which recreates the file", async () => {
+    createConflictOnWrite = true;
+    const host = await mount();
+    await mountAndConflict(host);
+
+    // The path is free again, so the deliberate recreation can land.
+    createConflictOnWrite = false;
+    await click(findButton(host, "Recreate"));
+
+    const writes = callsTo("/api/file").filter((c) => c.method === "PUT");
+    expect(writes.length).toBe(2);
+    const body = JSON.parse(writes[1]!.body) as Record<string, unknown>;
+    // null, not "": the file is gone, so null is the hash that creates it.
+    expect(body.baseHash).toBeNull();
+    expect(body.content).toBe(EDITED);
+    expect(useStore.getState().conflict).toBeNull();
+  });
+});
 
 describe("Browse, the 409 conflict (D-07)", () => {
   it("keeps the user's text exactly, and offers both answers", async () => {

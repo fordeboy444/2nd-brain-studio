@@ -55,10 +55,19 @@ export interface Tab {
 /** A save the server refused because the file moved on disk (D-07). */
 export interface PendingConflict {
   path: string;
-  /** What is on disk now, verbatim — shown only if the user asks for it. */
-  currentContent: string;
-  /** The base hash that would make a write land. */
-  currentHash: string;
+  /**
+   * What is on disk now, verbatim — shown only if the user asks for it.
+   * `null` when the server sent nothing to reload.
+   */
+  currentContent: string | null;
+  /**
+   * The base hash that would make a write land. `null` means the file is GONE
+   * from disk (`code: "create_conflict"`): there are no server-side bytes, so
+   * there is nothing to reload, and `null` is the hash that recreates the file.
+   * Never coerce a missing hash to `""` — an empty string can never equal a
+   * SHA-256, so the retry would fail forever.
+   */
+  currentHash: string | null;
 }
 
 /** A save that failed for any other reason. The buffer is untouched. */
@@ -373,8 +382,8 @@ export const useStore = create<AppState>((set, get) => {
               tabs: tabsNow,
               conflict: {
                 path: tab.path,
-                currentContent: e.currentContent ?? "",
-                currentHash: e.currentHash ?? "",
+                currentContent: e.currentContent,
+                currentHash: e.currentHash,
               },
             };
           }
@@ -392,6 +401,11 @@ export const useStore = create<AppState>((set, get) => {
     reloadFromDisk: () => {
       const { conflict } = get();
       if (!conflict) return;
+      // A create conflict carries no server-side bytes — the file was deleted,
+      // so there is nothing to reload. Letting this run would assign `null` to
+      // both the buffer and the base hash, blanking the editor and marking the
+      // tab clean with the user's text gone.
+      if (conflict.currentContent === null || conflict.currentHash === null) return;
       // The server's bytes become both the reference content and what is on
       // screen, and the hash that came with them becomes the base — so after
       // this the tab is clean, and the next save is guarded by the hash that
@@ -418,6 +432,8 @@ export const useStore = create<AppState>((set, get) => {
       try {
         // `conflict.currentHash`, never `tab.baseHash`: the tab's base is the
         // hash that just lost, and sending it again is the same 409 twice.
+        // `null` is correct for a create conflict: the file is gone, so `null`
+        // is the hash that recreates it.
         const res = await writeFile(tab.vaultId, conflict.path, sending, conflict.currentHash);
         set((s) => ({
           tabs: patchTabs(s.tabs, conflict.path, {
@@ -437,8 +453,8 @@ export const useStore = create<AppState>((set, get) => {
               tabs: tabsNow,
               conflict: {
                 path: conflict.path,
-                currentContent: e.currentContent ?? "",
-                currentHash: e.currentHash ?? "",
+                currentContent: e.currentContent,
+                currentHash: e.currentHash,
               },
             };
           }

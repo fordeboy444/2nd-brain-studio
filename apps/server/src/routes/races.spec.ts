@@ -209,6 +209,88 @@ describe("two concurrent DELETE /api/vaults/:id calls", () => {
   });
 });
 
+describe("two concurrent PUT /api/file for the same path", () => {
+  it("accepts exactly one write, reports the on-disk hash, and never 500s", async () => {
+    // Regression guard for CR-01 in the file write path. Before the fix both
+    // requests read the old bytes, both passed the baseHash check, and both
+    // wrote: the loser's bytes were replaced without a 409, and the winner's
+    // 200 could carry a baseHash describing bytes no longer on disk.
+    vi.resetModules();
+    const { vaults } = (await import("./vaults.js")) as typeof import("./vaults.js");
+    const { files, hashContent } = (await import("./file.js")) as typeof import("./file.js");
+
+    const created = await vaults.request("/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "File Race" }),
+    });
+    const vaultId = (await created.json()).id as string;
+
+    const put = (path: string, content: string, baseHash: string | null) =>
+      files.request("/", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ vault: vaultId, path, content, baseHash }),
+      });
+
+    for (let round = 0; round < ROUNDS; round++) {
+      const path = `note-${round}.md`;
+
+      // Seed the file and keep the hash a client would hold.
+      const seeded = await put(path, "v0\n", null);
+      expect(seeded.status).toBe(200);
+      const h0 = (await seeded.json()).baseHash as string;
+
+      // Two writes that both claim h0. The first to land makes h0 stale, so
+      // exactly one may be accepted.
+      const [a, b] = await Promise.all([put(path, "AAAA\n", h0), put(path, "BBBB\n", h0)]);
+
+      expect([a.status, b.status].filter((s) => s === 500)).toEqual([]);
+      expect([a.status, b.status].sort((x, y) => x - y)).toEqual([200, 409]);
+
+      // The accepted response must describe what is really on disk.
+      const [bodyA, bodyB] = await Promise.all([a.json(), b.json()]);
+      const winner = a.status === 200 ? bodyA : bodyB;
+      const onDisk = await readFile(join(root, vaultId, path));
+      expect(winner.baseHash).toBe(hashContent(onDisk));
+    }
+  });
+
+  it("answers a hash for a missing file with create_conflict and no server bytes", async () => {
+    // CR-02. This 409 must NOT look like a stale-hash conflict: there is no
+    // server version to reload, and a client that invents an empty string for
+    // the absent hash can never save successfully.
+    vi.resetModules();
+    const { vaults } = (await import("./vaults.js")) as typeof import("./vaults.js");
+    const { files } = (await import("./file.js")) as typeof import("./file.js");
+
+    const created = await vaults.request("/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Create Conflict" }),
+    });
+    const vaultId = (await created.json()).id as string;
+
+    const res = await files.request("/", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        vault: vaultId,
+        path: "never-existed.md",
+        content: "text",
+        baseHash: "a-hash-for-a-file-that-is-not-there",
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.code).toBe("create_conflict");
+    // No currentContent and no currentHash: nothing for the client to invent.
+    expect(body).not.toHaveProperty("currentContent");
+    expect(body).not.toHaveProperty("currentHash");
+  });
+});
+
 describe("the jail's check-to-use window", () => {
   it("rejects a symlink that is already in place when the request arrives", async () => {
     const vaultDir = join(root, "vault");

@@ -107,6 +107,12 @@ export function MarkdownEditor() {
   const conflict = useStore((s) => s.conflict);
   const reloadFromDisk = useStore((s) => s.reloadFromDisk);
   const keepMine = useStore((s) => s.keepMine);
+  // A conflict the server answered with no hash is a create conflict: the file
+  // was deleted on disk while the tab held a hash for it. There is no server
+  // version to reload, so the banner offers only the recreating action.
+  const conflictHere =
+    conflict !== null && conflict.path === tab?.path ? conflict : null;
+  const isCreateConflict = conflictHere !== null && conflictHere.currentHash === null;
   const revealRequest = useStore((s) => s.pendingRevealLine);
   const consumeReveal = useStore((s) => s.consumeReveal);
 
@@ -210,19 +216,29 @@ export function MarkdownEditor() {
           there is no wrapper here: nesting it in a padded box would inset it
           twice. */}
       <Banner
-        show={conflict !== null && conflict.path === tab.path}
+        show={conflictHere !== null}
         role="alert"
         className="conflict-banner"
       >
-        <span>This file changed on disk since you opened it.</span>
+        <span>
+          {isCreateConflict
+            ? "This file no longer exists on disk."
+            : "This file changed on disk since you opened it."}
+        </span>
         <div className="banner-actions">
-          <button type="button" onClick={reloadFromDisk}>
-            Reload from disk
-          </button>
+          {/* Reload is offered only when the server sent a version to reload.
+              On a create conflict there is none, and reloading would replace
+              the user's text with an empty document and mark the tab clean. */}
+          {isCreateConflict ? null : (
+            <button type="button" onClick={reloadFromDisk}>
+              Reload from disk
+            </button>
+          )}
           {/* Re-sends the buffer, rebased on the hash the conflict returned, so
-              the user's text wins deliberately rather than by accident. */}
+              the user's text wins deliberately rather than by accident. With no
+              hash to rebase on, the same action recreates the deleted file. */}
           <AsyncButton className="primary" spinnerTone="on-accent" onClick={keepMine}>
-            Keep mine
+            {isCreateConflict ? "Recreate" : "Keep mine"}
           </AsyncButton>
         </div>
       </Banner>

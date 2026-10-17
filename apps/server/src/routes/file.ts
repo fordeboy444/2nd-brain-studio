@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { createHash } from "node:crypto";
-import { readFile, rename, writeFile, mkdir } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { readFile, rename, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { PathJailError, decodePathParam, resolveInVault } from "../paths/jail.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
@@ -23,6 +23,37 @@ const JAIL_MESSAGE = "Invalid path.";
 /** SHA-256 of raw bytes, lowercase hex. */
 export function hashContent(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes as Uint8Array).digest("hex");
+}
+
+/**
+ * Serializes the read-check-write cycle, keyed by absolute path.
+ *
+ * `rename` makes each individual write atomic, but atomicity is not isolation:
+ * two PUTs for one path both read the old bytes, both pass the `baseHash`
+ * check, and both write. The loser's bytes are replaced without a 409 — the
+ * exact case `baseHash` exists to catch — and the winner's 200 can carry a
+ * `baseHash` that describes bytes no longer on disk.
+ *
+ * One container, one in-process writer, so a promise chain is enough. The key
+ * keeps unrelated files writing in parallel.
+ */
+const pathLocks = new Map<string, Promise<unknown>>();
+
+function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = pathLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(fn, fn);
+  // Keep the chain alive after a rejection so one failure cannot wedge it.
+  const settled = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  pathLocks.set(key, settled);
+  void settled.then(() => {
+    // Drop the entry once no later writer is queued behind this one, so a long
+    // run cannot grow the map without bound.
+    if (pathLocks.get(key) === settled) pathLocks.delete(key);
+  });
+  return run;
 }
 
 export const files = new Hono();
@@ -132,63 +163,74 @@ files.put("/", async (c) => {
     throw err;
   }
 
-  // Does the target already exist?
-  let existing: Buffer | null = null;
-  try {
-    existing = (await readFile(resolved.absPath)) as Buffer;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      existing = null;
-    } else if ((err as NodeJS.ErrnoException).code === "EISDIR") {
-      return c.json({ error: "invalid_path", message: "Path is a directory." }, 400);
+  // The whole read-check-write cycle runs under the path lock.
+  return withPathLock(resolved.absPath, async () => {
+    // Does the target already exist?
+    let existing: Buffer | null = null;
+    try {
+      existing = (await readFile(resolved.absPath)) as Buffer;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        existing = null;
+      } else if ((err as NodeJS.ErrnoException).code === "EISDIR") {
+        return c.json({ error: "invalid_path", message: "Path is a directory." }, 400);
+      } else {
+        throw err;
+      }
+    }
+
+    if (existing === null) {
+      // The caller holds a hash for a file that is gone. This is NOT a
+      // stale-hash conflict: there is no server-side content to compare
+      // against or to reload. It carries its own code and no `currentContent`
+      // /`currentHash`, so the client cannot invent a hash it never received.
+      if (parsed.baseHash !== null) {
+        return c.json(
+          {
+            error: "conflict",
+            code: "create_conflict",
+            message: "This file no longer exists on disk. Recreate it, or save under another name.",
+          },
+          409,
+        );
+      }
     } else {
+      const currentHash = hashContent(existing);
+      // `baseHash === null` means the caller thought the file did not exist.
+      // Both cases are the same to the caller: read the new bytes, or retry.
+      if (parsed.baseHash === null || currentHash !== parsed.baseHash) {
+        return c.json(
+          {
+            error: "conflict",
+            message: "This file changed on disk since you opened it.",
+            currentContent: existing.toString("utf8"),
+            currentHash,
+          },
+          409,
+        );
+      }
+    }
+
+    // Write atomically: sibling temp file + rename.
+    const bytes = Buffer.from(parsed.content, "utf8");
+    const dir = dirname(resolved.absPath);
+    await mkdir(dir, { recursive: true });
+    // A random suffix, not the clock. Two writes in one millisecond otherwise
+    // share a staging path, and the second rename finds no source.
+    const tmp = join(dir, `.file.tmp-${process.pid}-${randomBytes(8).toString("hex")}`);
+    let created = false;
+    try {
+      await writeFile(tmp, bytes, { flag: "wx" });
+      created = true;
+      await rename(tmp, resolved.absPath);
+    } catch (err) {
+      // Only remove the file this request made. On EEXIST the path belongs to
+      // another writer and must survive.
+      if (created) await rm(tmp, { force: true });
       throw err;
     }
-  }
 
-  if (existing === null) {
-    // Create: accept only baseHash === null.
-    if (parsed.baseHash !== null) {
-      return c.json(
-        { error: "conflict", message: "File does not exist yet; baseHash must be null to create." },
-        409,
-      );
-    }
-  } else {
-    const currentHash = hashContent(existing);
-    if (parsed.baseHash === null) {
-      // Caller thought the file did not exist; it does. 409 with current bytes.
-      return c.json(
-        {
-          error: "conflict",
-          message: "This file changed on disk since you opened it.",
-          currentContent: existing.toString("utf8"),
-          currentHash,
-        },
-        409,
-      );
-    }
-    if (currentHash !== parsed.baseHash) {
-      return c.json(
-        {
-          error: "conflict",
-          message: "This file changed on disk since you opened it.",
-          currentContent: existing.toString("utf8"),
-          currentHash,
-        },
-        409,
-      );
-    }
-  }
-
-  // Write atomically: sibling temp file + rename.
-  const bytes = Buffer.from(parsed.content, "utf8");
-  const dir = dirname(resolved.absPath);
-  await mkdir(dir, { recursive: true });
-  const tmp = join(dir, `.file.tmp-${process.pid}-${Date.now()}`);
-  await writeFile(tmp, bytes);
-  await rename(tmp, resolved.absPath);
-
-  const newHash = hashContent(bytes);
-  return c.json({ path: resolved.relPath, baseHash: newHash }, 200);
+    const newHash = hashContent(bytes);
+    return c.json({ path: resolved.relPath, baseHash: newHash }, 200);
+  });
 });

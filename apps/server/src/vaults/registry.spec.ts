@@ -97,7 +97,7 @@ describe("registry", () => {
     await touchVault(a.id);
     // Gamma stays oldest.
     const list = await listVaults();
-    expect(list.map((v) => v.name)).toEqual(["Alpha", "Beta", "Gamma"].sort(() => 0)); // sanity
+    expect(list.map((v) => v.name)).toEqual(["Alpha", "Beta", "Gamma"]);
     // Force a tie: set Alpha and Beta lastOpenedAt equal, names asc => Alpha before Beta.
     const reg = await readRegistry();
     const alpha = reg.vaults.find((v) => v.id === a.id)!;
