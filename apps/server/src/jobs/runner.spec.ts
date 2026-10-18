@@ -29,6 +29,7 @@ import {
   type VideoRawCapture,
 } from "./types.js";
 import { createIngestStageDeps } from "./bootstrap.js";
+import { createWebFetcher } from "./stages/web.js";
 
 /** Captured pino lines, so the redaction scan covers the log surface too. */
 const { pinoLines } = vi.hoisted(() => ({ pinoLines: [] as string[] }));
@@ -499,6 +500,110 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       (event) => event.type === "unit" && event.data.status === "skipped",
     );
     expect(skip?.data.detail).toBe("capture present");
+  });
+
+  it("completes a web job with a fake fetchWeb and one raw file", async () => {
+    const url = "https://example.com/fresh";
+    const deps = makeDeps({
+      async fetchWeb() {
+        return {
+          site: "example.com",
+          title: "Fresh Page",
+          paragraphs: ["**[#1]** alpha"],
+          wordCount: 2,
+        };
+      },
+    });
+    const job = makeWebJob(url);
+    await writeJob(root, job);
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.stage).toBe("done");
+    expect(await readdir(join(root, "raw"))).toEqual(["fresh-page.md"]);
+    const parsed = parseFrontmatter(
+      await readFile(join(root, "raw", "fresh-page.md"), "utf8"),
+    );
+    expect(parsed!.data.url).toBe(url);
+    expect(parsed!.data.source_kind).toBe("web");
+    expect(parsed!.data.captured_at).toBe(FIXED_ISO);
+  });
+
+  it("records a thrown fetchWeb as one S1w skip and never fails the job", async () => {
+    const deps = makeDeps({
+      async fetchWeb() {
+        throw new Error("socket hang up");
+      },
+      classifyWebError: () => "fetch_error",
+    });
+    const job = makeWebJob("https://example.com/broken");
+    await writeJob(root, job);
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.stage).toBe("done");
+    expect(finished.skipped).toHaveLength(1);
+    expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "fetch_error" });
+    expect(await readdir(join(root, "raw"))).toEqual([]);
+  });
+
+  it("keeps a tagged web SkipError and never calls the web classifier", async () => {
+    let classified = 0;
+    const deps = makeDeps({
+      async fetchWeb() {
+        throw new SkipError("blocked", "sign in wall");
+      },
+      classifyWebError: () => {
+        classified += 1;
+        return "fetch_error";
+      },
+    });
+    const job = makeWebJob("https://example.com/locked");
+    await writeJob(root, job);
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "blocked" });
+    expect(classified).toBe(0);
+    expect(await readdir(join(root, "raw"))).toEqual([]);
+  });
+
+  it("runs the real createWebFetcher through runJob with a fake fetch and lookup", async () => {
+    const url = "https://example.com/real";
+    const words = Array.from({ length: 220 }, (_, index) => `token${index}`).join(" ");
+    const html = `<!doctype html><html><head><title>Real Adapter</title></head><body>
+      <article><h1>Real Adapter</h1><p>${words}</p><p>Second block.</p></article>
+    </body></html>`;
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(html, {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    );
+    const deps = makeDeps({
+      fetchWeb: createWebFetcher({
+        fetch: fetchImpl as unknown as typeof globalThis.fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      }),
+    });
+    const job = makeWebJob(url);
+    await writeJob(root, job);
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    const files = await readdir(join(root, "raw"));
+    expect(files).toHaveLength(1);
+    const parsed = parseFrontmatter(
+      await readFile(join(root, "raw", files[0] as string), "utf8"),
+    );
+    expect(parsed!.data.url).toBe(url);
+    expect(parsed!.data.site).toBe("example.com");
+    expect(parsed!.body).toContain("**[#1]** ");
   });
 
   it("skips a matching video capture on a second run with zero adapter calls", async () => {

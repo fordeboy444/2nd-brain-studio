@@ -16,6 +16,7 @@ import {
   createTranscriptCascade,
   type PythonRun,
 } from "../ingest/transcript.js";
+import { isYouTubeChannelUrl } from "../ingest/urls.js";
 import { classifyYtDlpError, type YtDlpRun } from "../ingest/ytdlp.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
@@ -89,6 +90,10 @@ export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
       await probeFirstCandidate(candidates, cascade, ctx);
     },
     async enumerate(url, opts, signal) {
+      // A web job shares S0 with a video job (03-01's stage table) but has no
+      // channel to enumerate. A non-channel URL is a truthful zero-unit stage,
+      // not a job failure: S1w is the stage that fetches the page.
+      if (!isYouTubeChannelUrl(url)) return [];
       const { candidates } = await enumerateChannel(url, { ...opts, signal });
       return candidates;
     },

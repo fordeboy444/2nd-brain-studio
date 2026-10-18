@@ -76,6 +76,19 @@ describe("createIngestStageDeps", () => {
     expect("youtube" in deps).toBe(false);
   });
 
+  it("returns a zero-unit S0 for a web URL without enumerating a channel", async () => {
+    const deps = createIngestStageDeps({ supadataKey: null });
+
+    const candidates = await deps.enumerate("https://example.com/post", {
+      maxVideos: 1,
+      maxScan: 5,
+      language: "en",
+      filters: {},
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
   it("completes one S0 + S1 job with one raw file and one preflight fetch", async () => {
     const factory = createIngestStageDeps({
       runYtDlp: runWritesJson3,

@@ -255,6 +255,67 @@ describe("POST /api/jobs", () => {
     expect(existsSync(join(vaultDir, ".okf"))).toBe(false);
   });
 
+  it("creates a web job with the requested URL and one-page settings", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+
+    const res = await routes.jobs.request(
+      "/",
+      jsonInit({ vaultId, kind: "web", url: "https://example.com/post", language: "de" }),
+    );
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { id: string; status: string };
+    expect(body.status).toBe("queued");
+
+    const onDisk = await routes.readJob(vaultDir, body.id);
+    expect(onDisk.kind).toBe("web");
+    expect(onDisk.input.url).toBe("https://example.com/post");
+    expect(onDisk.settings.maxVideos).toBe(1);
+    expect(onDisk.settings.filters).toEqual({ language: "de" });
+    // A web job never enumerates a channel.
+    expect(enumHarness.calls).toBe(0);
+    expect(harness.enqueued.map((job) => job.id)).toEqual([body.id]);
+  });
+
+  it("returns 400 invalid_body when a web body carries a filter field", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+
+    for (const extra of [
+      { maxVideos: 5 },
+      { dateFrom: "2026-01-01" },
+      { dateTo: "2026-02-01" },
+      { minDurationSec: 60 },
+    ]) {
+      const res = await routes.jobs.request(
+        "/",
+        jsonInit({ vaultId, kind: "web", url: "https://example.com/post", ...extra }),
+      );
+      expect(res.status, JSON.stringify(extra)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_body");
+    }
+
+    expect(existsSync(join(vaultDir, ".okf"))).toBe(false);
+    expect(harness.enqueued).toHaveLength(0);
+  });
+
+  it("returns 400 invalid_source_url for a file: or credential-bearing web URL", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+
+    for (const url of ["file:///etc/passwd", "https://user:secret@example.com/post"]) {
+      const res = await routes.jobs.request(
+        "/",
+        jsonInit({ vaultId, kind: "web", url }),
+      );
+      expect(res.status, url).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_source_url");
+    }
+
+    expect(existsSync(join(vaultDir, ".okf"))).toBe(false);
+    expect(harness.enqueued).toHaveLength(0);
+  });
+
   it("returns 403 origin_mismatch for a cross-origin POST and creates nothing", async () => {
     const routes = await reload();
     const { vaultId } = await seeded(routes);
@@ -369,6 +430,62 @@ describe("POST /api/jobs/preview", () => {
     const failed = await routes.jobs.request("/preview", jsonInit(previewBody()));
     expect(failed.status).toBe(502);
     expect(((await failed.json()) as { error: string }).error).toBe("enumerate_failed");
+  });
+
+  it("returns the fixed one-page estimate for a web preview without a fetch", async () => {
+    const routes = await reload();
+    const { vaultDir } = await seeded(routes);
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("a web preview must not fetch");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    try {
+      const res = await routes.jobs.request(
+        "/preview",
+        jsonInit({ kind: "web", url: "https://example.com/post" }),
+      );
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        found: 1,
+        selected: 1,
+        skipped: [],
+        estimatedCalls: 8,
+        estimatedMinutes: 4,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(enumHarness.calls).toBe(0);
+      expect(existsSync(join(vaultDir, ".okf", "jobs"))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects a web preview with a filter field as invalid_body", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const res = await routes.jobs.request(
+      "/preview",
+      jsonInit({ kind: "web", url: "https://example.com/post", maxVideos: 5 }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_body");
+  });
+
+  it("returns 400 invalid_source_url for a non-http web preview", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const res = await routes.jobs.request(
+      "/preview",
+      jsonInit({ kind: "web", url: "file:///etc/passwd" }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_source_url");
   });
 
   it("answers GET /preview with 405 and never treats it as a job id", async () => {

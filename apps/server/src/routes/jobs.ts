@@ -22,6 +22,7 @@ import {
   type PreviewInput,
   type PreviewResult,
 } from "../ingest/preview.js";
+import { parseWebUrl, SsrfError } from "../ingest/ssrf.js";
 import { InvalidSourceUrlError, normalizeChannelUrl } from "../ingest/urls.js";
 import { getJobQueue } from "../jobs/bootstrap.js";
 import { parseLastEventId, streamJobEvents } from "../jobs/events.js";
@@ -55,10 +56,10 @@ export const sseOptions: { pollMs: number; keepaliveMs: number } = {
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
- * POST /api/jobs body. Every string is bounded and `maxVideos` is capped at
+ * The YouTube create arm. Every string is bounded and `maxVideos` is capped at
  * 2000, so one request cannot ask for an unbounded scan (T-03-05).
  */
-const CreateJobBody = z.object({
+const YoutubeCreateBody = z.object({
   vaultId: z.string().min(1).max(128),
   kind: z.literal("youtube"),
   channelUrl: z.string().min(1).max(2048),
@@ -70,10 +71,26 @@ const CreateJobBody = z.object({
 });
 
 /**
+ * The web create arm. `.strict()` is the point: a web job has one page, so a
+ * `maxVideos` or a date filter is a client error rather than a value that is
+ * silently dropped.
+ */
+const WebCreateBody = z
+  .object({
+    vaultId: z.string().min(1).max(128),
+    kind: z.literal("web"),
+    url: z.string().min(1).max(2048),
+    language: z.string().min(2).max(16).optional(),
+  })
+  .strict();
+
+const CreateJobBody = z.discriminatedUnion("kind", [YoutubeCreateBody, WebCreateBody]);
+
+/**
  * POST /api/jobs/preview body: the create body without `vaultId`, because a
  * preview writes nothing and therefore needs no vault.
  */
-const PreviewBody = z.object({
+const YoutubePreviewBody = z.object({
   kind: z.literal("youtube"),
   channelUrl: z.string().min(1).max(2048),
   maxVideos: z.number().int().min(1).max(2000),
@@ -82,6 +99,28 @@ const PreviewBody = z.object({
   minDurationSec: z.number().int().min(0).max(86400).optional(),
   language: z.string().min(2).max(16).optional(),
 });
+
+const WebPreviewBody = z
+  .object({
+    kind: z.literal("web"),
+    url: z.string().min(1).max(2048),
+    language: z.string().min(2).max(16).optional(),
+  })
+  .strict();
+
+const PreviewBody = z.discriminatedUnion("kind", [YoutubePreviewBody, WebPreviewBody]);
+
+/**
+ * A web job's dry run is one page. The number is fixed rather than enumerated:
+ * a preview must make no network call, so there is nothing to discover.
+ */
+const WEB_PREVIEW: PreviewResult = {
+  found: 1,
+  selected: 1,
+  skipped: [],
+  estimatedCalls: 8,
+  estimatedMinutes: 4,
+};
 
 const TERMINAL: ReadonlySet<JobStatus> = new Set(["completed", "failed", "cancelled"]);
 
@@ -142,8 +181,8 @@ async function findJob(id: string): Promise<FoundJob | null> {
   return null;
 }
 
-/** The preview form mapped onto `previewJob`'s input shape. */
-function toPreviewInput(parsed: z.infer<typeof PreviewBody>): PreviewInput {
+/** The YouTube preview form mapped onto `previewJob`'s input shape. */
+function toPreviewInput(parsed: z.infer<typeof YoutubePreviewBody>): PreviewInput {
   return {
     channelUrl: parsed.channelUrl,
     maxVideos: parsed.maxVideos,
@@ -207,10 +246,23 @@ jobs.post("/preview", async (c) => {
       {
         error: "invalid_body",
         message:
-          "Request body must be JSON with kind:\"youtube\", channelUrl and maxVideos (1..2000).",
+          "Request body must be JSON with kind:\"youtube\" (channelUrl, maxVideos 1..2000) or kind:\"web\" (url). A web preview takes no maxVideos or date filters.",
       },
       400,
     );
+  }
+
+  if (parsed.kind === "web") {
+    try {
+      // Syntax only: a preview must not resolve DNS or fetch the page.
+      parseWebUrl(parsed.url);
+    } catch (error) {
+      if (error instanceof SsrfError) {
+        return c.json({ error: "invalid_source_url", message: error.message }, 400);
+      }
+      throw error;
+    }
+    return c.json(WEB_PREVIEW, 200);
   }
 
   try {
@@ -235,7 +287,7 @@ jobs.post("/", async (c) => {
       {
         error: "invalid_body",
         message:
-          "Request body must be JSON with vaultId, kind:\"youtube\", channelUrl and maxVideos (1..2000).",
+          "Request body must be JSON with kind:\"youtube\" (vaultId, channelUrl, maxVideos 1..2000) or kind:\"web\" (vaultId, url). A web job takes no maxVideos or date filters.",
       },
       400,
     );
@@ -246,6 +298,41 @@ jobs.post("/", async (c) => {
   const vault = registry.vaults.find((entry) => entry.id === parsed.vaultId);
   if (!vault) {
     return c.json({ error: "vault_not_found", message: "Unknown vault." }, 404);
+  }
+
+  // A web job has one page, so there is nothing to enumerate or filter. The
+  // URL is checked for syntax here; the address check runs in S1w, where a DNS
+  // failure is a unit skip rather than a route error.
+  if (parsed.kind === "web") {
+    let webUrl: string;
+    try {
+      webUrl = parseWebUrl(parsed.url).toString();
+    } catch (error) {
+      if (error instanceof SsrfError) {
+        return c.json({ error: "invalid_source_url", message: error.message }, 400);
+      }
+      throw error;
+    }
+
+    const globalSettings = await readSettings();
+    const filters: JobSettings["filters"] = {};
+    if (parsed.language !== undefined) filters.language = parsed.language;
+
+    const vaultDir = vaultDirPath(vault.id);
+    const record = createJobRecord({
+      id: newJobId(),
+      vaultId: vault.id,
+      kind: "web",
+      input: { url: webUrl },
+      settings: { ...globalSettings, maxVideos: 1, filters },
+    });
+
+    await writeJob(vaultDir, record);
+    void getJobQueue()
+      .enqueue(record)
+      .catch(() => undefined);
+
+    return c.json({ id: record.id, status: "queued" }, 202);
   }
 
   let channelUrl: string;
