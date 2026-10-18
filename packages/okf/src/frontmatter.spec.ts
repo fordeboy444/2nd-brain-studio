@@ -167,6 +167,31 @@ describe("renderFrontmatter", () => {
     );
   });
 
+  it("quotes values a YAML reader would misread (WR-01)", () => {
+    const values = [
+      "# comment",
+      "%directive",
+      "`tick",
+      "] bracket",
+      "} brace",
+      ", comma",
+      "? question",
+      "trailing:",
+      "null",
+      "~",
+      "yes",
+      "no",
+      "on",
+      "off",
+      "tab\t# comment",
+    ];
+    for (const value of values) {
+      const rendered = renderFrontmatter({ title: value });
+      expect(rendered, value).toContain('title: "');
+      expect(parseFrontmatter(rendered)?.data.title, value).toBe(value);
+    }
+  });
+
   it("is a fixed point when its own output is parsed and rendered again", () => {
     const first = renderFrontmatter({
       type: "concept",

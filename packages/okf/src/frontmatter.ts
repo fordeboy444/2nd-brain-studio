@@ -239,7 +239,10 @@ export function parseFrontmatterSafe(
 }
 
 /** Characters that force a string to be quoted when rendered. */
-const NEEDS_QUOTE_START_RE = /^[[{&*!|>@\-"']/;
+const NEEDS_QUOTE_START_RE = /^[[{&*!|>@\-"'#%`,\]}?]/;
+
+/** Bare words a YAML 1.2 reader turns into null or a boolean. */
+const RESERVED_SCALAR_RE = /^(null|~|yes|no|on|off)$/i;
 
 /** Quote a string and escape what the parser reads back. */
 function quoteString(value: string): string {
@@ -263,9 +266,12 @@ function renderScalar(value: string | number | boolean): string {
     value === "true" ||
     value === "false" ||
     value.includes(": ") ||
+    value.endsWith(":") ||
     value.includes(" #") ||
+    value.includes("\t#") ||
     value.includes("\n") ||
     value.includes("\r") ||
+    RESERVED_SCALAR_RE.test(value) ||
     NEEDS_QUOTE_START_RE.test(value);
   return mustQuote ? quoteString(value) : value;
 }
