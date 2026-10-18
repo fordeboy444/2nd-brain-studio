@@ -211,7 +211,8 @@ button.primary.hero:hover:not(:disabled) {
    Inputs — filled wells
    ============================================================ */
 .modal input,
-.modal select {
+.modal select,
+.modal textarea {
   background: var(--bg-subtle);
   border: 1px solid transparent;
   color: var(--text-primary);
@@ -225,15 +226,18 @@ button.primary.hero:hover:not(:disabled) {
     box-shadow var(--t-fast) var(--ease),
     background var(--t-fast) var(--ease);
 }
-.modal input::placeholder {
+.modal input::placeholder,
+.modal textarea::placeholder {
   color: var(--text-tertiary);
 }
 .modal input:hover,
-.modal select:hover {
+.modal select:hover,
+.modal textarea:hover {
   border-color: var(--border-strong);
 }
 .modal input:focus,
-.modal select:focus {
+.modal select:focus,
+.modal textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
@@ -4547,6 +4551,12 @@ button.secondary:active:not(:disabled),
   width: auto;
   flex: 1 1 220px;
   min-width: 0;
+}
+/* The paste box is a text well, not a one-line control: enough height for a
+   few pairs, and vertical-only resizing so the form's columns stay intact. */
+.settings-field textarea {
+  min-height: 4.5em;
+  resize: vertical;
 }
 .settings-actions {
   display: flex;

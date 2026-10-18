@@ -246,6 +246,23 @@ export function uploadYoutubeCookie(
   );
 }
 
+/**
+ * POST /api/settings/youtube-cookie/header — a browser Cookie header as the raw
+ * body.
+ *
+ * The same contract as the file upload: `text/plain` is what the route accepts,
+ * and the header is never JSON-encoded (a JSON envelope cannot reach the
+ * converter and would be a 415). The answer is the fixed `{ok:true}`; the
+ * pasted credential is in no response field.
+ */
+export function saveYoutubeCookieHeader(text: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>("/settings/youtube-cookie/header", {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: text,
+  });
+}
+
 /** DELETE /api/settings/youtube-cookie — idempotent; absence is a success. */
 export function deleteYoutubeCookie(): Promise<{ hasYoutubeCookie: false }> {
   return request<{ hasYoutubeCookie: false }>("/settings/youtube-cookie", {

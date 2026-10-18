@@ -41,6 +41,7 @@ export function Settings() {
   const loadSettings = useStore((s) => s.loadSettings);
   const saveSettings = useStore((s) => s.saveSettings);
   const uploadCookie = useStore((s) => s.uploadCookie);
+  const saveCookieHeader = useStore((s) => s.saveCookieHeader);
   const deleteCookie = useStore((s) => s.deleteCookie);
 
   const testLlmResult = useStore((s) => s.testLlmResult);
@@ -78,6 +79,9 @@ export function Settings() {
   const [fetchLanguage, setFetchLanguage] = useState("");
 
   const [cookieNotice, setCookieNotice] = useState<string | null>(null);
+  // The pasted header lives here and nowhere else: a store copy would be one
+  // render away from the screen, and a successful save clears this field.
+  const [cookieHeader, setCookieHeader] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // The one banner condition this phase has. No `onFade`: a misconfigured
@@ -144,6 +148,27 @@ export function Settings() {
       setCookieNotice("Cookie must be Netscape format.");
     } finally {
       input.value = "";
+    }
+  };
+
+  /**
+   * Send a pasted Cookie header. The server accepts one shape, so a rejection
+   * has one copy; the pasted text stays in the textarea so it can be corrected,
+   * and a success clears it — the credential is not left on screen.
+   */
+  const onSaveCookieHeader = async () => {
+    const text = cookieHeader.trim();
+    if (text === "") {
+      setCookieNotice("Paste a Cookie header first.");
+      return;
+    }
+    setCookieNotice(null);
+    try {
+      await saveCookieHeader(text);
+      setCookieHeader("");
+      setCookieNotice("YouTube cookie saved.");
+    } catch {
+      setCookieNotice("Cookie header must look like name=value; name=value.");
     }
   };
 
@@ -567,6 +592,25 @@ export function Settings() {
               </button>
             )}
           </div>
+
+          <div className="settings-field" style={{ marginTop: "var(--sp-2)" }}>
+            <label className="field-label" htmlFor="youtube-cookie-header">
+              Cookie header
+            </label>
+            <textarea
+              id="youtube-cookie-header"
+              rows={3}
+              value={cookieHeader}
+              placeholder="SID=...; HSID=...; SSID=..."
+              onChange={(e) => setCookieHeader(e.target.value)}
+            />
+            <div className="settings-actions">
+              <AsyncButton onClick={onSaveCookieHeader} spinnerTone="neutral">
+                Save pasted cookies
+              </AsyncButton>
+            </div>
+          </div>
+
           {settingsError !== null && (
             <p className="muted" role="alert" style={{ margin: "var(--sp-2) 0 0" }}>
               {settingsError}

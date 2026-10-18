@@ -14,6 +14,7 @@ import {
   previewJob as apiPreviewJob,
   putSettings as apiPutSettings,
   readFile,
+  saveYoutubeCookieHeader as apiSaveYoutubeCookieHeader,
   startJob as apiStartJob,
   testLlm as apiTestLlm,
   uploadYoutubeCookie as apiUploadYoutubeCookie,
@@ -272,6 +273,8 @@ export interface AppState {
   loadSettings: () => Promise<void>;
   saveSettings: (patch: SettingsPatch) => Promise<void>;
   uploadCookie: (text: string) => Promise<void>;
+  /** A pasted Cookie header, sent as the raw `text/plain` body. */
+  saveCookieHeader: (text: string) => Promise<void>;
   deleteCookie: () => Promise<void>;
   runTestConnection: () => Promise<void>;
   runPreview: (input: PreviewInput) => Promise<void>;
@@ -721,6 +724,20 @@ export const useStore = create<AppState>((set, get) => {
       await apiUploadYoutubeCookie(text);
       // The upload succeeded; a failed refresh must not report it as a failed
       // upload. The next load repairs the flags.
+      try {
+        set({ settings: await apiGetSettings(), settingsError: null });
+      } catch {
+        set({ settingsError: null });
+      }
+    },
+
+    /**
+     * Save a pasted Cookie header and refresh the redacted status. Same rule as
+     * the file upload: the text goes straight to the API boundary and no copy
+     * is kept here, and a failed refresh must not report a failed save.
+     */
+    saveCookieHeader: async (text) => {
+      await apiSaveYoutubeCookieHeader(text);
       try {
         set({ settings: await apiGetSettings(), settingsError: null });
       } catch {

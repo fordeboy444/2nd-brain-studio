@@ -88,6 +88,8 @@ interface Stub {
   deleteStatus: number;
   current: SettingsPayload;
   uploads: Array<{ contentType: string; body: string }>;
+  headerUploads: Array<{ contentType: string; body: string }>;
+  headerStatus: number;
   deletes: number;
   settingsPuts: number;
   vaults: Vault[];
@@ -171,6 +173,28 @@ function stubServer(): void {
         hasYoutubeCookie: true,
         youtubeCookieUpdatedAt: "2026-10-18T12:00:00Z",
       });
+    }
+
+    if (url === "/api/settings/youtube-cookie/header" && method === "POST") {
+      const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+      stub.headerUploads.push({
+        contentType: headers.get("content-type") ?? "",
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      if (stub.headerStatus !== 200) {
+        return json(
+          {
+            error: "invalid_cookie_header",
+            message: "The Cookie header is not usable (bad_pair).",
+          },
+          stub.headerStatus,
+        );
+      }
+      stub.current = settingsPayload({
+        hasYoutubeCookie: true,
+        youtubeCookieUpdatedAt: "2026-10-18T12:00:00Z",
+      });
+      return json({ ok: true });
     }
 
     if (url === "/api/settings/youtube-cookie" && method === "DELETE") {
@@ -258,6 +282,27 @@ async function typeInto(
   return input;
 }
 
+/** The same controlled-value trick, for a textarea (its prototype's setter). */
+async function typeIntoTextarea(
+  render: Mounted["render"],
+  host: HTMLElement,
+  id: string,
+  value: string,
+): Promise<HTMLTextAreaElement> {
+  const area = host.querySelector<HTMLTextAreaElement>(`#${id}`);
+  if (area === null) throw new Error(`no textarea #${id}`);
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    "value",
+  )?.set;
+  if (setter === undefined) throw new Error("no textarea value setter");
+  await render(() => {
+    setter.call(area, value);
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return area;
+}
+
 function buttonByText(host: HTMLElement, text: string): HTMLButtonElement {
   const found = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.textContent?.trim() === text,
@@ -281,6 +326,8 @@ beforeEach(() => {
     deleteStatus: 200,
     current: settingsPayload(),
     uploads: [],
+    headerUploads: [],
+    headerStatus: 200,
     deletes: 0,
     settingsPuts: 0,
     vaults: [VAULT],
@@ -501,4 +548,56 @@ it("says the key is missing when the server is unconfigured", async () => {
   const { host } = await mountSettings();
 
   expect(host.textContent).toContain("Set OLLAMA_API_KEY and restart.");
+});
+
+/* -------------------------------------------------------------------------
+   Pasted Cookie header
+   ------------------------------------------------------------------------- */
+
+const PASTED = "SID=MARKER-paste-7a1e2c-do-not-render; PREF=en-US";
+
+it("sends a pasted Cookie header as text/plain, then clears it and never renders it", async () => {
+  const { host, render } = await mountSettings();
+
+  const area = await typeIntoTextarea(render, host, "youtube-cookie-header", `  ${PASTED}  `);
+  expect(stub.headerUploads.length).toBe(0);
+
+  await render(() => buttonByText(host, "Save pasted cookies").click());
+
+  expect(stub.headerUploads.length).toBe(1);
+  expect(stub.headerUploads[0]?.contentType).toContain("text/plain");
+  expect(stub.headerUploads[0]?.contentType).not.toContain("json");
+  expect(stub.headerUploads[0]?.body).toBe(PASTED);
+  expect(host.textContent).toContain("YouTube cookie saved.");
+  expect(area.value).toBe("");
+  // The credential is in the request body and nowhere the user can read it.
+  expect(host.textContent).not.toContain("MARKER-paste-7a1e2c-do-not-render");
+});
+
+it("keeps the pasted text and shows the exact copy when the header is rejected", async () => {
+  stub.headerStatus = 400;
+  const { host, render } = await mountSettings();
+
+  await typeIntoTextarea(render, host, "youtube-cookie-header", PASTED);
+  await render(() => buttonByText(host, "Save pasted cookies").click());
+
+  expect(stub.headerUploads.length).toBe(1);
+  expect(host.textContent).toContain(
+    "Cookie header must look like name=value; name=value.",
+  );
+  expect(host.textContent).not.toContain("YouTube cookie saved.");
+  expect(host.querySelector<HTMLTextAreaElement>("#youtube-cookie-header")?.value).toBe(
+    PASTED,
+  );
+});
+
+it("sends nothing and asks for a header when the textarea is empty", async () => {
+  const { host, render } = await mountSettings();
+
+  await typeIntoTextarea(render, host, "youtube-cookie-header", "   ");
+  await render(() => buttonByText(host, "Save pasted cookies").click());
+
+  expect(stub.headerUploads.length).toBe(0);
+  expect(host.textContent).toContain("Paste a Cookie header first.");
+  expect(host.textContent).not.toContain("YouTube cookie saved.");
 });
