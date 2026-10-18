@@ -33,9 +33,10 @@ export async function writeJsonAtomic(target: string, value: unknown): Promise<v
 }
 
 /**
- * Write `text` verbatim, atomically. When `mode` is given it is applied to the
- * temp file with `chmod` *before* the rename, so the target is never briefly
- * readable with the wrong permissions (the cookie file is 0600).
+ * Write `text` verbatim, atomically. When `mode` is given it is the file
+ * creation mode of the temp file, so the bytes are never broader than the
+ * requested permissions even for an instant; the `chmod` before the rename
+ * then pins the exact final mode (the cookie file is 0600).
  */
 export async function writeTextAtomic(
   target: string,
@@ -48,7 +49,10 @@ export async function writeTextAtomic(
 async function writeAtomic(target: string, text: string, mode?: number): Promise<void> {
   await mkdir(dirname(target), { recursive: true });
   const tmp = tempPath(target);
-  const fh = await open(tmp, "w");
+  // Create at the final mode instead of Node's default (0o666 masked by the
+  // umask): a SIGKILL between open and chmod can no longer leave a
+  // world-readable temp file holding the live YouTube session cookie.
+  const fh = await open(tmp, "w", mode ?? 0o644);
   try {
     await fh.write(text);
     if (mode !== undefined) await fh.chmod(mode);
