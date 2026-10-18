@@ -16,6 +16,7 @@ import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import {
   MAX_COOKIE_BYTES,
+  cookieHeaderToNetscape,
   cookieStatus,
   deleteYoutubeCookie,
   validateNetscapeCookie,
@@ -162,6 +163,92 @@ settings.post("/youtube-cookie", async (c) => {
     },
     200,
   );
+});
+
+/** The only fields a header-paste outcome ever logs (T-261018-01). */
+function logHeaderOutcome(bytes: number, ok: boolean): void {
+  log.info(
+    { route: "settings.youtube-cookie-header", bytes, ok },
+    "youtube_cookie_header_outcome",
+  );
+}
+
+/**
+ * `POST /api/settings/youtube-cookie/header` — a raw browser Cookie header.
+ *
+ * The transport checks mirror the Netscape upload: `text/plain` only, the
+ * declared and actual lengths capped at 1 MiB. The body is then converted pair
+ * by pair and re-validated as a whole file before the 0600 writer sees it, so a
+ * field-shifting or line-injecting pair never reaches disk.
+ *
+ * The credential never comes back: the success body is exactly `{ok:true}`,
+ * refusal bodies name only the reason shape, and the single log record carries
+ * the route, the byte count and the ok flag — never the body, a name, a value
+ * or the path. This route has no connection to the job or event modules.
+ */
+settings.post("/youtube-cookie/header", async (c) => {
+  const contentType = (c.req.header("content-type") ?? "").toLowerCase();
+  if (!contentType.startsWith("text/plain")) {
+    const declared = Number.parseInt(c.req.header("content-length") ?? "", 10);
+    logHeaderOutcome(Number.isFinite(declared) ? declared : 0, false);
+    return c.json(
+      {
+        error: "unsupported_media_type",
+        message: "Paste the Cookie header as a raw text/plain body.",
+      },
+      415,
+    );
+  }
+
+  const declared = Number.parseInt(c.req.header("content-length") ?? "", 10);
+  if (Number.isFinite(declared) && declared > MAX_COOKIE_BYTES) {
+    logHeaderOutcome(declared, false);
+    return c.json(
+      { error: "cookie_too_large", message: "The Cookie header must be at most 1 MiB." },
+      413,
+    );
+  }
+
+  const header = await c.req.text();
+  const bytes = Buffer.byteLength(header, "utf8");
+  if (bytes > MAX_COOKIE_BYTES) {
+    logHeaderOutcome(bytes, false);
+    return c.json(
+      { error: "cookie_too_large", message: "The Cookie header must be at most 1 MiB." },
+      413,
+    );
+  }
+
+  const converted = cookieHeaderToNetscape(header);
+  if (!converted.ok || converted.text === undefined) {
+    // The reason names the shape of the failure, never the pasted text.
+    logHeaderOutcome(bytes, false);
+    return c.json(
+      {
+        error: "invalid_cookie_header",
+        message: `The Cookie header is not usable (${converted.reason ?? "bad_pair"}).`,
+      },
+      400,
+    );
+  }
+
+  const verdict = validateNetscapeCookie(converted.text);
+  if (!verdict.ok) {
+    // Defence in depth: the generated file must pass the same whole-file check
+    // the upload route applies before either path can write.
+    logHeaderOutcome(bytes, false);
+    return c.json(
+      {
+        error: "invalid_cookie_header",
+        message: `The Cookie header is not usable (${verdict.reason ?? "bad_line"}).`,
+      },
+      400,
+    );
+  }
+
+  await writeYoutubeCookie(converted.text);
+  logHeaderOutcome(bytes, true);
+  return c.json({ ok: true }, 200);
 });
 
 /**

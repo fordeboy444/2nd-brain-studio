@@ -199,6 +199,106 @@ describe("POST /api/settings/youtube-cookie", () => {
   });
 });
 
+describe("POST /api/settings/youtube-cookie/header", () => {
+  function pasteHeader(
+    routes: Routes,
+    body: string,
+    contentType = "text/plain;charset=UTF-8",
+    extraHeaders: Record<string, string> = {},
+  ): Promise<Response> {
+    return routes.settings.request("/youtube-cookie/header", {
+      method: "POST",
+      headers: { "content-type": contentType, ...extraHeaders },
+      body,
+    });
+  }
+
+  const CONVERTED =
+    ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123\n" +
+    ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US\n";
+
+  it("converts, validates and stores a multi-pair header at mode 0600", async () => {
+    const routes = await reload();
+
+    const res = await pasteHeader(routes, "SID=abc123; PREF=en-US");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    expect(await readFile(cookiePath, "utf8")).toBe(CONVERTED);
+    expect((await stat(cookiePath)).mode & 0o777).toBe(0o600);
+    // The write is the atomic temp+rename pair: no sibling survives it.
+    expect(await readdir(root)).toEqual(["youtube-cookie.txt"]);
+  });
+
+  it("maps a segment without = to 400 invalid_cookie_header and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await pasteHeader(routes, "not-a-pair");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_cookie_header");
+    await expect(stat(cookiePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("maps an empty body to 400 and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await pasteHeader(routes, "");
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_cookie_header");
+    await expect(stat(cookiePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a cross-origin paste before reading the body", async () => {
+    const routes = await reload();
+
+    const res = await pasteHeader(routes, "SID=abc123", "text/plain", {
+      origin: "https://evil.example",
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("origin_mismatch");
+    await expect(stat(cookiePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("maps a JSON content type to 415 and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await pasteHeader(routes, JSON.stringify({ header: "SID=abc123" }), "application/json");
+    expect(res.status).toBe(415);
+    expect(((await res.json()) as { error: string }).error).toBe("unsupported_media_type");
+    await expect(stat(cookiePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("maps a body over 1 MiB to 413 and writes nothing", async () => {
+    const routes = await reload();
+    const oversized = `SID=${"a".repeat(1024 * 1024)}`;
+
+    const res = await pasteHeader(routes, oversized);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: string }).error).toBe("cookie_too_large");
+    await expect(stat(cookiePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("never echoes the pasted header in the response or in any log argument", async () => {
+    const routes = await reload();
+    const marker = "MARKER-header-9f3c1b-do-not-log";
+
+    const res = await pasteHeader(routes, `SID=${marker}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain(marker);
+
+    // The marker reached the file — the body was processed, not dropped.
+    expect(await readFile(cookiePath, "utf8")).toContain(marker);
+    expect(JSON.stringify(logHarness.entries)).not.toContain(marker);
+
+    // Only the route name, the byte count and the ok flag are logged.
+    const first = logHarness.entries[0] ?? [];
+    const fields = first[0] as Record<string, unknown>;
+    expect(Object.keys(fields).sort()).toEqual(["bytes", "ok", "route"]);
+    expect(fields.route).toBe("settings.youtube-cookie-header");
+    expect(fields.ok).toBe(true);
+  });
+});
+
 describe("GET /api/settings", () => {
   it("returns the non-secret settings and status flags, never a cookie body or key", async () => {
     const routes = await reload();
