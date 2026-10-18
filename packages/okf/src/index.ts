@@ -26,3 +26,5 @@ export type {
   Taxonomy,
   ThemeGroup,
 } from "./indexes.js";
+
+export { slugify } from "./slug.js";
