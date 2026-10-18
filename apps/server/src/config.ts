@@ -39,6 +39,13 @@ export const config = Object.freeze({
   ollamaModel: optional("OLLAMA_MODEL") ?? "llama3.1:8b",
   /** Supadata API key (Phase 3 ingest fallback). Absent or empty ⇒ unset. */
   supadataApiKey: optional("SUPADATA_API_KEY"),
+  /**
+   * Netscape cookie file handed to yt-dlp as `--cookies`. This is the one owner
+   * of the property: 03-04 reads it through the runner's `cookiePath()` and
+   * 03-06 writes the uploaded file at this path. The default matches the
+   * deployment volume (`/data`), never the repository.
+   */
+  youtubeCookiePath: optional("YOUTUBE_COOKIE_PATH") ?? "/data/youtube-cookie.txt",
   /** Human-readable service name for health payload. */
   serviceName: "2nd-brain-studio",
   /** Service version, surfaced in /api/health. */
