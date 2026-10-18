@@ -9,7 +9,7 @@
  * `events.ndjson` is append-only and is the replay source. `seq` starts at 1 and
  * increases by one; the event is on disk before any subscriber sees it.
  */
-import { appendFile, mkdir, readFile, readdir } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
 import type {
@@ -215,6 +215,19 @@ export function appendEvent(
       }
     }
     return event;
+  });
+}
+
+/**
+ * Truncate a job's event log and forget the cached seq, so a retry starts at
+ * `seq 1` against an empty log. A client that reconnects with `lastSeq = 0`
+ * then replays nothing from the prior run (CR-01).
+ */
+export function resetJobEvents(dir: string): Promise<void> {
+  return serialize(dir, async () => {
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "events.ndjson"), "", "utf8");
+    lastSeq.delete(dir);
   });
 }
 

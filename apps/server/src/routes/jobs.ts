@@ -35,6 +35,7 @@ import {
   newJobId,
   readJob,
   requestCancel,
+  resetJobEvents,
   writeJob,
 } from "../jobs/store.js";
 import { retryJobRecord } from "../jobs/runner.js";
@@ -568,6 +569,9 @@ jobs.post("/:id/retry", async (c) => {
 
   // Persist first, exactly like create: boot resume can recover the reset job.
   await writeJob(found.vaultDir, found.job);
+  // Start a fresh event log, so a client that reconnects at seq 0 does not
+  // replay the prior run's `done` frame and pin itself terminal (CR-01).
+  await resetJobEvents(jobDir(found.vaultDir, id));
   void getJobQueue()
     .enqueue(found.job)
     .catch(() => undefined);

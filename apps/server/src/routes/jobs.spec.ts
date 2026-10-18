@@ -114,6 +114,7 @@ async function reload() {
     writeJob: store.writeJob,
     listJobs: store.listJobs,
     appendEvent: store.appendEvent,
+    readEvents: store.readEvents,
   };
 }
 
@@ -840,6 +841,33 @@ describe("POST /api/jobs/:id/retry", () => {
     ]);
 
     expect(harness.enqueued.filter((job) => job.id === id)).toHaveLength(2);
+  });
+
+  it("starts a fresh event log so the prior done frame is not replayed", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+    const dir = join(vaultDir, ".okf", "jobs", id);
+
+    await routes.appendEvent(dir, "unit", {
+      slug: "alpha",
+      stage: "S2",
+      status: "skipped",
+      reason: "malformed_json",
+    });
+    await routes.appendEvent(dir, "done", { status: "completed" });
+    expect((await routes.readEvents(dir, 0)).map((event) => event.type)).toEqual([
+      "unit",
+      "done",
+    ]);
+
+    const res = await routes.jobs.request(`/${id}/retry`, jsonInit({}));
+    expect(res.status).toBe(202);
+
+    // A client that reconnects at seq 0 must not see the old run's frames.
+    expect(await routes.readEvents(dir, 0)).toEqual([]);
   });
 
   it("treats an empty body as onlyFailed and records every failed stage", async () => {
