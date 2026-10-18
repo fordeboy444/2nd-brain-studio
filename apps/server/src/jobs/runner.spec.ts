@@ -235,7 +235,9 @@ describe("capture rendering (CONTEXT key mapping)", () => {
       title: "Example Post",
       capturedAt: FIXED_ISO,
       wordCount: 512,
-      paragraphs: ["alpha", "beta"],
+      // `numberParagraphs` assigns the anchors before the arm reaches the
+      // writer; the writer joins these blocks unchanged.
+      paragraphs: ["**[#1]** alpha", "**[#2]** beta"],
     });
     const parsed = parseFrontmatter(
       await readFile(join(root, "raw", "example-post.md"), "utf8"),

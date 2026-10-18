@@ -11,6 +11,7 @@ import pino from "pino";
 import { config } from "../config.js";
 import { enumerateChannel } from "../ingest/enumerate.js";
 import { probeFirstCandidate } from "../ingest/preflight.js";
+import type { LookupFn } from "../ingest/ssrf.js";
 import {
   createTranscriptCascade,
   type PythonRun,
@@ -24,6 +25,7 @@ import {
   type StageDeps,
 } from "./runner.js";
 import { createTranscriptFetcher } from "./stages/fetch.js";
+import { classifyWebError, createWebFetcher } from "./stages/web.js";
 import { listJobs } from "./store.js";
 import type { JobRecord, SkipReason } from "./types.js";
 
@@ -36,6 +38,8 @@ export interface IngestDeps {
   runYtDlp?: YtDlpRun;
   runPython?: PythonRun;
   fetch?: typeof globalThis.fetch;
+  /** DNS seam for the S1w guard, so a spec never resolves a real host. */
+  lookup?: LookupFn;
   /** `null` disables tier 3 even when the environment carries a key. */
   supadataKey?: string | null;
 }
@@ -77,6 +81,10 @@ export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
   return {
     ...base,
     fetchTranscript: createTranscriptFetcher(cascade),
+    fetchWeb: createWebFetcher({
+      fetch: overrides.fetch,
+      lookup: overrides.lookup,
+    }),
     async preflight(candidates, ctx) {
       await probeFirstCandidate(candidates, cascade, ctx);
     },
@@ -85,6 +93,7 @@ export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
       return candidates;
     },
     classifyVideoError: classifyVideoFailure,
+    classifyWebError,
     cookiePath() {
       const path = config.youtubeCookiePath;
       return existsSync(path) ? path : undefined;

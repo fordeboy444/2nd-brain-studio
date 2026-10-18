@@ -155,10 +155,11 @@ function videoBody(capture: Extract<RawCapture, { kind: "video" }>): string {
 }
 
 function webBody(capture: Extract<RawCapture, { kind: "web" }>): string {
-  const paragraphs = capture.paragraphs.map(
-    (paragraph, index) => `**[#${index + 1}]** ${paragraph}`,
-  );
-  return `## Extracted text\n\n${paragraphs.join("\n\n")}\n`;
+  // Paragraph anchors are assigned by `numberParagraphs` in `ingest/web.ts`,
+  // because that is the only place that can tell a heading from prose. The
+  // capture writer joins the already-anchored blocks instead of re-numbering
+  // them, so a rendered capture carries exactly one `**[#n]**` per block.
+  return `## Extracted text\n\n${capture.paragraphs.join("\n\n")}\n`;
 }
 
 export type WriteCaptureResult = { status: "written" } | { status: "skipped" };
