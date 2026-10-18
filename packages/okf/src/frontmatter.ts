@@ -287,7 +287,13 @@ export function renderFrontmatter(data: OkfFrontmatter): string {
   for (const key of Object.keys(data)) {
     const value = data[key] as FrontmatterValue;
     if (Array.isArray(value)) {
-      lines.push(`${key}: [${value.map(renderScalar).join(", ")}]`);
+      // A bare comma would split one item into two when the block is parsed.
+      const items = value.map((item) =>
+        typeof item === "string" && item.includes(",")
+          ? quoteString(item)
+          : renderScalar(item),
+      );
+      lines.push(`${key}: [${items.join(", ")}]`);
     } else {
       lines.push(`${key}: ${renderScalar(value)}`);
     }

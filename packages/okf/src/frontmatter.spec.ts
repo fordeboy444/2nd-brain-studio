@@ -192,6 +192,16 @@ describe("renderFrontmatter", () => {
     }
   });
 
+  it("quotes an array item containing a comma (WR-02)", () => {
+    const rendered = renderFrontmatter({ tags: ["a,b", "c"] });
+    expect(rendered).toBe('---\ntags: ["a,b", c]\n---\n');
+    const parsed = parseFrontmatter(rendered);
+    expect(parsed?.data.tags).toEqual(["a,b", "c"]);
+    expect(
+      renderFrontmatter((parsed as { data: OkfFrontmatter }).data),
+    ).toBe(rendered);
+  });
+
   it("is a fixed point when its own output is parsed and rendered again", () => {
     const first = renderFrontmatter({
       type: "concept",
