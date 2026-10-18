@@ -186,6 +186,7 @@ it("reseeds the stepper when a poll ends the selected job while the stream is do
     status: "completed",
     stage: "done",
     progress: { done: 2, total: 2 },
+    updatedAt: "2026-10-18T12:05:00Z",
   });
   useStore.setState({
     selectedJobId: "j1",
@@ -229,7 +230,7 @@ it("does not let a slow poll reopen a job the stream already finished", async ()
   expect(useStore.getState().jobs[0]?.status).toBe("completed");
 });
 
-it("never moves a terminal job back to a non-terminal status", async () => {
+it("keeps a terminal job when the poll snapshot is not newer", async () => {
   const cancelled = makeJob({ status: "cancelled", stage: "done" });
   const stale = makeJob({ status: "running", stage: "S1" });
   useStore.setState({
@@ -247,6 +248,38 @@ it("never moves a terminal job back to a non-terminal status", async () => {
 
   expect(useStore.getState().selectedJob?.status).toBe("cancelled");
   expect(useStore.getState().jobs[0]?.status).toBe("cancelled");
+});
+
+it("revives a completed job when a retry bumped the poll's updatedAt", async () => {
+  const completed = makeJob({
+    status: "completed",
+    stage: "done",
+    updatedAt: "2026-10-18T12:00:00Z",
+  });
+  const retried = makeJob({
+    status: "queued",
+    stage: "S2",
+    updatedAt: "2026-10-18T12:05:00Z",
+  });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: completed,
+    jobs: [completed],
+    sseState: "idle",
+    stagesDone: ["S0", "S1", "S2", "S3", "S4", "S5", "S6"],
+    activeStage: null,
+  });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [retried] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  expect(useStore.getState().selectedJob?.status).toBe("queued");
+  expect(useStore.getState().selectedJob?.stage).toBe("S2");
+  expect(useStore.getState().jobs[0]?.status).toBe("queued");
+  // The stepper reseeds from the revived record.
+  expect(useStore.getState().activeStage).toBe("S2");
 });
 
 const SETTINGS_PAYLOAD = {

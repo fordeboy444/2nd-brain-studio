@@ -188,11 +188,6 @@ function liveStageOf(value: unknown, live: readonly JobStage[]): JobStage | null
     : null;
 }
 
-/** A terminal status is final; no later snapshot may move a job out of it. */
-function isTerminalStatus(status: JobSummary["status"]): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
-}
-
 export interface AppState {
   // Panel model.
   sidebar: "tree" | "vaults";
@@ -915,14 +910,14 @@ export const useStore = create<AppState>((set, get) => {
           }
           const fromPoll = merged.find((job) => job.id === selected.id);
           // A poll request can read an older snapshot than the stream already
-          // delivered. While the stream is open the stored record wins. A
-          // terminal status is also final: a slow poll must never revive a
-          // finished job, because that reopens an `EventSource` that tails
-          // forever. Otherwise the poll is the fallback truth.
+          // delivered. While the stream is open the stored record wins. When
+          // the stream is closed, freshness decides: a retry in another tab
+          // bumps `updatedAt` and moves the job back to `queued`, so the poll
+          // must revive it, while a stale poll must not (WR-06).
           const keepStored =
             fromPoll === undefined ||
             s.sseState === "open" ||
-            (isTerminalStatus(selected.status) && !isTerminalStatus(fromPoll.status));
+            fromPoll.updatedAt <= selected.updatedAt;
           const selectedJob = keepStored ? selected : fromPoll;
           // The stepper is derived from the job record, so a poll that moves the
           // selected job to a terminal state must reseed it too. Without this,
