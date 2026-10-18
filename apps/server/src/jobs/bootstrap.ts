@@ -7,6 +7,7 @@
  * record is logged and skipped so it can never stop the scan — or the server.
  */
 import pino from "pino";
+import { enumerateChannel } from "../ingest/enumerate.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
   createDefaultStageDeps,
@@ -21,8 +22,25 @@ const log = pino({ name: "jobs" });
 
 let queue: JobQueue | null = null;
 
+/**
+ * The Phase 3 dependency set: the real S0 enumerator, the inert later stages.
+ * The runner reads flat fields, so the wiring is one flat `enumerate` function.
+ * `signal` is passed inside the options object `enumerateChannel` destructures;
+ * passing it as a third argument would drop S0 cancellation.
+ */
+export function createIngestStageDeps(): StageDeps {
+  const base = createDefaultStageDeps();
+  return {
+    ...base,
+    async enumerate(url, opts, signal) {
+      const { candidates } = await enumerateChannel(url, { ...opts, signal });
+      return candidates;
+    },
+  };
+}
+
 /** Install the process-wide queue. `index.ts` calls this before `serve`. */
-export function configureJobQueue(deps: StageDeps = createDefaultStageDeps()): JobQueue {
+export function configureJobQueue(deps: StageDeps = createIngestStageDeps()): JobQueue {
   queue = createJobQueue(deps);
   return queue;
 }
