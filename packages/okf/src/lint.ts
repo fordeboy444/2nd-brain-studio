@@ -204,6 +204,9 @@ function bundlePathSet(
   extra: readonly string[] | undefined,
 ): Set<string> {
   const paths = new Set<string>();
+  // The bundle root is a real target: the reference resolves `../` from a
+  // top-level page to ROOT and accepts it.
+  paths.add("");
   for (const page of pages) {
     paths.add(page.path);
     let directory = page.path;

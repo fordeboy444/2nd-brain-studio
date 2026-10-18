@@ -128,6 +128,11 @@ describe("resolveBundlePath", () => {
   it("returns a directory path with no trailing slash", () => {
     expect(resolveBundlePath("docs/x.md", "../tools/")).toBe("tools");
   });
+
+  it("resolves a target that climbs to the bundle root (WR-05)", () => {
+    expect(resolveBundlePath("concepts/a.md", "../")).toBe("");
+    expect(resolveBundlePath("entities/tools/x.md", "../../")).toBe("");
+  });
 });
 
 describe("adversarial input (T-02-04)", () => {

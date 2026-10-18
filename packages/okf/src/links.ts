@@ -74,8 +74,10 @@ export function linkTarget(raw: string): string {
  * Resolve `target` from `fromPage` to a bundle-relative POSIX path.
  *
  * Returns `null` when the target is empty, absolute, contains a backslash, or
- * climbs above the bundle root. The result never begins or ends with `/`, so a
- * directory link such as `../tools/` matches the bundle path set entry `tools`.
+ * climbs above the bundle root. The empty string denotes the bundle root
+ * itself, which the reference accepts because `ROOT.exists()` is true. The
+ * result never begins or ends with `/`, so a directory link such as `../tools/`
+ * matches the bundle path set entry `tools`.
  *
  * This never reads a filesystem: a path that escapes the root is broken, not
  * inspected.
@@ -103,7 +105,7 @@ export function resolveBundlePath(
     stack.push(segment);
   }
 
-  // The target normalized to the bundle root, which is not a path in the set.
-  if (stack.length === 0) return null;
+  // An empty stack is the bundle root, a real directory in the bundle.
+  if (stack.length === 0) return "";
   return stack.join("/");
 }

@@ -398,6 +398,13 @@ describe("E2 link boundaries", () => {
     expect(findingMessages(pages)).toEqual([]);
   });
 
+  it("resolves a link to the bundle root (WR-05)", () => {
+    const pages = conceptPair(
+      `${TYPED_CONCEPT}[Partner](partner.md)\n[Index](../)\n`,
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
   it("finds a target that climbs above the bundle root", () => {
     const pages = conceptPair(
       `${TYPED_CONCEPT}[Partner](partner.md)\n[Escape](../../../x.md)\n`,
