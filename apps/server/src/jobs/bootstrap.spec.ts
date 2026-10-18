@@ -98,6 +98,26 @@ describe("createIngestStageDeps", () => {
     // factory-to-runner boundary, not enumeration (03-03 covers that).
     const deps: StageDeps = {
       ...factory,
+      llm: {
+        async chat() {
+          return {
+            text: JSON.stringify({
+              slug: "first-talk",
+              title: "First Talk",
+              thesis: "A thesis.",
+              summary: "A summary.",
+              tags: [],
+              concepts: [],
+              entities: [],
+              quotes: [],
+              relations: [],
+            }),
+            tokensIn: 1,
+            tokensOut: 1,
+          };
+        },
+      },
+      cacheDirFor: () => join(root, ".okf", "cache", "llm"),
       async enumerate() {
         return [CANDIDATE];
       },

@@ -242,6 +242,15 @@ describe("S0 through the real runner", () => {
       classifyWebError: () => "fetch_error",
       now: () => Date.parse("2026-10-18T10:00:00.000Z"),
       vaultDirFor: () => root,
+      llm: {
+        async chat() {
+          throw new Error("no llm in this spec");
+        },
+      },
+      cacheDirFor: () => join(root, ".okf", "cache", "llm"),
+      async writePage() {
+        // S2 has no working LLM here, so it never renders a page.
+      },
     };
 
     const job = createJobRecord({

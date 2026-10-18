@@ -12,11 +12,13 @@
  *
  * Only candidate 2's adapter ever prints, and only in `hang` mode.
  *
- * The LLM stub throws if called and reports its invocation count with a
- * synchronous write on exit, so `SIGKILL` (which skips `exit`) never reports a
- * misleading zero for the child that was killed.
+ * S2 runs after S1, so the LLM stub answers with a valid extraction and reports
+ * its invocation count with a synchronous write on exit, so `SIGKILL` (which
+ * skips `exit`) never reports a misleading zero for the child that was killed.
  */
 import { writeSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { runJob, slugForCandidate, type StageDeps } from "../runner.js";
 import { readJob } from "../store.js";
 import type { VideoCandidate } from "../types.js";
@@ -46,10 +48,28 @@ const candidates: VideoCandidate[] = [
 ];
 
 let llmCalls = 0;
+/**
+ * S2 now runs after S1 in the same job, so this stub answers with a valid
+ * extraction instead of throwing. The spec asserts one call per captured slug.
+ */
 const llm = {
-  async call(): Promise<never> {
+  async chat(): Promise<{ text: string; tokensIn: number; tokensOut: number }> {
     llmCalls += 1;
-    throw new Error("never called");
+    return {
+      text: JSON.stringify({
+        slug: "fixture",
+        title: "Fixture Title",
+        thesis: "A fixture thesis.",
+        summary: "A fixture summary.",
+        tags: [],
+        concepts: [],
+        entities: [],
+        quotes: [],
+        relations: [],
+      }),
+      tokensIn: 1,
+      tokensOut: 1,
+    };
   },
 };
 
@@ -100,6 +120,12 @@ const deps: StageDeps = {
   now: () => Date.now(),
   vaultDirFor: () => vault,
   llm,
+  cacheDirFor: (vaultId) => join(vault, ".okf", "cache", "llm"),
+  async writePage(vaultDir, relPath, text) {
+    const target = join(vaultDir, relPath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, text);
+  },
 };
 
 const job = await readJob(vault, jobId);

@@ -128,6 +128,34 @@ function videoCapture(
   };
 }
 
+/** A client that answers every S2 call with one valid extraction object. */
+function workingLlm(): { calls: number; client: { chat: () => Promise<{ text: string; tokensIn: number; tokensOut: number }> } } {
+  const state = {
+    calls: 0,
+    client: {
+      async chat() {
+        state.calls += 1;
+        return {
+          text: JSON.stringify({
+            slug: "model-chosen-slug",
+            title: "Model Title",
+            thesis: "A thesis.",
+            summary: "A summary.",
+            tags: [],
+            concepts: [],
+            entities: [],
+            quotes: [],
+            relations: [],
+          }),
+          tokensIn: 1,
+          tokensOut: 1,
+        };
+      },
+    },
+  };
+  return state;
+}
+
 function makeDeps(overrides: Partial<StageDeps> = {}): StageDeps {
   return {
     async fetchTranscript() {
@@ -147,6 +175,17 @@ function makeDeps(overrides: Partial<StageDeps> = {}): StageDeps {
     classifyWebError: () => "fetch_error",
     now: () => FIXED_NOW,
     vaultDirFor: () => root,
+    llm: {
+      async chat() {
+        throw new SkipError("llm_not_configured", "no llm in this spec");
+      },
+    },
+    cacheDirFor: () => join(root, ".okf", "cache", "llm"),
+    async writePage(vaultDir, relPath, text) {
+      const target = join(vaultDir, relPath);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, text);
+    },
     ...overrides,
   };
 }
@@ -353,16 +392,10 @@ describe("capture rendering (CONTEXT key mapping)", () => {
 });
 
 describe("runJob (PIPE-02, PIPE-10)", () => {
-  it("runs S0 -> S1 and leaves a throwing LLM stub untouched", async () => {
-    const llm = {
-      calls: 0,
-      async call(): Promise<never> {
-        this.calls += 1;
-        throw new Error("never called");
-      },
-    };
+  it("runs S0 -> S1 -> S2 and calls the injected LLM once per capture", async () => {
+    const llm = workingLlm();
     const deps = makeDeps({
-      llm,
+      llm: llm.client,
       async enumerate() {
         return [VIDEO_A];
       },
@@ -380,18 +413,29 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     );
     expect(enumerated.count).toBe(1);
     expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    expect(llm.calls).toBe(1);
+
+    const extraction = JSON.parse(
+      await readFile(
+        join(root, ".okf", "jobs", job.id, "extractions", "first-talk.json"),
+        "utf8",
+      ),
+    );
+    expect(extraction.slug).toBe("first-talk");
+    expect(await readdir(join(root, "sources"))).toEqual(["first-talk.md"]);
 
     const onDisk = await readJob(root, job.id);
     expect(onDisk.status).toBe("completed");
     expect(onDisk.stage).toBe("done");
     expect(finished.status).toBe("completed");
-    expect(llm.calls).toBe(0);
     expect(onDisk.skipped).toEqual([]);
   });
 
   it("fails the job with preflight_failed before any unit adapter runs", async () => {
     let fetches = 0;
+    const llm = workingLlm();
     const deps = makeDeps({
+      llm: llm.client,
       async enumerate() {
         return [VIDEO_A];
       },
@@ -409,6 +453,8 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     const finished = await runJob(job, deps);
 
     expect(fetches).toBe(0);
+    // S2 is never reached: the failure happens before any unit runs.
+    expect(llm.calls).toBe(0);
     expect(finished.status).toBe("failed");
     expect(finished.error).toBe("preflight_failed");
     const onDisk = await readJob(root, job.id);
@@ -419,6 +465,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
 
   it("continues the job when one unit fails, recording the injected reason", async () => {
     const deps = makeDeps({
+      llm: workingLlm().client,
       async enumerate() {
         return [VIDEO_A, { ...VIDEO_A, youtubeId: "def456", title: "Second Talk" }];
       },
@@ -544,6 +591,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     ];
     const fetched: string[] = [];
     const deps = makeDeps({
+      llm: workingLlm().client,
       async enumerate() {
         return candidates;
       },
@@ -792,6 +840,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
   it("keeps a tagged reason and never calls the web classifier for a video unit", async () => {
     let webCalls = 0;
     const deps = makeDeps({
+      llm: workingLlm().client,
       async enumerate() {
         return [
           VIDEO_A,
@@ -876,6 +925,8 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
         fetch: fetch as unknown as typeof globalThis.fetch,
         supadataKey: KEY,
       }),
+      llm: workingLlm().client,
+      cacheDirFor: () => join(root, ".okf", "cache", "llm"),
       async enumerate() {
         return [first, second];
       },

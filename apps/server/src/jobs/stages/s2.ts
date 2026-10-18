@@ -1,0 +1,258 @@
+/**
+ * S2: one raw capture becomes one validated, content-addressed extraction.
+ *
+ * This is the only stage allowed to open `raw/`. Everything after it reads
+ * `extractions/<slug>.json`, so the transcript is read exactly once per run and
+ * a later stage never needs the raw page (PIPE-03).
+ *
+ * The call goes through `callCached`, so an identical re-run over the same vault
+ * makes zero network calls. A hit still writes the job-scoped extraction file:
+ * the cache is vault-global, the extraction is per job, and S3 needs one in
+ * every job directory.
+ *
+ * Every timestamp written (`at`, `created`, `updated`) is the capture's own
+ * fetch time, never a clock read, so a hit and a miss write the same bytes.
+ */
+import { readdir } from "node:fs/promises";
+import { callCached, createLlmCache } from "../../llm/cache.js";
+import { ExtractionSchema, rawPathForAttempt } from "../../llm/json.js";
+import { DEFAULT_OLLAMA_BASE_URL } from "../../llm/ollama.js";
+import type { LlmMessage } from "../../llm/ollama.js";
+import { resolveInVault } from "../../paths/jail.js";
+import { readCapture } from "../capture.js";
+import {
+  captureFetchedAt,
+  captureTitle,
+  EXTRACTION_SLUG_RE,
+  sourceFromCapture,
+  toExtractionRecord,
+  transcriptText,
+  writeExtraction,
+  type CaptureDocument,
+  type ExtractionRecord,
+  type ExtractionSource,
+} from "../extraction.js";
+import {
+  renderSourcePage,
+  sourcePageInput,
+  type SourcePageInput,
+} from "../pages.js";
+import { appendEvent, readJob } from "../store.js";
+import type { JobRecord, SkippedUnit } from "../types.js";
+import type { StageDeps, UnitContext } from "../runner.js";
+
+/** Bumping this invalidates every cached S2 reply without touching the model. */
+export const PROMPT_VERSION_S2 = "s2-v1";
+
+/** What the prompt builder needs; it never receives the whole capture body twice. */
+export interface S2PromptRecord {
+  title: string;
+  kind: "video" | "web";
+  transcript: string;
+}
+
+const EXTRACTION_RULES = `You extract structured knowledge from one source.
+
+Return ONLY one JSON object, with exactly these keys and no others:
+slug, title, thesis, summary, tags, concepts, entities, quotes, relations.
+
+- "slug": a kebab-case identifier for the source.
+- "title": the source's title.
+- "thesis": one sentence stating the source's central claim.
+- "summary": two to four sentences summarising the source.
+- "tags": 3 to 8 lowercase kebab-case topic tags.
+- "concepts": an array of {"name", "slug", "weight"} where weight is 0 to 1.
+  A concept is an idea or technique the source explains.
+- "entities": an array of {"name", "slug", "type", "weight"} where type is one
+  of tool, person, organization, product, framework, concept or unknown.
+- "quotes": an array of {"text", "startSec"}. Copy each quote word for word
+  from the transcript; never paraphrase, and never invent one.
+- "relations": an array of {"to", "kind"} where "to" is a kebab-case slug and
+  "kind" is one of builds_on, part_of, contrasts_with or related_to.
+
+Output the JSON object itself. Do not wrap it in a fence or add prose.`;
+
+/**
+ * The two messages one S2 call sends. The transcript is untrusted input, so it
+ * arrives in the user message and every rule lives in the system message.
+ */
+export function buildS2Messages(
+  record: S2PromptRecord,
+  promptVersion: string,
+): LlmMessage[] {
+  const quoteRule =
+    record.kind === "video"
+      ? "Every quote must carry the startSec of the line it appears on."
+      : "Every quote must use startSec: 0; this source has no timestamps.";
+  return [
+    {
+      role: "system",
+      content: `${EXTRACTION_RULES}\n${quoteRule}\nPrompt version: ${promptVersion}.`,
+    },
+    {
+      role: "user",
+      content: `Title: ${record.title}\nKind: ${record.kind}\n\nTranscript:\n${record.transcript}`,
+    },
+  ];
+}
+
+/** One capture, resolved once, carrying the slug it was stored under. */
+async function readCaptureOnce(
+  vaultDir: string,
+  slug: string,
+): Promise<CaptureDocument | null> {
+  const capture = await readCapture(vaultDir, slug);
+  if (capture === null) return null;
+  return { slug, ...capture };
+}
+
+/** Every `.md` under `raw/`, as slugs, sorted. */
+async function captureSlugs(vaultDir: string): Promise<string[]> {
+  const { absPath } = await resolveInVault(vaultDir, "raw");
+  let names: string[];
+  try {
+    names = await readdir(absPath);
+  } catch {
+    return [];
+  }
+  return names
+    .sort()
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => name.slice(0, -".md".length))
+    .filter((slug) => EXTRACTION_SLUG_RE.test(slug));
+}
+
+/** The record a failed unit still leaves behind, so the raw index keeps its row. */
+function partialRecord(capture: CaptureDocument): ExtractionRecord {
+  return {
+    slug: capture.slug,
+    title: captureTitle(capture),
+    thesis: "",
+    summary: "",
+    tags: [],
+    concepts: [],
+    entities: [],
+    quotes: [],
+    relations: [],
+    source: sourceFromCapture(capture),
+    at: captureFetchedAt(capture),
+    partial: true,
+  };
+}
+
+function pageInput(record: ExtractionRecord): SourcePageInput {
+  return sourcePageInput(record);
+}
+
+export type S2Stage = (
+  job: JobRecord,
+  ctx: UnitContext,
+  dir: string,
+  persist: () => Promise<void>,
+) => Promise<boolean>;
+
+/**
+ * Build the S2 stage. The LLM client, the cache root and the page writer all
+ * arrive through `StageDeps`; this module never reaches a path or the network
+ * itself.
+ */
+export function createS2Stage(deps: StageDeps): S2Stage {
+  return async function runS2(
+    job: JobRecord,
+    ctx: UnitContext,
+    dir: string,
+    persist: () => Promise<void>,
+  ): Promise<boolean> {
+    const vaultDir = ctx.vaultDir;
+    const slugs = await captureSlugs(vaultDir);
+    const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
+
+    for (const slug of slugs) {
+      const latest = await readJob(vaultDir, job.id);
+      job.cancelRequested = latest.cancelRequested;
+      if (job.cancelRequested) return true;
+
+      const capture = await readCaptureOnce(vaultDir, slug);
+      if (capture === null) continue;
+
+      let source: ExtractionSource;
+      try {
+        source = sourceFromCapture(capture);
+        captureFetchedAt(capture);
+      } catch {
+        // A capture whose metadata cannot be read has no source block to write.
+        const skipped: SkippedUnit = {
+          slug,
+          stage: "S2",
+          reason: "capture_invalid",
+        };
+        job.skipped.push(skipped);
+        await persist();
+        await appendEvent(dir, "unit", {
+          slug,
+          stage: "S2",
+          status: "skipped",
+          reason: skipped.reason,
+        });
+        continue;
+      }
+
+      try {
+        const messages = buildS2Messages(
+          {
+            title: source.title,
+            kind: source.sourceKind,
+            transcript: transcriptText(capture),
+          },
+          PROMPT_VERSION_S2,
+        );
+
+        const result = await callCached(
+          cache,
+          deps.llm,
+          {
+            model: job.settings.llm.model,
+            baseUrl: job.settings.llm.baseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+            timeoutMs: job.settings.llm.requestTimeoutMs ?? 180_000,
+            maxRetries: job.settings.llm.maxRetries ?? 4,
+            stage: "S2",
+            promptVersion: PROMPT_VERSION_S2,
+            messages,
+            at: captureFetchedAt(capture),
+            rawPathForAttempt: (attempt) =>
+              rawPathForAttempt(dir, "S2", slug, attempt),
+          },
+          ExtractionSchema,
+        );
+
+        const record = toExtractionRecord(result.output, capture, result.at);
+        await writeExtraction(dir, record);
+        await deps.writePage(
+          vaultDir,
+          `sources/${slug}.md`,
+          renderSourcePage(pageInput(record)),
+        );
+
+        await persist();
+        await appendEvent(dir, "unit", {
+          slug,
+          stage: "S2",
+          status: "written",
+          ...(result.hit ? { detail: "cache hit" } : {}),
+        });
+      } catch {
+        // Containment lands in Task 3; for now the unit still leaves an
+        // extraction record so a later stage can build the raw index.
+        try {
+          await writeExtraction(dir, partialRecord(capture));
+        } catch {
+          // A metadata failure already produced its own skip above.
+        }
+      }
+    }
+
+    const final = await readJob(vaultDir, job.id);
+    job.cancelRequested = final.cancelRequested;
+    return job.cancelRequested;
+  };
+}

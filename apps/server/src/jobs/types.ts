@@ -11,7 +11,16 @@ export type JobKind = "youtube" | "web";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 
 /** `done` is terminal; every other value names the stage to run next. */
-export type StageName = "S0" | "S1" | "S1w" | "done";
+export type StageName =
+  | "S0"
+  | "S1"
+  | "S1w"
+  | "S2"
+  | "S3"
+  | "S4"
+  | "S5"
+  | "S6"
+  | "done";
 
 export type JobEventType = "job" | "stage" | "unit" | "error" | "done";
 
@@ -26,19 +35,27 @@ export interface VideoCandidate {
   language?: string;
 }
 
-/** The reason a unit was not captured. `capture_invalid` is the immutability guard. */
+/**
+ * The reason a unit was not captured or not paid for. `capture_invalid` is the
+ * immutability guard; the last four name an S2 LLM failure so the Jobs screen
+ * can tell a malformed reply from a timeout or a missing client.
+ */
 export type SkipReason =
   | "no_captions"
   | "blocked"
   | "timeout"
   | "fetch_error"
   | "empty_transcript"
-  | "capture_invalid";
+  | "capture_invalid"
+  | "malformed_json"
+  | "model_timeout"
+  | "model_error"
+  | "llm_not_configured";
 
 export interface SkippedUnit {
   slug: string;
   youtubeId?: string;
-  stage: "S0" | "S1" | "S1w";
+  stage: Exclude<StageName, "done">;
   reason: SkipReason;
   detail?: string;
 }
@@ -63,6 +80,8 @@ export interface JobSettings {
   fetch: { concurrency: number; delayMs?: number; language?: string };
   llm: {
     model: string;
+    /** The provider endpoint as snapshotted at job creation, so a job is reproducible. */
+    baseUrl?: string;
     concurrency?: number;
     requestTimeoutMs?: number;
     maxRetries?: number;

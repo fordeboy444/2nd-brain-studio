@@ -10,15 +10,17 @@
  * PIPE-10 is a one-job FIFO; `settings.fetch.concurrency` is stored and
  * rendered but is not consumed until Phase 4.
  *
- * Zero LLM: this module never imports an LLM module and never reads
- * `deps.llm`. The field exists solely so a test can inject a throwing stub and
- * prove its invocation count is zero.
+ * Zero LLM in the runner: this module dispatches `S2` to its stage module and
+ * never dereferences `deps.llm` itself. The field is on the dependency set so
+ * S2 can read it through the one seam.
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { slugify } from "@2nd-brain/okf";
 import { config } from "../config.js";
-import { writeJsonAtomic } from "../http/writeAtomic.js";
+import { writeJsonAtomic, writeTextAtomic } from "../http/writeAtomic.js";
+import type { LlmClient } from "../llm/ollama.js";
+import { resolveInVault } from "../paths/jail.js";
 import {
   applyFilters,
   filterInputForSettings,
@@ -32,6 +34,7 @@ import {
   writeCapture,
 } from "./capture.js";
 import { appendEvent, jobDir, readJob, requestCancel, writeJob } from "./store.js";
+import { createS2Stage } from "./stages/s2.js";
 import {
   SkipError,
   type JobRecord,
@@ -95,15 +98,22 @@ export interface StageDeps {
   classifyWebError(error: unknown): SkipReason;
   now(): number;
   vaultDirFor(vaultId: string): string;
-  /** Never read by the runner; present only for the zero-LLM proof. */
-  llm?: unknown;
+  /** Read only by the S2 stage module; the runner never dereferences it. */
+  llm: LlmClient;
+  /** The vault-global content-addressed cache directory for one vault. */
+  cacheDirFor(vaultId: string): string;
+  /** Resolve a vault-relative page path through the jail, then write it. */
+  writePage(vaultDir: string, relPath: string, text: string): Promise<void>;
   idGenerator?: () => string;
 }
 
-const STAGE_TABLE: Record<JobRecord["kind"], StageName[]> = {
-  youtube: ["S0", "S1"],
-  web: ["S0", "S1w"],
-};
+/**
+ * The stage tail a job runs, in order. Each plan appends the stages it owns:
+ * S2 here, S3 in 04-03, S4 in 04-04 and S5/S6 in 04-05.
+ */
+export function stagesFor(job: JobRecord): StageName[] {
+  return job.kind === "youtube" ? ["S0", "S1", "S2"] : ["S0", "S1w", "S2"];
+}
 
 const TERMINAL: ReadonlySet<JobRecord["status"]> = new Set([
   "completed",
@@ -138,6 +148,18 @@ export function createDefaultStageDeps(): StageDeps {
     classifyWebError: () => "fetch_error",
     now: () => Date.now(),
     vaultDirFor: (vaultId) => vaultDirPath(vaultId),
+    // The real client is wired in 04-05; until then S2 records a typed skip
+    // instead of reaching the network.
+    llm: {
+      async chat() {
+        throw new SkipError("llm_not_configured", "LLM client not configured");
+      },
+    },
+    cacheDirFor: (vaultId) => join(vaultDirPath(vaultId), ".okf", "cache", "llm"),
+    async writePage(vaultDir, relPath, text) {
+      const { absPath } = await resolveInVault(vaultDir, relPath);
+      await writeTextAtomic(absPath, text);
+    },
   };
 }
 
@@ -251,7 +273,7 @@ export async function runJob(
   const controller = new AbortController();
   activeControllers.set(job.id, controller);
   const ctx = makeCtx(job, vaultDir, controller.signal, deps);
-  const table = STAGE_TABLE[job.kind];
+  const table = stagesFor(job);
 
   try {
     job.status = "running";
@@ -286,8 +308,10 @@ export async function runJob(
           await runS0(job, deps, ctx, dir);
         } else if (stage === "S1") {
           cancelled = await runS1(job, vaultDir, deps, ctx, dir, persist);
-        } else {
+        } else if (stage === "S1w") {
           cancelled = await runS1w(job, vaultDir, deps, ctx, dir, persist);
+        } else {
+          cancelled = await createS2Stage(deps)(job, ctx, dir, persist);
         }
       } catch (error) {
         job.status = "failed";

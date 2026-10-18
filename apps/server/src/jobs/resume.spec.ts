@@ -134,7 +134,9 @@ describe("stage-granular resume (PIPE-11)", () => {
     const raw = (await readdir(join(vault, "raw"))).sort();
     expect(raw).toEqual(["first-candidate.md", "second-candidate.md"]);
 
-    expect(second.stdout()).toContain("llm_calls=0");
+    // S2 runs after S1 and makes one call per captured slug; no cache exists
+    // because the killed run never reached S2.
+    expect(second.stdout()).toContain("llm_calls=2");
     // Candidate 1's adapter is not called again: the matching capture skipped it.
     expect(second.stdout()).not.toContain("CAPTURE_WRITTEN");
     expect(second.stdout()).toContain("JOB_COMPLETE");
@@ -144,6 +146,7 @@ describe("stage-granular resume (PIPE-11)", () => {
     expect(jobFiles.sort()).toEqual([
       "01-enumerate.json",
       "events.ndjson",
+      "extractions",
       "job.json",
     ]);
     expect(jobFiles.some((name) => name.includes(".tmp-"))).toBe(false);
