@@ -180,6 +180,27 @@ describe("assertPublicHttpUrl", () => {
     expect((error as Error).message).not.toContain("10.0.0.5");
   });
 
+  it.each(["file:///etc/passwd", "ftp://example.com/x"])(
+    "rejects %s before any lookup",
+    async (input) => {
+      const lookup = vi.fn<LookupFn>(publicLookup);
+
+      await expect(assertPublicHttpUrl(input, { lookup })).rejects.toMatchObject({
+        reason: "scheme",
+      });
+      expect(lookup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an embedded credential before any lookup", async () => {
+    const lookup = vi.fn<LookupFn>(publicLookup);
+
+    await expect(
+      assertPublicHttpUrl("http://user:pass@example.com/x", { lookup }),
+    ).rejects.toMatchObject({ reason: "credentials" });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it("maps a resolver failure to dns_error", async () => {
     const lookup: LookupFn = async () => {
       throw new Error("ENOTFOUND");

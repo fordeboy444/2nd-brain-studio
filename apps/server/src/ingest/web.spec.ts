@@ -105,10 +105,23 @@ describe("extractReadable", () => {
   });
 
   it("flags a page shorter than 200 words without failing it", () => {
-    const page = extractReadable(articleHtml(60), FINAL_URL);
+    const page = extractReadable(articleHtml(150), FINAL_URL);
 
     expect(page.wordCount).toBeLessThan(200);
     expect(page.warning).toBe("short_page");
+  });
+
+  it("never runs page scripts: jsdom is built without runScripts", () => {
+    const page = extractReadable(
+      `<html><head><title>Safe Title</title></head><body>
+        <script>document.title = "PWNED";</script>
+        <article><h1>Heading</h1><p>${"body ".repeat(40)}</p></article>
+      </body></html>`,
+      FINAL_URL,
+    );
+
+    expect(page.title).toBe("Safe Title");
+    expect(page.markdown).not.toContain("PWNED");
   });
 
   it.each([

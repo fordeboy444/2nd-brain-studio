@@ -29,7 +29,7 @@ import {
   type VideoRawCapture,
 } from "./types.js";
 import { createIngestStageDeps } from "./bootstrap.js";
-import { createWebFetcher } from "./stages/web.js";
+import { classifyWebError, createWebFetcher } from "./stages/web.js";
 
 /** Captured pino lines, so the redaction scan covers the log surface too. */
 const { pinoLines } = vi.hoisted(() => ({ pinoLines: [] as string[] }));
@@ -604,6 +604,29 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(parsed!.data.url).toBe(url);
     expect(parsed!.data.site).toBe("example.com");
     expect(parsed!.body).toContain("**[#1]** ");
+  });
+
+  it("skips an unreadable page as empty_transcript through the real classifier", async () => {
+    const deps = makeDeps({
+      fetchWeb: createWebFetcher({
+        fetch: (async () =>
+          new Response("<html><body></body></html>", {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          })) as unknown as typeof globalThis.fetch,
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      }),
+      classifyWebError,
+    });
+    const job = makeWebJob("https://example.com/empty");
+    await writeJob(root, job);
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.skipped).toHaveLength(1);
+    expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "empty_transcript" });
+    expect(await readdir(join(root, "raw"))).toEqual([]);
   });
 
   it("skips a matching video capture on a second run with zero adapter calls", async () => {
