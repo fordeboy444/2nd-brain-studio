@@ -227,13 +227,17 @@ export function Jobs() {
   const doneCount = liveStages.filter((stage) => stagesDone.includes(stage)).length;
 
   const failedRows = useMemo(() => {
-    const rows = new Map<string, { slug: string; stage: string; reason: string }>();
+    const rows = new Map<
+      string,
+      { slug: string; stage: string; reason: string; detail?: string }
+    >();
     if (selectedJob !== null) {
       for (const skip of selectedJob.skipped) {
         rows.set(`${skip.slug}\u0000${skip.reason}`, {
           slug: skip.slug,
           stage: skip.stage,
           reason: skip.reason,
+          ...(skip.detail === undefined ? {} : { detail: skip.detail }),
         });
       }
     }
@@ -244,6 +248,7 @@ export function Jobs() {
         slug: row.slug,
         stage: row.stage,
         reason,
+        ...(row.detail === undefined ? {} : { detail: row.detail }),
       });
     }
     return [...rows.values()];
@@ -389,7 +394,12 @@ export function Jobs() {
                 ) : (
                   <>
                     <UnitFeed rows={unitFeed} feedCapped={feedCapped} sourceUrl={selectedJob.input.url} />
-                    <FailedUnitTable rows={failedRows} />
+                    <FailedUnitTable
+                      rows={failedRows}
+                      retryBlockedReason={retryBlockedReason}
+                      retryPending={retry.pending}
+                      onRetry={() => void retry.run()}
+                    />
                   </>
                 )}
 
@@ -532,10 +542,19 @@ function UnitFeed({
   );
 }
 
+/** The approved copy for a unit that failed extraction and left a partial page. */
+const S2_FAILURE_COPY = "Extraction failed. Source page saved as partial.";
+
 function FailedUnitTable({
   rows,
+  retryBlockedReason,
+  retryPending,
+  onRetry,
 }: {
-  rows: Array<{ slug: string; stage: string; reason: string }>;
+  rows: Array<{ slug: string; stage: string; reason: string; detail?: string }>;
+  retryBlockedReason: string | null;
+  retryPending: boolean;
+  onRetry: () => void;
 }) {
   return (
     <section className="job-failed" aria-label="Failed units">
@@ -552,6 +571,7 @@ function FailedUnitTable({
               <th scope="col">Unit</th>
               <th scope="col">Stage</th>
               <th scope="col">Reason</th>
+              <th scope="col">Retry</th>
             </tr>
           </thead>
           <tbody>
@@ -559,7 +579,24 @@ function FailedUnitTable({
               <tr key={`${row.slug}\u0000${row.reason}`}>
                 <td className="job-failed-slug">{row.slug}</td>
                 <td>{row.stage}</td>
-                <td>{row.reason}</td>
+                {/* The detail stays reachable as the title; the visible copy is
+                    the approved sentence whenever the run wrote a partial page. */}
+                <td title={row.detail}>
+                  {row.stage === "S2" ? S2_FAILURE_COPY : row.reason}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    // Secondary by definition: the default surface, never accent
+                    // and never danger. It shares the primary action's guards.
+                    className="ghost-pill"
+                    aria-label={`Retry ${row.slug}`}
+                    disabled={retryBlockedReason !== null || retryPending}
+                    onClick={onRetry}
+                  >
+                    Retry
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
