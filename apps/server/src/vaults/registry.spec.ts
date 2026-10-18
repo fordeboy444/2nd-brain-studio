@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,6 +33,19 @@ describe("registry", () => {
     const { readRegistry } = await reload();
     const reg = await readRegistry();
     expect(reg.version).toBe(1);
+    expect(reg.vaults).toEqual([]);
+  });
+
+  it("an invalid-shape fallback is fresh, so a create cannot leak phantom entries", async () => {
+    const { createVault, readRegistry } = await reload();
+    const invalid = JSON.stringify({ version: 2, vaults: [] });
+    // A schema-mismatched file makes readRegistry return the fallback envelope.
+    await writeFile(join(root, "vaults.json"), invalid, "utf8");
+    await createVault({ name: "Real Vault" });
+    // Put the invalid shape back and read again. A shared fallback array would
+    // still hold the entry the create pushed into it.
+    await writeFile(join(root, "vaults.json"), invalid, "utf8");
+    const reg = await readRegistry();
     expect(reg.vaults).toEqual([]);
   });
 

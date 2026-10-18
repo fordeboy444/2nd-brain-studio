@@ -38,7 +38,13 @@ export interface Registry {
 
 const REGISTRY_PATH = (): string => join(config.vaultRoot, "vaults.json");
 
-const EMPTY_REGISTRY: Registry = { version: 1, vaults: [] };
+/**
+ * A fresh empty envelope. Never store a mutable array on a shared constant:
+ * `createVault` pushes into whatever `readRegistry` returned, so a shared
+ * empty array makes every later invalid-shape read report an entry that was
+ * never written to disk.
+ */
+const emptyRegistry = (): Registry => ({ version: 1, vaults: [] });
 
 const TMP_PREFIX = ".vaults.json.tmp-";
 
@@ -80,10 +86,10 @@ export async function readRegistry(): Promise<Registry> {
     if (parsed && parsed.version === 1 && Array.isArray(parsed.vaults)) {
       return parsed;
     }
-    return { ...EMPTY_REGISTRY };
+    return emptyRegistry();
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return { ...EMPTY_REGISTRY, vaults: [] };
+      return emptyRegistry();
     }
     throw err;
   }
