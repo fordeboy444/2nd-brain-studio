@@ -364,3 +364,120 @@ it("puts the strongest emphasis on exactly one element: the progress fill", asyn
   expect(strong.length).toBe(1);
   expect(strong[0]?.classList.contains("job-progress-fill")).toBe(true);
 });
+
+/* ---- Task 2: the feed, the failed table and honest disabled actions ---- */
+
+it("renders a skipped unit's detail as the feed line 'Skipped: capture present'", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  await render(() =>
+    source.emit(
+      "unit",
+      { slug: "video-a", stage: "S1", status: "skipped", detail: "capture present" },
+      1,
+    ),
+  );
+
+  const row = host.querySelector(".job-feed-row");
+  expect(row?.textContent).toContain("video-a");
+  expect(row?.textContent).toContain("Skipped: capture present");
+});
+
+it("shows the failed units as slug, stage and reason, and the empty copy when none", async () => {
+  serverJobs = [
+    makeJob({
+      skipped: [
+        { slug: "video-a", stage: "S1", reason: "timeout" },
+        { slug: "video-b", stage: "S1", reason: "blocked" },
+      ],
+    }),
+  ];
+  const first = await mountJobs();
+  await selectRow(first.host, 0, first.render);
+  const rows = first.host.querySelectorAll(".job-failed-table tbody tr");
+  expect(rows.length).toBe(2);
+  expect(rows[0]?.textContent).toContain("video-a");
+  expect(rows[0]?.textContent).toContain("S1");
+  expect(rows[0]?.textContent).toContain("timeout");
+  await first.unmount();
+
+  serverJobs = [makeJob({ id: "j2" })];
+  const second = await mountJobs();
+  await selectRow(second.host, 0, second.render);
+  expect(second.host.textContent).toContain("No failed units");
+  expect(second.host.textContent).toContain("Every selected unit completed.");
+});
+
+it("renders the empty jobs list copy while never showing a blank list", async () => {
+  serverJobs = [];
+  const { host } = await mountJobs();
+  expect(host.textContent).toContain("No jobs yet");
+  expect(host.textContent).toContain("Start an ingest from Settings to see progress here.");
+});
+
+it("shows Retry and Lint disabled with their reasons as visible text", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const button = (label: string): HTMLButtonElement => {
+    const found = [...host.querySelectorAll<HTMLButtonElement>(".job-actions button")].find(
+      (el) => el.textContent === label,
+    );
+    if (found === undefined) throw new Error(`no action button ${label}`);
+    return found;
+  };
+
+  expect(button("Retry failed").disabled).toBe(true);
+  expect(button("Lint bundle").disabled).toBe(true);
+  expect(host.textContent).toContain("Retry is available in Phase 4.");
+  expect(host.textContent).toContain("Lint is available in Phase 5.");
+});
+
+it("cancels once after the exact confirmation, and not at all when dismissed", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const cancelButton = (): HTMLButtonElement => {
+    const found = [...host.querySelectorAll<HTMLButtonElement>(".job-live-slot button")].find(
+      (el) => el.textContent === "Cancel job",
+    );
+    if (found === undefined) throw new Error("no Cancel job button");
+    return found;
+  };
+
+  // Dismissal path.
+  await render(() => cancelButton().click());
+  expect(document.body.textContent).toContain(
+    "Cancel job: stop the running job. Completed units stay on disk.",
+  );
+  const keep = document.querySelector<HTMLButtonElement>(".confirm-dialog .ghost-pill");
+  expect(keep?.textContent).toBe("Keep running");
+  await render(() => keep!.click());
+  expect(document.querySelector(".confirm-dialog")).toBeNull();
+  expect(cancelCalls).toBe(0);
+
+  // Confirmation path.
+  await render(() => cancelButton().click());
+  const confirm = document.querySelector<HTMLButtonElement>(
+    ".confirm-dialog .confirm-actions button.primary",
+  );
+  expect(confirm?.textContent).toContain("Cancel job");
+  await act(async () => {
+    confirm!.click();
+    // Let cancelJob and the follow-up loadJobs settle.
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(cancelCalls).toBe(1);
+  expect(document.querySelector(".confirm-dialog")).toBeNull();
+  expect(serverJobs[0]?.status).toBe("cancelled");
+  // The completed units stay on screen: cancel is not a clear of the feed.
+  expect(host.querySelector(".job-feed-scroll")).toBeTruthy();
+});
