@@ -167,7 +167,9 @@ function hasProvenance(data: OkfFrontmatter): boolean {
 function sourceBullets(text: string): string[] {
   const bullets: string[] = [];
   let inSources = false;
-  for (const line of text.split("\n")) {
+  for (const rawLine of text.split("\n")) {
+    // A CRLF page leaves a trailing carriage return on every line.
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line === "## Sources") {
       inSources = true;
       continue;

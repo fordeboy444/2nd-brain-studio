@@ -1001,6 +1001,23 @@ describe("E8 citation integrity on a strict sources: page", () => {
     expect(result.findings[0]?.severity).toBe("error");
   });
 
+  it("finds a bad quote on a CRLF page (WR-04)", () => {
+    const pages = e8Set({
+      bullet:
+        '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"',
+      rawText: E8_TWO_SEGMENTS,
+    }).map((page) =>
+      page.path === "concepts/subject.md"
+        ? { path: page.path, text: page.text.replace(/\n/g, "\r\n") }
+        : page,
+    );
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
   it("treats a mixed-case source_kind as web (WR-03)", () => {
     const pages = e8Set({
       provenance: "sources: [web-a]\n",
