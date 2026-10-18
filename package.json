@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
+    "typecheck": "pnpm -r exec tsc -p tsconfig.json --noEmit",
     "test": "vitest run tests/",
     "test:all": "pnpm -r test && vitest run tests/"
   },
