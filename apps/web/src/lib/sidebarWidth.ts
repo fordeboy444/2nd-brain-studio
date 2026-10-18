@@ -8,7 +8,7 @@
  * the theme.
  */
 
-const SIDEBAR_WIDTH_KEY = "2nd-brain-sidebar-width";
+export const SIDEBAR_WIDTH_KEY = "2nd-brain-sidebar-width";
 
 export const SIDEBAR_WIDTH_DEFAULT = 264;
 /** The default is also the floor: the resizer only ever widens the sidebar.
@@ -17,8 +17,17 @@ export const SIDEBAR_WIDTH_DEFAULT = 264;
 export const SIDEBAR_WIDTH_MIN = SIDEBAR_WIDTH_DEFAULT;
 export const SIDEBAR_WIDTH_MAX = 560;
 
-/** Clamp a width to the usable range, also refusing to eat the whole window on
- *  a small screen. NaN (a corrupted stored value) falls back to the default. */
+/** Clamp a width to the selectable range only, ignoring the current window.
+ *  This is the value the app persists: a narrow window must never overwrite the
+ *  width the user chose on a wide one. NaN (a corrupted stored value) falls
+ *  back to the default. */
+export function clampSidebarWidthPreference(px: number): number {
+  if (!Number.isFinite(px)) return SIDEBAR_WIDTH_DEFAULT;
+  return Math.round(Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, px)));
+}
+
+/** Clamp a width to what the current window can show, returning the width to
+ *  render. The preference itself is not changed by this clamp. */
 export function clampSidebarWidth(px: number, viewport = 1200): number {
   if (!Number.isFinite(px)) return SIDEBAR_WIDTH_DEFAULT;
   // Always leave room for the editor, even when the window is narrower than the
@@ -28,11 +37,11 @@ export function clampSidebarWidth(px: number, viewport = 1200): number {
   return Math.round(Math.min(max, Math.max(SIDEBAR_WIDTH_MIN, px)));
 }
 
-export function readSidebarWidth(): number {
+export function readSidebarWidthPreference(): number {
   try {
     const raw = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     if (raw === null) return SIDEBAR_WIDTH_DEFAULT;
-    return clampSidebarWidth(Number(raw), window.innerWidth);
+    return clampSidebarWidthPreference(Number(raw));
   } catch {
     return SIDEBAR_WIDTH_DEFAULT;
   }

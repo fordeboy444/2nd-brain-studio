@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   clampSidebarWidth,
-  readSidebarWidth,
+  clampSidebarWidthPreference,
+  readSidebarWidthPreference,
   writeSidebarWidth,
 } from "./sidebarWidth.js";
 
@@ -21,21 +22,28 @@ export function useSidebarWidth(): {
   width: number;
   setWidth: (px: number) => void;
 } {
-  const [width, setWidthState] = useState(readSidebarWidth);
+  // The stored value is the user's PREFERENCE, clamped only to the selectable
+  // range. The width on screen is derived from it against the viewport, so a
+  // narrow window cannot overwrite the preference and a later resize restores
+  // the width the user chose.
+  const [preference, setPreference] = useState(readSidebarWidthPreference);
+  const [viewport, setViewport] = useState(() => window.innerWidth);
+
+  const width = clampSidebarWidth(preference, viewport);
 
   const setWidth = useCallback((px: number) => {
-    const next = clampSidebarWidth(px, window.innerWidth);
-    setWidthState(next);
-    // Persist the clamped value: the stored width is what the next load
-    // restores, so it must be the width the user actually got.
+    const next = clampSidebarWidthPreference(px);
+    setPreference(next);
+    // Persist the preference, not the width the current window happened to
+    // show: the next load must restore what the user chose.
     writeSidebarWidth(next);
   }, []);
 
-  // A window narrow enough to squeeze the editor pulls the sidebar back in with
-  // it. The stored preference is deliberately left alone, so the width the user
-  // chose returns when the window has room for it again.
+  // The window size is a dependency of the shown width. Keeping it in state is
+  // what makes a resize repaint with a tighter clamp without changing the
+  // stored preference.
   useEffect(() => {
-    const onResize = () => setWidthState((w) => clampSidebarWidth(w, window.innerWidth));
+    const onResize = () => setViewport(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
