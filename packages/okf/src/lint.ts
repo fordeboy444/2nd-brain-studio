@@ -6,8 +6,8 @@
  * report is a byte contract downstream phases gate generated pages on, so the
  * report never suppresses, deduplicates or reorders a finding to fit a golden.
  *
- * Pure: pages arrive as plain `{ path, text }` objects. No filesystem, no
- * network, no process.
+ * Pure: pages arrive as plain `{ path, text }` objects. No filesystem, network
+ * or process access.
  */
 import type { BundlePage } from "./frontmatter.js";
 import { compareCodepoint } from "./indexes.js";

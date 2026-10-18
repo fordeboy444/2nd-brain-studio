@@ -7,8 +7,16 @@ import { join } from "node:path";
 // @ts-expect-error -- see the note above.
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import * as okf from "./index.js";
 import { buildIndexes, formatLintReport, lintBundle } from "./index.js";
-import type { BundlePage, Taxonomy } from "./index.js";
+import type {
+  BundlePage,
+  LintFinding,
+  LintOptions,
+  LintRule,
+  LintSeverity,
+  Taxonomy,
+} from "./index.js";
 import { readBundle } from "../tests/helpers/bundle.js";
 
 const FIXTURE_ROOT = fileURLToPath(
@@ -503,5 +511,169 @@ describe("determinism", () => {
     );
     expect(reverse).toBe(forward);
     expect(forward).toContain("W1 orphan");
+  });
+});
+
+describe("private state directory prune", () => {
+  it("omits a nested .okf page from the count, findings and report", () => {
+    const pages: BundlePage[] = [
+      { path: ".okf/jobs/job-1.md", text: "# Job One\n" },
+      { path: "concepts/valid.md", text: TYPED_CONCEPT },
+    ];
+    const result = lintBundle(pages, "edge");
+    expect(result.scanned).toBe(1);
+    expect(
+      result.findings.every((finding) => !finding.message.includes(".okf")),
+    ).toBe(true);
+    expect(formatLintReport(result)).not.toContain(".okf");
+  });
+
+  it("omits .okf/notes.md and keeps a near-miss directory", () => {
+    const pages: BundlePage[] = [
+      { path: ".okf/notes.md", text: "# Private Notes\n" },
+      {
+        path: "docs/okf-notes/x.md",
+        text: "---\ntype: concept\n---\n",
+      },
+    ];
+    const result = lintBundle(pages, "edge");
+    expect(result.scanned).toBe(1);
+    expect(result.findings).toEqual([]);
+  });
+
+  it("counts a directory whose name merely contains okf", () => {
+    const pages: BundlePage[] = [
+      {
+        path: "docs/okf-notes/x.md",
+        text: "---\ntype: concept\n---\n",
+      },
+    ];
+    expect(lintBundle(pages, "edge").scanned).toBe(1);
+  });
+
+  it("omits .git pages", () => {
+    const pages: BundlePage[] = [
+      { path: ".git/hooks/note.md", text: "# Git Note\n" },
+      { path: "concepts/valid.md", text: TYPED_CONCEPT },
+    ];
+    expect(lintBundle(pages, "edge").scanned).toBe(1);
+  });
+});
+
+describe("quiet mode", () => {
+  /** One mixed set with both severities, so the quiet shape is visible. */
+  const mixedPages: BundlePage[] = [
+    {
+      path: "concepts/subject.md",
+      text: "# Subject\n\n[Missing](missing.md)\n",
+    },
+    {
+      path: "concepts/index.md",
+      text: "# Concepts\n\n- [Subject](subject.md)\n",
+    },
+    { path: "sources/delta.md", text: "---\ntype: source\n---\n" },
+    {
+      path: "sources/index.md",
+      text: "# Sources\n\n- [Delta](delta.md)\n",
+    },
+    { path: "raw/epsilon.md", text: "---\ntype: raw-transcript\n---\n" },
+  ];
+
+  it("omits the scanned line but keeps findings, blank line and summary", () => {
+    const result = lintBundle(mixedPages, "edge");
+    const quiet = formatLintReport(result, { quiet: true });
+    expect(quiet.includes("Scanned ")).toBe(false);
+    expect(quiet).toContain("  WARN  ");
+    expect(quiet).toContain("  ERROR ");
+    expect(quiet).toContain("\n\n");
+    expect(quiet.endsWith(`\n${result.errors.length} error(s), ${result.warnings.length} warning(s).\n`)).toBe(
+      true,
+    );
+  });
+
+  it("prints exactly the reference shape with zero findings", () => {
+    const result = lintBundle([], "empty");
+    expect(result.scanned).toBe(0);
+    expect(formatLintReport(result, { quiet: true })).toBe(
+      "\n0 error(s), 0 warning(s).\n",
+    );
+  });
+});
+
+describe("exit semantics", () => {
+  it("returns 0 when the only finding is a W1 warning", () => {
+    const pages: BundlePage[] = [
+      { path: "concepts/subject.md", text: TYPED_CONCEPT },
+      {
+        path: "concepts/index.md",
+        text: "# Concepts\n\n- [Subject](subject.md)\n",
+      },
+    ];
+    const result = lintBundle(pages, "edge");
+    expect(result.warnings.length).toBe(1);
+    expect(result.errors).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("returns 1 when an E1 error is present", () => {
+    const pages = conceptPair("# Subject\n\n[Partner](partner.md)\n");
+    const result = lintBundle(pages, "edge");
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("returns 1 when both severities are present", () => {
+    const result = lintBundle(
+      [
+        {
+          path: "concepts/subject.md",
+          text: "# Subject\n\n[Missing](missing.md)\n",
+        },
+        {
+          path: "concepts/index.md",
+          text: "# Concepts\n\n- [Subject](subject.md)\n",
+        },
+        { path: "raw/epsilon.md", text: "---\ntype: raw-transcript\n---\n" },
+      ],
+      "edge",
+    );
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.exitCode).toBe(1);
+
+    // Formatting is a read-only view: it never changes the exit status.
+    formatLintReport(result, { quiet: true });
+    expect(result.exitCode).toBe(1);
+  });
+});
+
+describe("package surface", () => {
+  it("exports the seven link and lint functions by name", () => {
+    for (const name of [
+      "stripCode",
+      "extractLinks",
+      "linkTarget",
+      "isExternalTarget",
+      "resolveBundlePath",
+      "lintBundle",
+      "formatLintReport",
+    ] as const) {
+      expect(typeof okf[name], name).toBe("function");
+    }
+  });
+
+  it("exports the lint types by name", () => {
+    const finding: LintFinding = {
+      rule: "E4",
+      severity: "warning",
+      message: "example",
+    };
+    const options: LintOptions = { quiet: true };
+    const rule: LintRule = "W1";
+    const severity: LintSeverity = "warning";
+    expect(finding.rule).toBe("E4");
+    expect(options.quiet).toBe(true);
+    expect(rule).toBe("W1");
+    expect(severity).toBe("warning");
   });
 });

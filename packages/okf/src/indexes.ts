@@ -215,7 +215,9 @@ const ENTITIES_ROOT = [
 /**
  * Build the seven directory indexes from the pages and the taxonomy.
  *
- * Files and log lines follow the reference `main()` order exactly.
+ * Files and log lines follow the reference `main()` order exactly. The caller
+ * supplies an already-pruned page list: pages under `.okf/` and `.git/` never
+ * reach this function, so index building never needs its own filter.
  */
 export function buildIndexes(
   pages: readonly BundlePage[],
