@@ -216,6 +216,86 @@ describe("fetchWebPage redirects (T-03-19)", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  /** A chain where path `/n` redirects to `/n+1` until `limit`, then HTML. */
+  function chainFetch(limit: number): ReturnType<typeof vi.fn> {
+    return vi.fn(
+      asFetch(async (input) => {
+        const url = String(input);
+        const index = Number(url.slice(url.lastIndexOf("/") + 1));
+        if (index < limit) return redirect(`https://public.example/${index + 1}`);
+        return htmlResponse();
+      }),
+    );
+  }
+
+  it("rejects a redirect to file: with scheme and never performs a second fetch", async () => {
+    const fetchImpl = vi.fn(
+      asFetch(async () => redirect("file:///etc/passwd")),
+    );
+
+    await expect(
+      fetchWebPage("https://public.example/start", ctx, { fetch: fetchImpl, lookup: publicLookup }),
+    ).rejects.toMatchObject({ reason: "scheme" });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a redirect to ftp: with scheme", async () => {
+    const fetchImpl = vi.fn(
+      asFetch(async () => redirect("ftp://public.example/archive")),
+    );
+
+    await expect(
+      fetchWebPage("https://public.example/start", ctx, { fetch: fetchImpl, lookup: publicLookup }),
+    ).rejects.toMatchObject({ reason: "scheme" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a redirect with no Location header as redirect_limit", async () => {
+    const fetchImpl = vi.fn(asFetch(async () => new Response(null, { status: 302 })));
+
+    await expect(
+      fetchWebPage("https://public.example/start", ctx, { fetch: fetchImpl, lookup: publicLookup }),
+    ).rejects.toMatchObject({ reason: "redirect_limit" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows a chain of five redirects", async () => {
+    const fetchImpl = chainFetch(5);
+
+    const page = await fetchWebPage("https://public.example/0", ctx, {
+      fetch: fetchImpl,
+      lookup: publicLookup,
+    });
+
+    expect(page.finalUrl).toBe("https://public.example/5");
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("fails the sixth redirect with redirect_limit", async () => {
+    const fetchImpl = chainFetch(6);
+
+    await expect(
+      fetchWebPage("https://public.example/0", ctx, { fetch: fetchImpl, lookup: publicLookup }),
+    ).rejects.toMatchObject({ reason: "redirect_limit" });
+
+    // Initial request plus five followed redirects; the sixth was not requested.
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("re-runs the full DNS check for every redirect hop", async () => {
+    const lookup = vi.fn<LookupFn>(publicLookup);
+    const fetchImpl = chainFetch(2);
+
+    await fetchWebPage("https://public.example/0", ctx, { fetch: fetchImpl, lookup });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(lookup).toHaveBeenCalledTimes(3);
+    for (const call of lookup.mock.calls) {
+      expect(call[1]).toEqual({ all: true, verbatim: true });
+    }
+  });
+
   it("requests with redirect manual and an abort signal", async () => {
     const fetchImpl = vi.fn(asFetch(async () => htmlResponse()));
 

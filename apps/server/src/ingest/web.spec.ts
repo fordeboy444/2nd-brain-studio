@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter, slugify } from "@2nd-brain/okf";
@@ -14,7 +14,7 @@ import {
   WebContentError,
   webSlug,
 } from "./web.js";
-import type { LookupFn } from "./ssrf.js";
+import { SsrfError, type LookupFn } from "./ssrf.js";
 
 const FIXED_NOW = Date.UTC(2026, 9, 18, 10, 0, 0);
 const FIXED_ISO = new Date(FIXED_NOW).toISOString();
@@ -263,5 +263,118 @@ describe("createWebFetcher (S1w)", () => {
 
     expect(capture.warning).toBe("short_page");
     expect(capture.paragraphs.length).toBeGreaterThan(0);
+  });
+
+  it("refuses a 6 MiB chunked body and writes nothing", async () => {
+    let chunks = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunks === 6) {
+          controller.close();
+          return;
+        }
+        chunks += 1;
+        controller.enqueue(new Uint8Array(1024 * 1024));
+      },
+    });
+    const fetcher = createWebFetcher({
+      fetch: asFetch(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+      ),
+      lookup: publicLookup,
+    });
+
+    const error = await fetcher({ url: REQUESTED_URL }, ctxIn(root)).then(
+      () => {
+        throw new Error("expected the fetch to fail");
+      },
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(SsrfError);
+    expect((error as SsrfError).reason).toBe("body_too_large");
+    expect(await readdir(join(root, "raw"))).toEqual([]);
+  });
+
+  it("maps an abort after 30 s to timeout and leaves no timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn(
+        (_input: URL | RequestInfo, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
+      const fetcher = createWebFetcher({
+        fetch: fetchImpl as unknown as typeof globalThis.fetch,
+        lookup: publicLookup,
+      });
+
+      const pending = fetcher({ url: REQUESTED_URL }, ctxIn(root)).then(
+        () => {
+          throw new Error("expected the fetch to time out");
+        },
+        (caught: unknown) => caught,
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(31_000);
+      const error = await pending;
+
+      expect(error).toBeInstanceOf(SsrfError);
+      expect((error as SsrfError).reason).toBe("timeout");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears its hop timer after a successful response", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = createWebFetcher({
+        fetch: asFetch(async () =>
+          new Response(articleHtml(220), {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          }),
+        ),
+        lookup: publicLookup,
+      });
+
+      const pending = fetcher({ url: REQUESTED_URL }, ctxIn(root));
+      await vi.advanceTimersByTimeAsync(10);
+      await pending;
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ["text/plain", "text/plain; charset=utf-8"],
+    ["an image", "image/png"],
+  ])("rejects %s as unsupported_content_type before reading the body", async (_label, type) => {
+    const fetcher = createWebFetcher({
+      fetch: asFetch(
+        async () =>
+          new Response("plain text, not a page", {
+            status: 200,
+            headers: { "content-type": type },
+          }),
+      ),
+      lookup: publicLookup,
+    });
+
+    await expect(fetcher({ url: REQUESTED_URL }, ctxIn(root))).rejects.toMatchObject({
+      reason: "unsupported_content_type",
+    });
+    expect(await readdir(join(root, "raw"))).toEqual([]);
   });
 });
