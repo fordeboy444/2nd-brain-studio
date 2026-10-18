@@ -38,6 +38,7 @@ const CANDIDATE: VideoCandidate = {
   url: "https://www.youtube.com/watch?v=abc123",
   published: "2026-01-01",
   durationSec: 600,
+  language: "en",
 };
 
 /** Five events: one duplicate, one empty and one multi-fragment. */

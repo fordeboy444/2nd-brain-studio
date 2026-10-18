@@ -29,6 +29,7 @@ function line(id: string, extra: Record<string, unknown> = {}): string {
     url: `https://youtu.be/${id}`,
     upload_date: "20260101",
     duration: 600,
+    language: "en",
     ...extra,
   });
 }

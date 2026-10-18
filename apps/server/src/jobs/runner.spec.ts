@@ -97,6 +97,7 @@ const VIDEO_A: VideoCandidate = {
   url: "https://youtu.be/abc123",
   published: "2026-01-01",
   durationSec: 600,
+  language: "en",
 };
 
 function segments(): { startSec: number; text: string }[] {
@@ -443,6 +444,98 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
   });
 
+  it("applies the persisted filters in S0 before any unit runs", async () => {
+    const fetched: string[] = [];
+    const candidate = (
+      youtubeId: string,
+      title: string,
+      published: string,
+      durationSec: number,
+      language: string,
+    ): VideoCandidate => ({
+      youtubeId,
+      title,
+      url: `https://youtu.be/${youtubeId}`,
+      published,
+      durationSec,
+      language,
+    });
+    const deps = makeDeps({
+      async enumerate() {
+        return [
+          candidate("keep-a", "Keep A", "2026-02-01", 900, "en"),
+          candidate("too-old", "Too Old", "2025-01-01", 900, "en"),
+          candidate("too-short", "Too Short", "2026-02-02", 30, "en"),
+          candidate("wrong-lang", "Wrong Language", "2026-02-03", 900, "de"),
+          candidate("keep-b", "Keep B", "2026-02-04", 900, "en"),
+        ];
+      },
+      async fetchTranscript(candidate) {
+        fetched.push(candidate.youtubeId);
+        return videoCapture(candidate);
+      },
+    });
+
+    const job = makeVideoJob({
+      settings: {
+        ...SETTINGS,
+        maxVideos: 10,
+        filters: {
+          publishedAfter: "2026-01-01",
+          publishedBefore: "2026-12-31",
+          minDurationSec: 60,
+          language: "en",
+        },
+      },
+    });
+    await writeJob(root, job);
+    await runJob(job, deps);
+
+    expect(fetched).toEqual(["keep-a", "keep-b"]);
+    const enumerated = JSON.parse(
+      await readFile(join(root, ".okf", "jobs", job.id, "01-enumerate.json"), "utf8"),
+    );
+    expect(enumerated.count).toBe(2);
+    expect(enumerated.candidates).toHaveLength(2);
+    expect((await readJob(root, job.id)).progress.total).toBe(2);
+  });
+
+  it("caps S0 at maxVideos after enumeration", async () => {
+    const fetched: string[] = [];
+    const deps = makeDeps({
+      async enumerate(_url, opts) {
+        // The scan bound is still maxVideos * 5; the cap applies afterwards.
+        expect(opts.maxScan).toBe(15);
+        return Array.from({ length: 8 }, (_, index) => ({
+          youtubeId: `cap-${String(index)}`,
+          title: `Cap ${String(index)}`,
+          url: `https://youtu.be/cap-${String(index)}`,
+          published: "2026-01-01",
+          durationSec: 600,
+          language: "en",
+        }));
+      },
+      async fetchTranscript(candidate) {
+        fetched.push(candidate.youtubeId);
+        return videoCapture(candidate);
+      },
+    });
+
+    const job = makeVideoJob({
+      settings: { ...SETTINGS, maxVideos: 3, filters: {} },
+    });
+    await writeJob(root, job);
+    await runJob(job, deps);
+
+    expect(fetched).toEqual(["cap-0", "cap-1", "cap-2"]);
+    const enumerated = JSON.parse(
+      await readFile(join(root, ".okf", "jobs", job.id, "01-enumerate.json"), "utf8"),
+    );
+    expect(enumerated.count).toBe(3);
+    expect(enumerated.candidates).toHaveLength(3);
+    expect((await readJob(root, job.id)).progress.total).toBe(3);
+  });
+
   it("advances a zero-unit stage and completes", async () => {
     const deps = makeDeps({
       async enumerate() {
@@ -698,11 +791,13 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       youtubeId: "aaa111bbb22",
       title: "First Talk",
       url: "https://youtu.be/aaa111bbb22",
+      language: "en",
     };
     const second: VideoCandidate = {
       youtubeId: "ccc333ddd44",
       title: "Second Talk",
       url: "https://youtu.be/ccc333ddd44",
+      language: "en",
     };
 
     const runYtDlp = async (args: readonly string[]) => {

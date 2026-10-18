@@ -35,11 +35,13 @@ const candidates: VideoCandidate[] = [
     youtubeId: "vid_first_01",
     title: "First Candidate",
     url: "https://youtu.be/vid_first_01",
+    language: "en",
   },
   {
     youtubeId: "vid_second_2",
     title: "Second Candidate",
     url: "https://youtu.be/vid_second_2",
+    language: "en",
   },
 ];
 

@@ -18,7 +18,7 @@
  * the preview number cannot be inflated by the raw `found` total.
  */
 import { slugify } from "@2nd-brain/okf";
-import type { VideoCandidate } from "../jobs/types.js";
+import type { JobSettings, VideoCandidate } from "../jobs/types.js";
 
 /** Why a candidate did not survive the filters. */
 export type FilterReason =
@@ -33,6 +33,34 @@ export interface FilterInput {
   dateTo?: string;
   minDurationSec?: number;
   language?: string;
+}
+
+/**
+ * Map the persisted `job.settings` onto the fixed filter input.
+ *
+ * The create form and the saved record use different date names
+ * (`dateFrom`/`dateTo` vs `publishedAfter`/`publishedBefore`), so this is the
+ * one place the rename happens. The preview already speaks `FilterInput`; the
+ * runner goes through this mapper, which is what keeps the advertised estimate
+ * and the committed work on the same filter step.
+ */
+export function filterInputForSettings(
+  settings: Pick<JobSettings, "maxVideos" | "filters">,
+): FilterInput {
+  const input: FilterInput = { maxVideos: settings.maxVideos };
+  if (settings.filters.publishedAfter !== undefined) {
+    input.dateFrom = settings.filters.publishedAfter;
+  }
+  if (settings.filters.publishedBefore !== undefined) {
+    input.dateTo = settings.filters.publishedBefore;
+  }
+  if (settings.filters.minDurationSec !== undefined) {
+    input.minDurationSec = settings.filters.minDurationSec;
+  }
+  if (settings.filters.language !== undefined) {
+    input.language = settings.filters.language;
+  }
+  return input;
 }
 
 /** One filtered-out candidate, with a stable slug for the preview/UI. */

@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { slugify } from "@2nd-brain/okf";
 import { config } from "../config.js";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
+import { applyFilters, filterInputForSettings } from "../ingest/filters.js";
 import { vaultDirPath } from "../vaults/registry.js";
 import {
   CaptureMismatchError,
@@ -30,7 +31,6 @@ import { appendEvent, jobDir, readJob, requestCancel, writeJob } from "./store.j
 import {
   SkipError,
   type JobRecord,
-  type JobSettings,
   type SkipReason,
   type SkippedUnit,
   type StageName,
@@ -50,11 +50,14 @@ export interface WebFetchResult {
   slug?: string;
 }
 
+/**
+ * What S0 asks the enumerator for. Enumeration is pure — it returns every
+ * candidate the capped scan saw — so filters and the `maxVideos` cap are
+ * applied by the runner AFTER it returns, exactly as the preview does.
+ */
 export interface EnumerateOptions {
   maxVideos: number;
   maxScan: number;
-  language: string;
-  filters: JobSettings["filters"];
 }
 
 /** Built once per job and passed unchanged to both S1 and S1w. */
@@ -329,17 +332,22 @@ async function runS0(
     {
       maxVideos,
       maxScan: Math.min(2000, maxVideos * 5),
-      language: ctx.language,
-      filters: settings.filters,
     },
     ctx.signal,
   );
-  job.progress = { done: 0, total: candidates.length };
+  // The same filter step and `maxVideos` cap the preview ran. Without this,
+  // a committed job would fetch every scanned candidate and silently ignore
+  // the user's date/duration/language filters.
+  const { selected } = applyFilters(
+    candidates,
+    filterInputForSettings({ maxVideos, filters: settings.filters }),
+  );
+  job.progress = { done: 0, total: selected.length };
   // A zero-unit stage still writes its artifact and advances.
   await writeJsonAtomic(join(dir, "01-enumerate.json"), {
     url: job.input.url,
-    count: candidates.length,
-    candidates,
+    count: selected.length,
+    candidates: selected,
     at: iso(deps.now),
   });
 }

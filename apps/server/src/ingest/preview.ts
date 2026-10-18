@@ -61,15 +61,9 @@ export async function previewJob(
   const { candidates, foundAtLeast } = await deps.enumerate(url, {
     maxVideos: input.maxVideos,
   });
-  const { selected, skipped } = applyFilters(candidates, {
-    maxVideos: input.maxVideos,
-    ...(input.dateFrom !== undefined ? { dateFrom: input.dateFrom } : {}),
-    ...(input.dateTo !== undefined ? { dateTo: input.dateTo } : {}),
-    ...(input.minDurationSec !== undefined
-      ? { minDurationSec: input.minDurationSec }
-      : {}),
-    ...(input.language !== undefined ? { language: input.language } : {}),
-  });
+  // `PreviewInput` extends `FilterInput`, so the same filter step the runner
+  // applies runs here with no second key mapping to drift.
+  const { selected, skipped } = applyFilters(candidates, input);
 
   return {
     found: candidates.length,

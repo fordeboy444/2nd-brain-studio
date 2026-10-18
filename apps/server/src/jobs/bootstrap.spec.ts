@@ -20,6 +20,7 @@ const CANDIDATE: VideoCandidate = {
   url: "https://www.youtube.com/watch?v=abcdefghijk",
   published: "2026-01-01",
   durationSec: 600,
+  language: "en",
 };
 
 const FIELDS = [
@@ -82,8 +83,6 @@ describe("createIngestStageDeps", () => {
     const candidates = await deps.enumerate("https://example.com/post", {
       maxVideos: 1,
       maxScan: 5,
-      language: "en",
-      filters: {},
     });
 
     expect(candidates).toEqual([]);
