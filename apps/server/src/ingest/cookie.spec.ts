@@ -102,12 +102,22 @@ describe("validateNetscapeCookie", () => {
 });
 
 describe("cookieHeaderToNetscape", () => {
+  // yt-dlp refuses a cookie file without this first line.
+  const HEADER = "# Netscape HTTP Cookie File";
+
   it("converts one pair into one fixed seven-field line", async () => {
     const { cookieHeaderToNetscape } = await reload();
     expect(cookieHeaderToNetscape("SID=abc123")).toEqual({
       ok: true,
-      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123",
+      text: `${HEADER}\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123`,
     });
+  });
+
+  it("puts the Netscape header on the first line", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    const converted = cookieHeaderToNetscape("SID=abc123; PREF=en-US");
+    expect(converted.ok).toBe(true);
+    expect(converted.text?.split("\n")[0]).toBe(HEADER);
   });
 
   it("keeps several pairs in input order", async () => {
@@ -115,6 +125,7 @@ describe("cookieHeaderToNetscape", () => {
     expect(cookieHeaderToNetscape("SID=x; PREF=en-US;")).toEqual({
       ok: true,
       text: [
+        HEADER,
         ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx",
         ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US",
       ].join("\n"),
@@ -125,7 +136,7 @@ describe("cookieHeaderToNetscape", () => {
     const { cookieHeaderToNetscape } = await reload();
     expect(cookieHeaderToNetscape("SID=a=b=c")).toEqual({
       ok: true,
-      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta=b=c",
+      text: `${HEADER}\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta=b=c`,
     });
   });
 
@@ -134,6 +145,7 @@ describe("cookieHeaderToNetscape", () => {
     expect(cookieHeaderToNetscape("   SID = abc  ;  PREF = en-US  ")).toEqual({
       ok: true,
       text: [
+        HEADER,
         ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc",
         ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US",
       ].join("\n"),
@@ -145,6 +157,7 @@ describe("cookieHeaderToNetscape", () => {
     expect(cookieHeaderToNetscape("SID=x;;PREF=en;;")).toEqual({
       ok: true,
       text: [
+        HEADER,
         ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx",
         ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten",
       ].join("\n"),
@@ -155,7 +168,7 @@ describe("cookieHeaderToNetscape", () => {
     const { cookieHeaderToNetscape } = await reload();
     expect(cookieHeaderToNetscape("SID=")).toEqual({
       ok: true,
-      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\t",
+      text: `${HEADER}\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\t`,
     });
   });
 
@@ -200,6 +213,7 @@ describe("cookieHeaderToNetscape", () => {
     const { cookieHeaderToNetscape, validateNetscapeCookie } = await reload();
     const converted = cookieHeaderToNetscape("SID=abc123; PREF=en-US; HSID=hidden");
     expect(converted.ok).toBe(true);
+    expect(converted.text?.split("\n")[0]).toBe(HEADER);
     expect(validateNetscapeCookie(converted.text ?? "")).toEqual({ ok: true });
   });
 });

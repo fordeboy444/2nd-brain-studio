@@ -17,6 +17,13 @@ import { writeTextAtomic } from "../http/writeAtomic.js";
 /** Body cap for the raw `text/plain` upload (CONTEXT: 1 MiB). */
 export const MAX_COOKIE_BYTES = 1024 * 1024;
 
+/**
+ * First line yt-dlp requires. Without it, `--cookies` refuses the file with
+ * "does not look like a Netscape format cookies file", so a pasted header that
+ * converts cleanly would still fail at ingest time.
+ */
+const NETSCAPE_HEADER = "# Netscape HTTP Cookie File";
+
 export type CookieInvalidReason = "empty" | "too_large" | "bad_line";
 
 export interface CookieValidation {
@@ -125,7 +132,7 @@ export function cookieHeaderToNetscape(header: string): CookieHeaderConversion {
 
   if (lines.length === 0) return { ok: false, reason: "empty" };
 
-  const text = lines.join("\n");
+  const text = [NETSCAPE_HEADER, ...lines].join("\n");
   if (Buffer.byteLength(text, "utf8") > MAX_COOKIE_BYTES) {
     return { ok: false, reason: "too_large" };
   }

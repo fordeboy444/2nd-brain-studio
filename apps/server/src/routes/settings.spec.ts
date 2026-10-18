@@ -214,6 +214,7 @@ describe("POST /api/settings/youtube-cookie/header", () => {
   }
 
   const CONVERTED =
+    "# Netscape HTTP Cookie File\n" +
     ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123\n" +
     ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US\n";
 
