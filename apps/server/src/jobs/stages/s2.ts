@@ -24,6 +24,7 @@ import {
   captureFetchedAt,
   captureTitle,
   EXTRACTION_SLUG_RE,
+  filterQuotes,
   sourceFromCapture,
   toExtractionRecord,
   transcriptText,
@@ -225,7 +226,13 @@ export function createS2Stage(deps: StageDeps): S2Stage {
           ExtractionSchema,
         );
 
-        const record = toExtractionRecord(result.output, capture, result.at);
+        // Every stored quote has to be a real citation of the raw capture.
+        const verified = filterQuotes(
+          result.output,
+          capture.body,
+          source.sourceKind,
+        );
+        const record = toExtractionRecord(verified, capture, result.at);
         await writeExtraction(dir, record);
         await deps.writePage(
           vaultDir,

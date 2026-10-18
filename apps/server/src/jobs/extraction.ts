@@ -18,6 +18,11 @@
  */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  CITATION_OVERLAP_THRESHOLD,
+  citationScore,
+  parseVideoSegments,
+} from "@2nd-brain/okf";
 import type { OkfFrontmatter } from "@2nd-brain/okf";
 import type { Extraction } from "../llm/json.js";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
@@ -205,6 +210,31 @@ function webTranscriptText(body: string): string {
     .replace(/^\s*## Extracted text[^\n]*\n+/, "")
     .replace(/\*\*\[#\d+\]\*\*\s*/g, "")
     .trim();
+}
+
+/**
+ * Drop every quote the raw capture cannot support (OKF-06, E8).
+ *
+ * A model asked to copy quotes still paraphrases sometimes. The reference
+ * scoring rule decides: a quote survives when at least 55% of its significant
+ * words occur in its cited window (video) or anywhere in the page (web). A
+ * dropped quote is never replaced, so the page cites fewer claims rather than
+ * a claim the source does not make.
+ */
+export function filterQuotes(
+  extraction: Extraction,
+  rawBody: string,
+  kind: "video" | "web",
+): Extraction {
+  const segments = kind === "video" ? parseVideoSegments(rawBody) : [];
+  const quotes = extraction.quotes.filter((quote) => {
+    const seconds = kind === "video" ? (quote.startSec ?? null) : null;
+    return (
+      citationScore(quote.text, segments, rawBody, seconds) >=
+      CITATION_OVERLAP_THRESHOLD
+    );
+  });
+  return { ...extraction, quotes };
 }
 
 /**
