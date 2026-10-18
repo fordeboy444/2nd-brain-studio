@@ -22,8 +22,12 @@ import { readBundle } from "../tests/helpers/bundle.js";
 const FIXTURE_ROOT = fileURLToPath(
   new URL("../tests/fixtures/bundle-mini", import.meta.url),
 );
+const CLEAN_ROOT = fileURLToPath(
+  new URL("../tests/fixtures/bundle-clean", import.meta.url),
+);
 
 const bundle = readBundle(FIXTURE_ROOT);
+const cleanBundle = readBundle(CLEAN_ROOT);
 const taxonomy = JSON.parse(
   readFileSync(join(FIXTURE_ROOT, "scripts", "taxonomy.json"), "utf8"),
 ) as Taxonomy;
@@ -126,6 +130,78 @@ describe("lintBundle: a clean bundle", () => {
     expect(result.findings).toEqual([]);
     expect(result.exitCode).toBe(0);
     expect(result.scanned).toBe(3);
+  });
+});
+
+/** The committed clean fixture plus the seven indexes the reference generated. */
+function cleanPages(): BundlePage[] {
+  const indexes = buildIndexes(cleanBundle.pages, {});
+  return [
+    ...cleanBundle.pages,
+    ...indexes.files.map((file) => ({ path: file.path, text: file.text })),
+  ];
+}
+
+/** The clean fixture with one cited quote replaced by unrelated words. */
+function badQuotePages(provenance: "sources" | "videos"): BundlePage[] {
+  const good = '"[0:01:00] the second segment explains the exact words we cite"';
+  const bad = '"[0:01:00] zebra quantum xylophone marmalade"';
+  return cleanPages().map((page) => {
+    if (page.path !== "concepts/alpha.md") return page;
+    let text = page.text.replace(good, bad);
+    if (provenance === "videos") {
+      text = text.replace("sources: [video-a, web-a]", "videos: [video-a, web-a]");
+    }
+    return { path: page.path, text };
+  });
+}
+
+describe("lintBundle: the committed mixed-provenance fixture", () => {
+  it("lints clean with 13 scanned pages and exit code 0", () => {
+    const result = lintBundle(cleanPages(), "bundle-clean");
+    expect(result.findings).toEqual([]);
+    expect(result.scanned).toBe(13);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("prints the exact clean report", () => {
+    const report = formatLintReport(lintBundle(cleanPages(), "bundle-clean"));
+    expect(report).toBe(
+      "Scanned 13 markdown files under bundle-clean/\n\n0 error(s), 0 warning(s).\n",
+    );
+  });
+
+  it("turns an unrelated quote into exactly one E8 error on a sources: page", () => {
+    const result = lintBundle(badQuotePages("sources"), "bundle-clean");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/alpha.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("turns the same quote into exactly one E8 warning on a legacy videos: page", () => {
+    const result = lintBundle(badQuotePages("videos"), "bundle-clean");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/alpha.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("warning");
+    expect(result.errors).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("scores a verbatim segment quote at 1 and a different long window below 0.55", () => {
+    const segments = [
+      { seconds: 0, text: "alpha beta gamma delta epsilon" },
+      { seconds: 600, text: "zebra quantum xylophone marmalade orchard" },
+    ];
+    const full = segments.map((segment) => segment.text).join(" ");
+    expect(
+      okf.citationScore("alpha beta gamma delta", segments, full, 0),
+    ).toBe(1);
+    expect(
+      okf.citationScore("alpha beta gamma delta", segments, full, 600),
+    ).toBeLessThan(0.55);
   });
 });
 
@@ -660,6 +736,23 @@ describe("package surface", () => {
     ] as const) {
       expect(typeof okf[name], name).toBe("function");
     }
+  });
+
+  it("exports the time and citation surface by name", () => {
+    for (const name of [
+      "parseTimestamp",
+      "formatTimestamp",
+      "normalizeCitationText",
+      "parseVideoSegments",
+      "citationScore",
+    ] as const) {
+      expect(typeof okf[name], name).toBe("function");
+    }
+    expect(okf.CITATION_WINDOW_BEFORE_SECONDS).toBe(45);
+    expect(okf.CITATION_WINDOW_AFTER_SECONDS).toBe(120);
+    expect(okf.CITATION_OVERLAP_THRESHOLD).toBe(0.55);
+    const segment: okf.CitationSegment = { seconds: 60, text: "example" };
+    expect(segment.seconds).toBe(60);
   });
 
   it("exports the lint types by name", () => {

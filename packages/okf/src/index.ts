@@ -45,3 +45,15 @@ export type {
 } from "./lint.js";
 
 export { slugify } from "./slug.js";
+
+export {
+  CITATION_OVERLAP_THRESHOLD,
+  CITATION_WINDOW_AFTER_SECONDS,
+  CITATION_WINDOW_BEFORE_SECONDS,
+  citationScore,
+  formatTimestamp,
+  normalizeCitationText,
+  parseTimestamp,
+  parseVideoSegments,
+} from "./time.js";
+export type { CitationSegment } from "./time.js";

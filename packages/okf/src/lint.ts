@@ -2,14 +2,17 @@
  * The deterministic OKF lint engine and report formatter.
  *
  * Rules E1-E4 and W1 reproduce the reference `lint.py` exactly: same message
- * text, same severity, same order, same summary and same exit status. The
- * report is a byte contract downstream phases gate generated pages on, so the
- * report never suppresses, deduplicates or reorders a finding to fit a golden.
+ * text, same severity, same order, same summary and same exit status. E5-E8 are
+ * this project's additions, and their order is E1, E2, E3, E4, E5, E6, E7, E8,
+ * W1. The report is a byte contract downstream phases gate generated pages on,
+ * so the report never suppresses, deduplicates or reorders a finding to fit a
+ * golden.
  *
  * Pure: pages arrive as plain `{ path, text }` objects. No filesystem, network
  * or process access.
  */
-import type { BundlePage } from "./frontmatter.js";
+import type { BundlePage, OkfFrontmatter } from "./frontmatter.js";
+import { parseFrontmatterSafe } from "./frontmatter.js";
 import { compareCodepoint } from "./indexes.js";
 import {
   extractLinks,
@@ -18,9 +21,24 @@ import {
   resolveBundlePath,
   stripCode,
 } from "./links.js";
+import {
+  CITATION_OVERLAP_THRESHOLD,
+  citationScore,
+  parseTimestamp,
+  parseVideoSegments,
+} from "./time.js";
 
-/** The rules this plan implements. Later plans add E5-E8. */
-export type LintRule = "E1" | "E2" | "E3" | "E4" | "W1";
+/** Every rule the engine reports. */
+export type LintRule =
+  | "E1"
+  | "E2"
+  | "E3"
+  | "E4"
+  | "E5"
+  | "E6"
+  | "E7"
+  | "E8"
+  | "W1";
 
 /** Severity, matching the reference's two report tiers. */
 export type LintSeverity = "error" | "warning";
@@ -109,6 +127,66 @@ function referenceType(text: string): string | null {
     .replace(/^'+|'+$/g, "");
 }
 
+/** A page's parsed frontmatter, or `null` when it has none this parser accepts. */
+type ParsedPage = { data: OkfFrontmatter; body: string } | null;
+
+/**
+ * Read one scalar field, normalized the way the reference reads a value:
+ * trim, then strip double quotes, then strip single quotes.
+ */
+function scalarField(data: OkfFrontmatter, key: string): string | null {
+  const value = data[key];
+  if (value === undefined || Array.isArray(value)) return null;
+  return String(value)
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "");
+}
+
+/** True when the page declares the provenance key, even with an empty array. */
+function declares(data: OkfFrontmatter, key: string): boolean {
+  return data[key] !== undefined;
+}
+
+/** True when the page declares either provenance key. */
+function hasProvenance(data: OkfFrontmatter): boolean {
+  return declares(data, "sources") || declares(data, "videos");
+}
+
+/**
+ * The bullet lines of the `## Sources` section, in document order.
+ *
+ * The section starts at a line that is exactly `## Sources` and ends before the
+ * next `## ` heading or at the end of the page. Only column-zero `- ` lines are
+ * bullets.
+ */
+function sourceBullets(text: string): string[] {
+  const bullets: string[] = [];
+  let inSources = false;
+  for (const line of text.split("\n")) {
+    if (line === "## Sources") {
+      inSources = true;
+      continue;
+    }
+    if (!inSources) continue;
+    if (line.startsWith("## ")) break;
+    if (line.startsWith("- ")) bullets.push(line);
+  }
+  return bullets;
+}
+
+/** The reference citation link: `](../sources/<slug>.md)`. */
+const SOURCE_LINK_RE = /\]\((?:\.\.\/)+sources\/([a-z0-9][a-z0-9-]+)\.md\)/;
+
+/** A `## Sources` bullet's link, separator and opening quote. */
+const QUOTE_OPEN_RE = /^\s*-\s*"/;
+
+/** A video citation quote: a bracketed timestamp, then the quote body. */
+const VIDEO_QUOTE_RE = /^\[(\d+:\d+:\d+)\]\s*([\s\S]*)$/;
+
+/** A wikilink, which OKF forbids in prose. */
+const WIKILINK_RE = /\[\[[^\]]+\]\]/g;
+
 /**
  * The bundle path set a link may resolve to.
  *
@@ -156,19 +234,35 @@ export function lintBundle(
     .sort((left, right) => compareCodepoint(left.path, right.path));
   const paths = bundlePathSet(kept, options.paths);
 
+  // Every page is parsed exactly once; E5-E8 share the result. A page with no
+  // frontmatter or an unsupported block yields `null` and produces no finding
+  // from those rules; E1 has already reported the missing type.
+  const byPath = new Map<string, BundlePage>();
+  const parsed = new Map<string, ParsedPage>();
+  for (const page of kept) {
+    byPath.set(page.path, page);
+    parsed.set(page.path, parseFrontmatterSafe(page.text));
+  }
+
   const errors: LintFinding[] = [];
   const warnings: LintFinding[] = [];
   const findings: LintFinding[] = [];
 
-  const error = (rule: LintRule, message: string): void => {
-    const finding: LintFinding = { rule, severity: "error", message };
-    errors.push(finding);
+  const record = (
+    rule: LintRule,
+    severity: LintSeverity,
+    message: string,
+  ): void => {
+    const finding: LintFinding = { rule, severity, message };
+    if (severity === "error") errors.push(finding);
+    else warnings.push(finding);
     findings.push(finding);
   };
+  const error = (rule: LintRule, message: string): void => {
+    record(rule, "error", message);
+  };
   const warning = (rule: LintRule, message: string): void => {
-    const finding: LintFinding = { rule, severity: "warning", message };
-    warnings.push(finding);
-    findings.push(finding);
+    record(rule, "warning", message);
   };
 
   // E1 — every non-reserved page carries a non-empty `type:`.
@@ -257,6 +351,148 @@ export function lintBundle(
       "E4",
       `E4 raw/${stem}.md has no matching sources/${stem}.md (not yet ingested)`,
     );
+  }
+
+  // E5 — a source page's `source_kind` and `youtube_id` must agree.
+  for (const page of kept) {
+    const frontmatter = parsed.get(page.path);
+    if (frontmatter === null || frontmatter === undefined) continue;
+    const kind = scalarField(frontmatter.data, "source_kind");
+    if (kind === "web") {
+      if (declares(frontmatter.data, "youtube_id")) {
+        error(
+          "E5",
+          `E5 source_kind web must not carry youtube_id: ${page.path}`,
+        );
+      }
+      continue;
+    }
+    if (kind === "video") {
+      const youtubeId = scalarField(frontmatter.data, "youtube_id");
+      if (youtubeId === null || youtubeId === "") {
+        error("E5", `E5 source_kind video requires youtube_id: ${page.path}`);
+      }
+    }
+  }
+
+  // E6 — a web source citation must not carry a video timestamp. The gate is
+  // exactly E8's, so a legacy `videos:` page is still checked.
+  for (const page of kept) {
+    const frontmatter = parsed.get(page.path);
+    if (frontmatter === null || frontmatter === undefined) continue;
+    if (!hasProvenance(frontmatter.data)) continue;
+    for (const bullet of sourceBullets(page.text)) {
+      const link = SOURCE_LINK_RE.exec(bullet);
+      if (link === null) continue;
+      const slug = link[1] as string;
+      const citedPath = `sources/${slug}.md`;
+      const cited = parsed.get(citedPath);
+      if (cited === null || cited === undefined) continue;
+      if (scalarField(cited.data, "source_kind") !== "web") continue;
+      const rest = bullet.slice(link.index + link[0].length);
+      if (/^\[(\d+:\d+:\d+)\]/.test(rest)) {
+        warning(
+          "E6",
+          `E6 web citation carries a video timestamp: ${page.path}`,
+        );
+      }
+    }
+  }
+
+  // E7 — OKF prose never uses wikilinks.
+  for (const page of kept) {
+    if (isReserved(page.path)) continue;
+    const prose = stripCode(page.text);
+    WIKILINK_RE.lastIndex = 0;
+    let match = WIKILINK_RE.exec(prose);
+    while (match !== null) {
+      error("E7", `E7 wikilink \`${match[0]}\` in ${page.path}`);
+      match = WIKILINK_RE.exec(prose);
+    }
+  }
+
+  // E8 — citation integrity. The rule runs on every page that declares either
+  // provenance key: errors on a modern `sources:` page, warnings on a legacy
+  // `videos:` page, which keeps the imported reference bundle at exit 0.
+  for (const page of kept) {
+    const frontmatter = parsed.get(page.path);
+    if (frontmatter === null || frontmatter === undefined) continue;
+    if (!hasProvenance(frontmatter.data)) continue;
+    const strict = declares(frontmatter.data, "sources");
+    const emit = (message: string): void => {
+      record("E8", strict ? "error" : "warning", message);
+    };
+
+    for (const bullet of sourceBullets(page.text)) {
+      const link = SOURCE_LINK_RE.exec(bullet);
+      if (link === null) {
+        if (strict) emit(`E8 citation has no source link: ${page.path}`);
+        continue;
+      }
+      const slug = link[1] as string;
+
+      const tail = bullet.slice(link.index + link[0].length);
+      const open = QUOTE_OPEN_RE.exec(tail);
+      let quote: string | null = null;
+      if (open !== null) {
+        const start = open[0].length;
+        const close = tail.indexOf('"', start);
+        if (close !== -1) quote = tail.slice(start, close);
+      }
+      if (quote === null || quote === "") {
+        if (strict) emit(`E8 citation has no quoted text: ${page.path}`);
+        continue;
+      }
+
+      const citedPath = `sources/${slug}.md`;
+      const citedPage = byPath.get(citedPath);
+      if (citedPage === undefined) {
+        emit(`E8 cited source is missing: ${citedPath}`);
+        continue;
+      }
+      const citedFrontmatter = parsed.get(citedPath) ?? null;
+      const rawValue =
+        citedFrontmatter === null
+          ? null
+          : scalarField(citedFrontmatter.data, "raw");
+      const rawPath =
+        rawValue === null || rawValue === ""
+          ? `raw/${slug}.md`
+          : resolveBundlePath(citedPath, rawValue);
+      const rawPage = rawPath === null ? undefined : byPath.get(rawPath);
+      if (rawPage === undefined) {
+        emit(`E8 cited source has no raw page: ${citedPath}`);
+        continue;
+      }
+
+      const sourceKind =
+        citedFrontmatter === null
+          ? null
+          : scalarField(citedFrontmatter.data, "source_kind");
+      if (sourceKind === "web") {
+        const score = citationScore(quote, [], rawPage.text, null);
+        if (score < CITATION_OVERLAP_THRESHOLD) {
+          emit(`E8 quote not found in cited page: ${page.path}`);
+        }
+        continue;
+      }
+
+      const videoQuote = VIDEO_QUOTE_RE.exec(quote);
+      if (videoQuote === null) {
+        if (strict) emit(`E8 video citation missing timestamp: ${page.path}`);
+        continue;
+      }
+      const seconds = parseTimestamp(videoQuote[1] as string);
+      const score = citationScore(
+        videoQuote[2] as string,
+        parseVideoSegments(rawPage.text),
+        rawPage.text,
+        seconds,
+      );
+      if (score < CITATION_OVERLAP_THRESHOLD) {
+        emit(`E8 quote not found near cited timestamp: ${page.path}`);
+      }
+    }
   }
 
   // W1 — a concept or entity with no inbound link from a non-index page.
