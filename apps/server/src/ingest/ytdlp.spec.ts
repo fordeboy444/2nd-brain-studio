@@ -299,7 +299,12 @@ describe("S1 through the real runner", () => {
     const finished = await runJob(job, deps);
 
     expect(finished.status).toBe("completed");
-    expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    // S5 writes raw/index.md on every completed run; the capture is what this
+    // assertion owns.
+    const rawFiles = (await readdir(join(root, "raw"))).filter(
+      (name) => name !== "index.md",
+    );
+    expect(rawFiles).toEqual(["first-talk.md"]);
 
     const parsed = parseFrontmatter(
       await readFile(join(root, "raw", "first-talk.md"), "utf8"),

@@ -137,7 +137,10 @@ describe("createIngestStageDeps", () => {
     const finished = await runJob(job, deps);
 
     expect(finished.status).toBe("completed");
-    expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    const rawFiles = (await readdir(join(root, "raw"))).filter(
+      (name) => name !== "index.md",
+    );
+    expect(rawFiles).toEqual(["first-talk.md"]);
     expect(runWritesJson3).toHaveBeenCalledTimes(1);
     expect(http).not.toHaveBeenCalled();
 

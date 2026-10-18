@@ -621,7 +621,7 @@ describe("S4b label pages", () => {
     );
 
     const entity = parseFrontmatter(
-      await readFile(join(root, "entities", "tool", "n8n.md"), "utf8"),
+      await readFile(join(root, "entities", "tools", "n8n.md"), "utf8"),
     );
     expect(Object.keys(entity!.data)).toEqual([
       "type",

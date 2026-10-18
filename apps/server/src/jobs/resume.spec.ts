@@ -131,7 +131,9 @@ describe("stage-granular resume (PIPE-11)", () => {
     expect(finished.stage).toBe("done");
     expect(finished.skipped).toEqual([]);
 
-    const raw = (await readdir(join(vault, "raw"))).sort();
+    const raw = (await readdir(join(vault, "raw")))
+      .filter((name) => name !== "index.md")
+      .sort();
     expect(raw).toEqual(["first-candidate.md", "second-candidate.md"]);
 
     // S2 runs after S1 and makes one call per captured slug; no cache exists
@@ -149,6 +151,7 @@ describe("stage-granular resume (PIPE-11)", () => {
       "events.ndjson",
       "extractions",
       "job.json",
+      "lint-report.json",
       "manifest.json",
       "taxonomy.json",
     ]);
