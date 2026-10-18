@@ -339,6 +339,21 @@ describe("root index rebuild", () => {
     );
   });
 
+  it("inserts the banner with CRLF on a CRLF root index (WR-08)", () => {
+    const text =
+      '---\r\nokf_version: "0.1"\r\n---\r\n\r\n# Title\r\n\r\nBody.\r\n';
+    const rebuilt = buildRootIndex(text, []);
+    expect(rebuilt).toBe(
+      '---\r\nokf_version: "0.1"\r\n---\r\n\r\n# Title\r\n\r\n' +
+        `${ROOT_BANNER_START}\r\n` +
+        "**Coverage:** 0 videos, 0 web pages\r\n" +
+        `${ROOT_BANNER_END}\r\n\r\n` +
+        "Body.\r\n",
+    );
+    // No lone LF survives: every inserted line ending matches the file.
+    expect(rebuilt.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+
   it("throws a typed error on a single marker", () => {
     const text = "# Title\n\n<!-- GENERATED:BANNER -->\n**Coverage:** 1 video\n";
     let caught: unknown;

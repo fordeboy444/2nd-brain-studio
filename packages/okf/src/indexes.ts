@@ -399,18 +399,23 @@ function ensureOkfVersion(text: string): string {
 
 /** Insert the banner after the first H1, with one blank line on each side. */
 function insertBannerAfterHeading(text: string, banner: string): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const bannerText = banner.replace(/\n/g, eol);
   const heading = /^# .*$/m.exec(text);
   if (heading === null) {
-    const separator = text.endsWith("\n") ? "\n" : "\n\n";
-    return `${text}${separator}${banner}\n`;
+    const separator = text.endsWith("\n") ? eol : `${eol}${eol}`;
+    return `${text}${separator}${bannerText}${eol}`;
   }
   let insertAt = heading.index + heading[0].length;
+  // `.*` consumes the `\r` of a CRLF heading, so step back before matching
+  // the line terminator.
+  if (heading[0].endsWith("\r")) insertAt -= 1;
   if (text.startsWith("\r\n", insertAt)) insertAt += 2;
   else if (text.startsWith("\n", insertAt)) insertAt += 1;
   const rest = text.slice(insertAt);
   const trailing =
-    rest.startsWith("\n") || rest.startsWith("\r\n") ? "" : "\n";
-  return `${text.slice(0, insertAt)}\n${banner}\n${trailing}${rest}`;
+    rest.startsWith("\r\n") || rest.startsWith("\n") ? "" : eol;
+  return `${text.slice(0, insertAt)}${eol}${bannerText}${eol}${trailing}${rest}`;
 }
 
 /**
