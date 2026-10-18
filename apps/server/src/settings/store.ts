@@ -70,8 +70,8 @@ export function defaultSettings(): AppSettings {
     llm: {
       model: config.ollamaModel,
       concurrency: 1,
-      requestTimeoutMs: 120_000,
-      maxRetries: 3,
+      requestTimeoutMs: 180_000,
+      maxRetries: 4,
     },
     fetch: {
       delayMs: 1_000,
@@ -79,7 +79,8 @@ export function defaultSettings(): AppSettings {
       concurrency: 2,
       language: "en",
     },
-    sweep: { enabled: true },
+    // The quality sweep is opt-in: an off switch makes no S6 call at all.
+    sweep: { enabled: false },
     ui: { theme: "system" },
   };
 }

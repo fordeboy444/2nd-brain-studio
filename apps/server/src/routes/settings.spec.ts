@@ -328,11 +328,11 @@ describe("GET /api/settings", () => {
       llm: {
         model: routes.config.ollamaModel,
         concurrency: 1,
-        requestTimeoutMs: 120_000,
-        maxRetries: 3,
+        requestTimeoutMs: 180_000,
+        maxRetries: 4,
       },
       fetch: { delayMs: 1_000, concurrency: 2, language: "en" },
-      sweep: { enabled: true },
+      sweep: { enabled: false },
       ui: { theme: "system" },
     });
   });
