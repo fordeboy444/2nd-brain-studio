@@ -377,6 +377,20 @@ const VAULT_FOR_TABS: Vault = {
   lastOpenedAt: "2026-10-18T12:00:00Z",
 };
 
+it("refuses to open a file for a vault that is no longer current", () => {
+  useStore.setState({
+    ...INITIAL,
+    currentVault: VAULT_FOR_TABS,
+    tabs: [],
+    activeTabPath: null,
+  });
+
+  useStore.getState().openFile("another-vault", "index.md");
+
+  expect(useStore.getState().tabs).toEqual([]);
+  expect(useStore.getState().activeTabPath).toBeNull();
+});
+
 function conflictedState() {
   useStore.setState({
     ...INITIAL,

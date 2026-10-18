@@ -450,6 +450,10 @@ export const useStore = create<AppState>((set, get) => {
     tabs: [],
     activeTabPath: null,
     openFile: (vaultId, path) => {
+      // A tab belongs to the vault that asked for it. An open that lands after a
+      // vault switch must not add a tab for a vault that is no longer open: the
+      // read would be dropped and the tab would stay in `loading` forever.
+      if (get().currentVault?.id !== vaultId) return;
       const existing = get().tabs.find((t) => sameTab(t, vaultId, path));
       if (existing) {
         // Focusing beats duplicating. A tab whose read failed gets one more try

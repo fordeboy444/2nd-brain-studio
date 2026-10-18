@@ -28,7 +28,7 @@ export function TabBar() {
         const label = noteLabel(tab.path);
         return (
           <div
-            key={tab.path}
+            key={`${tab.vaultId}:${tab.path}`}
             className={`tab${active ? " active" : ""}`}
             role="tab"
             aria-selected={active}

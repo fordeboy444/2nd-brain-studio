@@ -81,6 +81,10 @@ export function Browse() {
       toast((e as Error).message, "error");
       return;
     }
+    // The write can outlive the vault that asked for it. A tab for the old
+    // vault must not be added to the new one, where its read would be dropped
+    // and the tab would stay in `loading` forever.
+    if (useStore.getState().currentVault?.id !== vaultId) return;
     // Opening before refreshing: the tab appears immediately from the file that
     // was just written, and the tree's row lands when the level comes back. The
     // other order would leave the user waiting on a listing to open a file the
