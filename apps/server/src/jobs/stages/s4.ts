@@ -360,6 +360,53 @@ function pageCallOptions(job: JobRecord) {
   };
 }
 
+/** One label page rendered by code: the path and the exact text. */
+export interface RenderedLabelPage {
+  relPath: string;
+  text: string;
+}
+
+/**
+ * Render one label page from a request and a validated body.
+ *
+ * S4b and S6 both call this, so frontmatter, `sources:`, citations and edges
+ * stay code-owned and identical across the two stages.
+ */
+export function renderLabelPage(
+  request: PageRequest,
+  body: string,
+  manifest: ManifestRecord,
+  records: readonly ExtractionRecord[],
+  written: ReadonlySet<string>,
+  /** The job `createdAt`; never a wall-clock read. */
+  createdAt: string,
+): RenderedLabelPage {
+  const sources: LabelPageSource[] = request.sources.map((source) => ({
+    slug: source.slug,
+    title: source.title,
+    quotes: quotesFor(records, source.slug),
+  }));
+  const input = {
+    slug: request.slug,
+    title: request.title,
+    tags: request.tags,
+    sources,
+    body,
+    edges: pageEdges(manifest, request.slug, written),
+    created: createdAt,
+    updated: createdAt,
+  };
+  const relPath =
+    request.kind === "concept"
+      ? pagePathFor("concept", request.slug)
+      : pagePathFor("entity", request.slug, request.entityType);
+  const text =
+    request.kind === "concept"
+      ? renderConceptPage(input)
+      : renderEntityPage({ ...input, entityType: request.entityType ?? "" });
+  return { relPath, text };
+}
+
 /** The code fallback body: the source summaries, or one truthful sentence. */
 function fallbackBody(request: PageRequest): string {
   const summaries: string[] = [];
@@ -527,32 +574,14 @@ export async function renderLabelPages(
       });
     }
 
-    const sources: LabelPageSource[] = request.sources.map((source) => ({
-      slug: source.slug,
-      title: source.title,
-      quotes: quotesFor(records, source.slug),
-    }));
-    const input = {
-      slug: request.slug,
-      title: request.title,
-      tags: request.tags,
-      sources,
-      body: body ?? fallbackBody(request),
-      edges: pageEdges(manifest, request.slug, visible),
-      created: job.createdAt,
-      updated: job.createdAt,
-    };
-    const relPath =
-      request.kind === "concept"
-        ? pagePathFor("concept", request.slug)
-        : pagePathFor("entity", request.slug, request.entityType);
-    const text =
-      request.kind === "concept"
-        ? renderConceptPage(input)
-        : renderEntityPage({
-            ...input,
-            entityType: request.entityType ?? "",
-          });
+    const { relPath, text } = renderLabelPage(
+      request,
+      body ?? fallbackBody(request),
+      manifest,
+      records,
+      visible,
+      job.createdAt,
+    );
     await deps.writePage(ctx.vaultDir, relPath, text);
     written.add(relPath);
     await appendEvent(dir, "unit", {

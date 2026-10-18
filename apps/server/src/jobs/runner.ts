@@ -38,6 +38,7 @@ import { createS2Stage } from "./stages/s2.js";
 import { createS3Stage } from "./stages/s3.js";
 import { createS4Stage } from "./stages/s4.js";
 import { createS5Stage } from "./stages/s5.js";
+import { createS6Stage } from "./stages/s6.js";
 import {
   SkipError,
   type JobRecord,
@@ -115,9 +116,14 @@ export interface StageDeps {
  * S2 here, S3 in 04-03, S4 in 04-04 and S5/S6 in 04-05.
  */
 export function stagesFor(job: JobRecord): StageName[] {
-  return job.kind === "youtube"
-    ? ["S0", "S1", "S2", "S3", "S4", "S5"]
-    : ["S0", "S1w", "S2", "S3", "S4", "S5"];
+  const stages: StageName[] =
+    job.kind === "youtube"
+      ? ["S0", "S1", "S2", "S3", "S4", "S5"]
+      : ["S0", "S1w", "S2", "S3", "S4", "S5"];
+  // The job snapshot is fixed at creation, so a later settings write cannot
+  // add or remove the paid sweep from a queued job.
+  if (job.settings.sweep?.enabled === true) stages.push("S6");
+  return stages;
 }
 
 const TERMINAL: ReadonlySet<JobRecord["status"]> = new Set([
@@ -321,6 +327,8 @@ export async function runJob(
           cancelled = await createS4Stage(deps)(job, ctx, dir, persist);
         } else if (stage === "S5") {
           cancelled = await createS5Stage(deps)(job, ctx, dir, persist);
+        } else if (stage === "S6") {
+          cancelled = await createS6Stage(deps)(job, ctx, dir, persist);
         } else {
           cancelled = await createS2Stage(deps)(job, ctx, dir, persist);
         }

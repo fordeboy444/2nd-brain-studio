@@ -587,6 +587,25 @@ function paragraphsOf(body: string): string[] {
  * paragraphs with no heading and no link. Frontmatter and `## Sources` belong
  * to code, never to the model.
  */
+/**
+ * The shared page-body rules. Returns the first violated rule, or null.
+ *
+ * S4b and S6 both validate model prose with this one predicate, so the two
+ * stages cannot drift apart.
+ */
+export function pageBodyIssue(raw: string): string | null {
+  const body = raw.trim();
+  const count = paragraphsOf(body).length;
+  if (count < 2 || count > 4) return "a page body must be 2 to 4 paragraphs";
+  if (/^#{1,6}\s/m.test(body)) {
+    return "a page body must not contain a markdown heading";
+  }
+  if (body.includes("](") || body.includes("[[")) {
+    return "a page body must not contain a markdown link";
+  }
+  return null;
+}
+
 export const PageBodiesSchema = z
   .array(
     z.object({
@@ -596,28 +615,9 @@ export const PageBodiesSchema = z
   )
   .superRefine((items, ctx) => {
     items.forEach((item, index) => {
-      const body = item.body.trim();
-      const count = paragraphsOf(body).length;
-      if (count < 2 || count > 4) {
-        ctx.addIssue({
-          code: "custom",
-          path: [index, "body"],
-          message: "a page body must be 2 to 4 paragraphs",
-        });
-      }
-      if (/^#{1,6}\s/m.test(body)) {
-        ctx.addIssue({
-          code: "custom",
-          path: [index, "body"],
-          message: "a page body must not contain a markdown heading",
-        });
-      }
-      if (body.includes("](") || body.includes("[[")) {
-        ctx.addIssue({
-          code: "custom",
-          path: [index, "body"],
-          message: "a page body must not contain a markdown link",
-        });
+      const issue = pageBodyIssue(item.body);
+      if (issue !== null) {
+        ctx.addIssue({ code: "custom", path: [index, "body"], message: issue });
       }
     });
   })
