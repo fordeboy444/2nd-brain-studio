@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,7 @@ async function reload() {
     createVault: registry.createVault,
     vaultDirPath: registry.vaultDirPath,
     readJob: store.readJob,
+    writeJob: store.writeJob,
     listJobs: store.listJobs,
     appendEvent: store.appendEvent,
   };
@@ -250,6 +251,164 @@ describe("GET /api/jobs/:id/events", () => {
     const text = new TextDecoder().decode(chunk.value);
     expect(text).toContain("id: 1");
     expect(text).toContain("event: stage");
+  });
+});
+
+describe("GET /api/jobs/:id/artifacts", () => {
+  async function createdJob(routes: Routes, vaultId: string): Promise<string> {
+    const res = await routes.jobs.request("/", jsonInit(validBody(vaultId)));
+    return ((await res.json()) as { id: string }).id;
+  }
+
+  it("returns the enumerate artifact and 404s when it is missing", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await createdJob(routes, vaultId);
+
+    const missing = await routes.jobs.request(`/${id}/artifacts?kind=enumerate`);
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { error: string }).error).toBe("artifact_not_found");
+
+    const dir = join(vaultDir, ".okf", "jobs", id);
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, "01-enumerate.json"),
+      JSON.stringify({ count: 1, candidates: [{ youtubeId: "abc" }] }),
+      "utf8",
+    );
+
+    const res = await routes.jobs.request(`/${id}/artifacts?kind=enumerate`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type") ?? "").toContain("application/json");
+    expect(await res.json()).toEqual({ count: 1, candidates: [{ youtubeId: "abc" }] });
+  });
+
+  it("returns a raw capture in markdown and rejects a traversal slug", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await createdJob(routes, vaultId);
+
+    await writeFile(
+      join(vaultDir, "raw", "alpha.md"),
+      "---\ntype: raw-transcript\n---\n\n## Transcript\n\nbody\n",
+      "utf8",
+    );
+
+    const ok = await routes.jobs.request(`/${id}/artifacts?kind=raw&slug=alpha`);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type") ?? "").toContain("text/markdown");
+    expect(await ok.text()).toContain("## Transcript");
+
+    const traversal = await routes.jobs.request(
+      `/${id}/artifacts?kind=raw&slug=../vaults.json`,
+    );
+    expect(traversal.status).toBe(400);
+    expect(((await traversal.json()) as { error: string }).error).toBe("invalid_slug");
+
+    const uppercase = await routes.jobs.request(`/${id}/artifacts?kind=raw&slug=Alpha`);
+    expect(uppercase.status).toBe(400);
+
+    const absent = await routes.jobs.request(`/${id}/artifacts?kind=raw&slug=beta`);
+    expect(absent.status).toBe(404);
+    expect(((await absent.json()) as { error: string }).error).toBe("artifact_not_found");
+  });
+
+  it("404s a slug whose resolved path escapes the vault through a symlink", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await createdJob(routes, vaultId);
+
+    const outside = join(root, "outside.md");
+    await writeFile(outside, "not part of the vault\n", "utf8");
+    await symlink(outside, join(vaultDir, "raw", "escape.md"));
+
+    const res = await routes.jobs.request(`/${id}/artifacts?kind=raw&slug=escape`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type") ?? "").toContain("application/json");
+    expect(((await res.json()) as { error: string }).error).toBe("artifact_not_found");
+  });
+
+  it("returns the stored skipped array", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await createdJob(routes, vaultId);
+
+    const clean = await routes.jobs.request(`/${id}/artifacts?kind=skipped`);
+    expect(await clean.json()).toEqual({ skipped: [] });
+
+    const job = await routes.readJob(vaultDir, id);
+    job.skipped.push({
+      slug: "alpha",
+      youtubeId: "abc",
+      stage: "S1",
+      reason: "no_captions",
+    });
+    await routes.writeJob(vaultDir, job);
+
+    const stored = await routes.jobs.request(`/${id}/artifacts?kind=skipped`);
+    const body = (await stored.json()) as { skipped: Array<{ slug: string }> };
+    expect(body.skipped.map((unit) => unit.slug)).toEqual(["alpha"]);
+  });
+
+  it("400s an unknown kind and 404s an unknown job", async () => {
+    const routes = await reload();
+    const { vaultId } = await seeded(routes);
+    const id = await createdJob(routes, vaultId);
+
+    const badKind = await routes.jobs.request(`/${id}/artifacts?kind=all`);
+    expect(badKind.status).toBe(400);
+    expect(((await badKind.json()) as { error: string }).error).toBe("invalid_body");
+
+    const noKind = await routes.jobs.request(`/${id}/artifacts`);
+    expect(noKind.status).toBe(400);
+
+    const unknown = await routes.jobs.request("/j_20260101_abcdef/artifacts?kind=skipped");
+    expect(unknown.status).toBe(404);
+    expect(((await unknown.json()) as { error: string }).error).toBe("job_not_found");
+  });
+});
+
+describe("GET /api/jobs filters", () => {
+  it("filters by vaultId", async () => {
+    const routes = await reload();
+    const demo = await routes.createVault({ name: "Demo" });
+    await routes.createVault({ name: "Other" });
+
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(demo.id)))
+    ).json()) as { id: string };
+
+    const other = (await (await routes.jobs.request("/?vaultId=other")).json()) as {
+      jobs: unknown[];
+    };
+    expect(other.jobs).toHaveLength(0);
+
+    const own = (await (await routes.jobs.request(`/?vaultId=${demo.id}`)).json()) as {
+      jobs: Array<{ id: string }>;
+    };
+    expect(own.jobs.map((job) => job.id)).toEqual([created.id]);
+  });
+
+  it("filters by status and rejects an unknown status", async () => {
+    const routes = await reload();
+    const { vaultId } = await seeded(routes);
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+    ).json()) as { id: string };
+
+    const queued = (await (await routes.jobs.request("/?status=queued")).json()) as {
+      jobs: Array<{ id: string }>;
+    };
+    expect(queued.jobs.map((job) => job.id)).toEqual([created.id]);
+
+    const completed = (await (await routes.jobs.request("/?status=completed")).json()) as {
+      jobs: unknown[];
+    };
+    expect(completed.jobs).toHaveLength(0);
+
+    const bogus = await routes.jobs.request("/?status=bogus");
+    expect(bogus.status).toBe(400);
+    expect(((await bogus.json()) as { error: string }).error).toBe("invalid_body");
   });
 });
 

@@ -11,6 +11,8 @@
  * The route never builds a filesystem path from a request value. A job id is
  * validated by `isJobId` and the vault directory comes from the registry.
  */
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -29,6 +31,7 @@ import {
   writeJob,
 } from "../jobs/store.js";
 import type { JobRecord, JobSettings, JobStatus } from "../jobs/types.js";
+import { PathJailError, resolveInVault } from "../paths/jail.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 
 export const jobs = new Hono();
@@ -61,6 +64,16 @@ const CreateJobBody = z.object({
 });
 
 const TERMINAL: ReadonlySet<JobStatus> = new Set(["completed", "failed", "cancelled"]);
+
+/** The three stage artifacts a job exposes. */
+const ARTIFACT_KINDS: ReadonlySet<string> = new Set(["enumerate", "raw", "skipped"]);
+
+/**
+ * A raw capture slug. Deliberately strict: no separator, no parent segment, no
+ * uppercase, so the value can only ever name one file directly under `raw/`
+ * (T-03-09). The jail re-checks the resolved path anyway.
+ */
+const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Every status a job can hold; an unknown query value is a 400, not a filter. */
 const STATUSES: ReadonlySet<string> = new Set([
@@ -216,6 +229,68 @@ jobs.get("/:id/events", async (c) => {
   }
   const lastSeq = parseLastEventId(c.req.header("last-event-id"));
   return streamJobEvents(c, jobDir(found.vaultDir, id), lastSeq, sseOptions);
+});
+
+/**
+ * One stage artifact: the enumerate JSON, one raw markdown capture, or the
+ * `skipped[]` array. The raw path is the only request-driven filesystem read,
+ * and it goes through the jail after the strict slug check.
+ */
+jobs.get("/:id/artifacts", async (c) => {
+  const id = c.req.param("id");
+  const found = await findJob(id);
+  if (found === null) {
+    return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
+  }
+
+  const kind = c.req.query("kind");
+  if (kind === undefined || !ARTIFACT_KINDS.has(kind)) {
+    return c.json(
+      { error: "invalid_body", message: "`kind` must be enumerate, raw or skipped." },
+      400,
+    );
+  }
+
+  if (kind === "skipped") {
+    return c.json({ skipped: found.job.skipped });
+  }
+
+  if (kind === "enumerate") {
+    try {
+      const text = await readFile(join(jobDir(found.vaultDir, id), "01-enumerate.json"), "utf8");
+      return c.body(text, 200, { "content-type": "application/json" });
+    } catch {
+      return c.json(
+        { error: "artifact_not_found", message: "The enumerate artifact does not exist." },
+        404,
+      );
+    }
+  }
+
+  const slug = c.req.query("slug");
+  if (slug === undefined || !SLUG_RE.test(slug)) {
+    return c.json(
+      { error: "invalid_slug", message: "`slug` must match ^[a-z0-9][a-z0-9-]*$." },
+      400,
+    );
+  }
+
+  try {
+    const { absPath } = await resolveInVault(found.vaultDir, `raw/${slug}.md`);
+    const text = await readFile(absPath, "utf8");
+    return c.body(text, 200, { "content-type": "text/markdown; charset=utf-8" });
+  } catch (error) {
+    if (
+      error instanceof PathJailError ||
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return c.json(
+        { error: "artifact_not_found", message: "The raw capture does not exist." },
+        404,
+      );
+    }
+    throw error;
+  }
 });
 
 jobs.get("/:id", async (c) => {
