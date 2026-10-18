@@ -1,14 +1,20 @@
 import { create } from "zustand";
 import type { Vault } from "./lib/api.js";
 import {
+  cancelJob as apiCancelJob,
   ConflictError,
   createVault as apiCreateVault,
   deleteVault as apiDeleteVault,
   getHealth,
+  getJob as apiGetJob,
+  listJobs as apiListJobs,
   listVaults as apiListVaults,
   readFile,
   writeFile,
   type HealthPayload,
+  type JobStage,
+  type JobSummary,
+  type SkippedUnit,
 } from "./lib/api.js";
 import { readLastTab, writeLastTab, type RightPanelTab } from "./components/rightPanelTab.js";
 import { dirOf, EMPTY_TREE, type TreeState } from "./lib/tree/lazyTree.js";
@@ -84,9 +90,69 @@ export interface BacklinkRef {
   linkText?: string;
 }
 
-/** The overlays the shell reserves a slot for. Everything but `settings` is
- *  unpopulated this phase and must resolve to no content, not to a crash. */
+/** The overlays the shell reserves a slot for. Everything but `settings` and
+ *  `jobs` is unpopulated this phase and must resolve to no content, not to a
+ *  crash. */
 export type OverlayName = "none" | "settings" | "graph" | "search" | "jobs";
+
+/* -------------------------------------------------------------------------
+   Jobs slice
+   ------------------------------------------------------------------------- */
+
+/**
+ * The SSE connection's state, as the detail header reports it.
+ *
+ * `idle` means there is no source (nothing selected, or the job finished);
+ * `open` means one is connected; `reconnecting` means the browser's
+ * `EventSource` reported an error and is retrying on the same URL with
+ * `Last-Event-ID`.
+ */
+export type SseState = "idle" | "open" | "reconnecting";
+
+/** One row of the live unit feed. `seq` is the dedupe key for replay + live. */
+export interface UnitFeedRow {
+  seq: number;
+  slug: string;
+  stage: string;
+  status: string;
+  reason?: string;
+  detail?: string;
+  tier?: number;
+}
+
+/** The feed keeps the tail of a long job; the DOM never grows without bound. */
+export const UNIT_FEED_LIMIT = 500;
+
+/** The two implemented stages per job kind. S2-S6 are declared, not executable. */
+export const LIVE_STAGES: Record<"youtube" | "web", readonly JobStage[]> = {
+  youtube: ["S0", "S1"],
+  web: ["S0", "S1w"],
+};
+
+/** Where the pointer says the job is: earlier live stages are done, one is active. */
+export function seedStages(job: JobSummary): {
+  stagesDone: JobStage[];
+  activeStage: JobStage | null;
+} {
+  const table = LIVE_STAGES[job.kind];
+  if (job.stage === "done") return { stagesDone: [...table], activeStage: null };
+  if (job.stage === undefined) return { stagesDone: [], activeStage: null };
+  const index = table.indexOf(job.stage);
+  if (index < 0) return { stagesDone: [], activeStage: null };
+  return {
+    stagesDone: table.slice(0, index),
+    activeStage: job.stage,
+  };
+}
+
+/**
+ * The stage named by an event payload, or null when the payload is not one of
+ * the two live stages. A future stage name must not enter the stepper as an
+ * unknown dot; it is ignored here and the stepper keeps its current truth.
+ */
+function liveStageOf(value: unknown): JobStage | null {
+  return value === "S0" || value === "S1" || value === "S1w" ? value : null;
+}
 
 export interface AppState {
   // Panel model.
@@ -175,6 +241,32 @@ export interface AppState {
   loadVaults: () => Promise<void>;
   createVault: (name: string) => Promise<Vault>;
   deleteVault: (vaultId: string, confirmName: string) => Promise<void>;
+
+  // Jobs slice. The list polls; the detail owns one SSE source. Both write the
+  // same `jobs` array keyed by id, so a job can never appear twice.
+  jobs: JobSummary[];
+  jobsLoading: boolean;
+  jobsError: string | null;
+  selectedJobId: string | null;
+  selectedJob: JobSummary | null;
+  unitFeed: UnitFeedRow[];
+  /** The highest `seq` applied. Replay frames at or below it are ignored. */
+  lastSeq: number;
+  sseState: SseState;
+  /** Live stages whose `stage` event completed, in arrival order. */
+  stagesDone: JobStage[];
+  /** The live stage the job is in, or null when nothing is running. */
+  activeStage: JobStage | null;
+  /** True once more than `UNIT_FEED_LIMIT` rows have arrived. */
+  feedCapped: boolean;
+  loadJobs: () => Promise<void>;
+  selectJob: (id: string) => Promise<void>;
+  /**
+   * Apply one SSE frame. `seq` is the dedupe key: a replayed frame at or below
+   * the last applied seq is ignored, so reconnect cannot duplicate a row.
+   */
+  applyJobEvent: (seq: number, type: string, data: Record<string, unknown>) => void;
+  cancelSelectedJob: () => Promise<void>;
 }
 
 /** Is there anything to save? Only meaningful once the read has landed: a tab
@@ -542,6 +634,189 @@ export const useStore = create<AppState>((set, get) => {
             }
           : {}),
       }));
+    },
+
+    /* ---- Jobs slice ---- */
+
+    jobs: [],
+    jobsLoading: false,
+    jobsError: null,
+    selectedJobId: null,
+    selectedJob: null,
+    unitFeed: [],
+    lastSeq: 0,
+    sseState: "idle",
+    stagesDone: [],
+    activeStage: null,
+    feedCapped: false,
+
+    /**
+     * Poll the list. A failure keeps the previous rows and records the error,
+     * so the screen can say "Checking…" or show a banner without ever blanking
+     * the list the user is reading.
+     */
+    loadJobs: async () => {
+      set({ jobsLoading: true, jobsError: null });
+      try {
+        const { jobs } = await apiListJobs();
+        set((s) => {
+          // Dedupe by id, first occurrence's position wins. The route already
+          // returns unique ids; this keeps the invariant local to the store.
+          const byId = new Map<string, JobSummary>();
+          for (const job of jobs) byId.set(job.id, job);
+          const selected = s.selectedJob;
+          const merged = [...byId.values()].map((job) =>
+            // The stream may be ahead of the poll. For the SAME id the stream's
+            // fields win, because they are the newer observation.
+            selected !== null && selected.id === job.id ? { ...job, ...selected } : job,
+          );
+          const selectedJob =
+            selected !== null
+              ? (merged.find((job) => job.id === selected.id) ?? selected)
+              : null;
+          return { jobs: merged, selectedJob, jobsLoading: false };
+        });
+      } catch (e) {
+        set({ jobsError: (e as Error).message, jobsLoading: false });
+      }
+    },
+
+    /**
+     * Select one job. The feed and the seq cursor belong to the selection, so
+     * they reset here: a row from the previous job must never appear under the
+     * new one, and `lastSeq` must not suppress the new job's first frames.
+     */
+    selectJob: async (id) => {
+      set({
+        selectedJobId: id,
+        selectedJob: null,
+        unitFeed: [],
+        lastSeq: 0,
+        sseState: "idle",
+        stagesDone: [],
+        activeStage: null,
+        feedCapped: false,
+      });
+      try {
+        const job = await apiGetJob(id);
+        // A slower response for a job the user already left must not win.
+        if (get().selectedJobId !== id) return;
+        const seeded = seedStages(job);
+        set((s) => ({
+          selectedJob: job,
+          stagesDone: seeded.stagesDone,
+          activeStage: seeded.activeStage,
+          jobs: s.jobs.map((row) => (row.id === id ? { ...row, ...job } : row)),
+        }));
+      } catch (e) {
+        if (get().selectedJobId !== id) return;
+        set({ jobsError: (e as Error).message, selectedJob: null });
+      }
+    },
+
+    applyJobEvent: (seq, type, data) => {
+      const s = get();
+      // Replay and live frames share one cursor. `<=` makes a replayed frame
+      // idempotent and turns two copies of one event into one row.
+      if (!Number.isFinite(seq) || seq <= s.lastSeq) return;
+
+      let selectedJob = s.selectedJob;
+      let stagesDone = s.stagesDone;
+      let activeStage = s.activeStage;
+      let unitFeed = s.unitFeed;
+      let feedCapped = s.feedCapped;
+      let sseState = s.sseState;
+
+      if (type === "job") {
+        const patch = (
+          typeof data.job === "object" && data.job !== null ? data.job : data
+        ) as Partial<JobSummary>;
+        if (selectedJob !== null) {
+          selectedJob = { ...selectedJob, ...patch };
+          const seeded = seedStages(selectedJob);
+          stagesDone = seeded.stagesDone;
+          activeStage = seeded.activeStage;
+        }
+      } else if (type === "stage") {
+        const stage = liveStageOf(data.stage);
+        if (stage !== null) {
+          if (data.status === "started") {
+            activeStage = stage;
+            stagesDone = stagesDone.filter((done) => done !== stage);
+            if (selectedJob !== null) selectedJob = { ...selectedJob, stage };
+          } else if (data.status === "completed") {
+            if (!stagesDone.includes(stage)) stagesDone = [...stagesDone, stage];
+            if (activeStage === stage) activeStage = null;
+          }
+        }
+      } else if (type === "unit") {
+        const row: UnitFeedRow = {
+          seq,
+          slug: typeof data.slug === "string" ? data.slug : "",
+          stage: typeof data.stage === "string" ? data.stage : "",
+          status: typeof data.status === "string" ? data.status : "",
+          ...(typeof data.reason === "string" ? { reason: data.reason } : {}),
+          ...(typeof data.detail === "string" ? { detail: data.detail } : {}),
+          ...(typeof data.tier === "number" ? { tier: data.tier } : {}),
+        };
+        const next = [...unitFeed, row];
+        if (next.length > UNIT_FEED_LIMIT) {
+          unitFeed = next.slice(next.length - UNIT_FEED_LIMIT);
+          feedCapped = true;
+        } else {
+          unitFeed = next;
+        }
+      } else if (type === "done") {
+        activeStage = null;
+        sseState = "idle";
+        const status = data.status;
+        if (
+          selectedJob !== null &&
+          (status === "completed" || status === "failed" || status === "cancelled")
+        ) {
+          selectedJob = { ...selectedJob, status, stage: "done" };
+          if (status === "completed") stagesDone = [...LIVE_STAGES[selectedJob.kind]];
+        }
+      }
+
+      // The list and the detail are one job by id: a stream update is reflected
+      // in the row the poll last returned instead of creating a second entry.
+      const selected = selectedJob;
+      const jobs =
+        selected !== null && s.selectedJobId === selected.id
+          ? s.jobs.map((row) => (row.id === selected.id ? { ...row, ...selected } : row))
+          : s.jobs;
+
+      set({
+        lastSeq: seq,
+        selectedJob,
+        stagesDone,
+        activeStage,
+        unitFeed,
+        feedCapped,
+        sseState,
+        jobs,
+      });
+    },
+
+    cancelSelectedJob: async () => {
+      const id = get().selectedJobId;
+      if (id === null) return;
+      try {
+        const res = await apiCancelJob(id);
+        set((s) => ({
+          selectedJob:
+            s.selectedJob !== null && s.selectedJob.id === id
+              ? { ...s.selectedJob, status: res.status }
+              : s.selectedJob,
+          jobs: s.jobs.map((job) => (job.id === id ? { ...job, status: res.status } : job)),
+        }));
+      } catch (e) {
+        set({ jobsError: (e as Error).message });
+      }
+      // The runner's own record is the authority on the status that follows the
+      // cancel flag, so refresh the list rather than inventing one here.
+      await get().loadJobs();
     },
   };
 });

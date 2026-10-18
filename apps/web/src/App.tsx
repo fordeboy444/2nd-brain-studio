@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Toasts } from "./components/Toasts.js";
 import { Browse } from "./screens/Browse.js";
+import { Jobs } from "./screens/Jobs.js";
 import { Settings } from "./screens/Settings.js";
 import { useStore } from "./store.js";
 
@@ -19,10 +20,9 @@ import { useStore } from "./store.js";
  * is the part that is genuinely outside the grid: the overlay slot has to cover
  * it, and the toast viewport has to outlive it.
  *
- * The overlay slot is structural this phase: the element is rendered for any
- * open overlay, `settings` is the only one with a screen behind it, and the
- * reserved values (`graph`, `search`, `jobs`) resolve to no content rather than
- * a crash.
+ * The overlay slot is structural: the element is rendered for any open overlay,
+ * `settings` and `jobs` have a screen behind them, and the still-reserved values
+ * (`graph`, `search`) resolve to no content rather than a crash.
  */
 export function App() {
   const loadHealth = useStore((s) => s.loadHealth);
@@ -42,6 +42,7 @@ export function App() {
       {overlayOpen && activeOverlay !== "none" && (
         <div className="overlay-slot" data-overlay={activeOverlay}>
           {activeOverlay === "settings" && <Settings />}
+          {activeOverlay === "jobs" && <Jobs />}
         </div>
       )}
 

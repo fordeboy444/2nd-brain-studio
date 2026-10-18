@@ -93,6 +93,83 @@ export function listVaults(): Promise<Vault[]> {
   return request<Vault[]>("/vaults");
 }
 
+/* -------------------------------------------------------------------------
+   Jobs (Phase 3)
+   ------------------------------------------------------------------------- */
+
+export type JobKind = "youtube" | "web";
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+/** `done` is terminal; every other value names the stage to run next. */
+export type JobStage = "S0" | "S1" | "S1w" | "done";
+
+/** One unit that did not produce a capture, as the server records it. */
+export interface SkippedUnit {
+  slug: string;
+  youtubeId?: string;
+  stage: "S0" | "S1" | "S1w";
+  reason: string;
+  detail?: string;
+}
+
+/**
+ * A job record as the list and detail routes return it.
+ *
+ * The list route returns the full record; the fields here are the ones the
+ * screen reads. Settings are deliberately absent: the Jobs screen has no use
+ * for them, and the API response is not a place to widen the client's surface.
+ */
+export interface JobSummary {
+  id: string;
+  vaultId: string;
+  kind: JobKind;
+  status: JobStatus;
+  stage?: JobStage;
+  input: { url: string };
+  createdAt: string;
+  updatedAt: string;
+  progress: { done: number; total: number };
+  skipped: SkippedUnit[];
+  error: string | null;
+  cancelRequested: boolean;
+}
+
+export interface JobListQuery {
+  vaultId?: string;
+  status?: JobStatus;
+}
+
+/**
+ * GET /api/jobs — every job across every registered vault, newest first.
+ * Filters are omitted rather than sent empty, so the route's defaults apply.
+ */
+export function listJobs(params: JobListQuery = {}): Promise<{ jobs: JobSummary[] }> {
+  const q = new URLSearchParams();
+  if (params.vaultId !== undefined && params.vaultId !== "") q.set("vaultId", params.vaultId);
+  if (params.status !== undefined) q.set("status", params.status);
+  const suffix = q.toString();
+  return request<{ jobs: JobSummary[] }>(`/jobs${suffix === "" ? "" : `?${suffix}`}`);
+}
+
+/** GET /api/jobs/:id — one job record. */
+export function getJob(id: string): Promise<JobSummary> {
+  return request<JobSummary>(`/jobs/${encodeURIComponent(id)}`);
+}
+
+/** DELETE /api/jobs/:id — idempotent cancel; 202 with the current status. */
+export function cancelJob(id: string): Promise<{ id: string; status: JobStatus }> {
+  return request<{ id: string; status: JobStatus }>(`/jobs/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * The SSE URL for one job. The ONLY place this path is built, so the screen
+ * cannot drift from the route and `EventSource` never sees an encoded twice.
+ */
+export function jobEventsUrl(id: string): string {
+  return `/api/jobs/${encodeURIComponent(id)}/events`;
+}
+
 /** POST /api/vaults — creates a vault; name is trimmed. Resolves to the record. */
 export function createVault(name: string): Promise<Vault> {
   return request<Vault>("/vaults", {

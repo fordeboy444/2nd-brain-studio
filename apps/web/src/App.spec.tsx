@@ -32,6 +32,17 @@ const INITIAL: Partial<AppState> = {
   rightPanelTab: "backlinks",
   activeOverlay: "none",
   overlayOpen: false,
+  jobs: [],
+  jobsLoading: false,
+  jobsError: null,
+  selectedJobId: null,
+  selectedJob: null,
+  unitFeed: [],
+  lastSeq: 0,
+  sseState: "idle",
+  stagesDone: [],
+  activeStage: null,
+  feedCapped: false,
 };
 
 async function mount(): Promise<{
@@ -71,6 +82,7 @@ function stubFetch() {
       });
     if (url.includes("/api/vaults/v1/tree")) return body({ dir: ".", entries: [] });
     if (url.includes("/api/vaults")) return body([]);
+    if (url.includes("/api/jobs")) return body({ jobs: [] });
     if (url.includes("/api/health")) {
       return body({
         ok: true,
@@ -164,7 +176,7 @@ it("closes an open panel in one press of the header's panel button", async () =>
   expect(host.querySelector(".right-panel")).toBeNull();
 });
 
-it("renders the settings overlay, and the reserved overlays as an empty slot", async () => {
+it("renders the settings and jobs overlays, and the reserved ones as an empty slot", async () => {
   const { host, render } = await mount();
   await render(() => {
     useStore.setState({
@@ -184,10 +196,18 @@ it("renders the settings overlay, and the reserved overlays as an empty slot", a
     "Ollama API key is not configured. Set OLLAMA_API_KEY and restart.",
   );
 
+  // `jobs` is a real screen now, and only its own overlay value renders it.
+  await render(() => useStore.getState().openOverlay("jobs"));
+  expect(
+    host.querySelector('.overlay-slot[data-overlay="jobs"] .jobs-screen'),
+  ).toBeTruthy();
+
+  // The still-reserved values stay empty, and they never mount the Jobs screen.
   await render(() => useStore.getState().openOverlay("graph"));
   const slot = host.querySelector('.overlay-slot[data-overlay="graph"]');
   expect(slot).toBeTruthy();
   expect(slot?.textContent?.trim()).toBe("");
+  expect(host.querySelector(".jobs-screen")).toBeNull();
 
   await render(() => useStore.getState().closeOverlay());
   expect(host.querySelector(".overlay-slot")).toBeNull();
