@@ -168,6 +168,11 @@ function liveStageOf(value: unknown): JobStage | null {
   return value === "S0" || value === "S1" || value === "S1w" ? value : null;
 }
 
+/** A terminal status is final; no later snapshot may move a job out of it. */
+function isTerminalStatus(status: JobSummary["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 export interface AppState {
   // Panel model.
   sidebar: "tree" | "vaults";
@@ -870,21 +875,34 @@ export const useStore = create<AppState>((set, get) => {
           // `cancelSelectedJob` fetches on purpose. This object carries no
           // stream-only fields, so no fields are merged back.
           const selected = s.selectedJob;
-          const selectedJob =
-            selected !== null
-              ? (merged.find((job) => job.id === selected.id) ?? selected)
-              : null;
+          if (selected === null) {
+            return { jobs: merged, selectedJob: null, jobsLoading: false };
+          }
+          const fromPoll = merged.find((job) => job.id === selected.id);
+          // A poll request can read an older snapshot than the stream already
+          // delivered. While the stream is open the stored record wins. A
+          // terminal status is also final: a slow poll must never revive a
+          // finished job, because that reopens an `EventSource` that tails
+          // forever. Otherwise the poll is the fallback truth.
+          const keepStored =
+            fromPoll === undefined ||
+            s.sseState === "open" ||
+            (isTerminalStatus(selected.status) && !isTerminalStatus(fromPoll.status));
+          const selectedJob = keepStored ? selected : fromPoll;
           // The stepper is derived from the job record, so a poll that moves the
           // selected job to a terminal state must reseed it too. Without this,
           // a job that ends while the stream is down shows "Completed" beside a
           // stage that is still marked active.
-          if (selectedJob === null) {
-            return { jobs: merged, selectedJob, jobsLoading: false };
-          }
-          const statusChanged = selected === null || selected.status !== selectedJob.status;
+          const statusChanged = selected.status !== selectedJob.status;
           const seeded = statusChanged ? seedStages(selectedJob) : null;
+          // The list and the detail are one job by id: a row kept from the
+          // stream must not disagree with the detail that won above.
+          const nextJobs =
+            keepStored && fromPoll !== undefined
+              ? merged.map((row) => (row.id === selected.id ? selected : row))
+              : merged;
           return {
-            jobs: merged,
+            jobs: nextJobs,
             selectedJob,
             jobsLoading: false,
             ...(seeded ?? {}),

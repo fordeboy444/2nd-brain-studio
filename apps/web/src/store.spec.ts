@@ -178,6 +178,49 @@ it("reseeds the stepper when a poll ends the selected job while the stream is do
   expect(useStore.getState().stagesDone).toEqual(["S0", "S1"]);
 });
 
+it("does not let a slow poll reopen a job the stream already finished", async () => {
+  const completed = makeJob({ status: "completed", stage: "done" });
+  const stale = makeJob({ status: "running", stage: "S1" });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: completed,
+    jobs: [completed],
+    sseState: "open",
+    stagesDone: ["S0", "S1"],
+    activeStage: null,
+  });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [stale] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  expect(useStore.getState().selectedJob?.status).toBe("completed");
+  expect(useStore.getState().activeStage).toBeNull();
+  // The list and the detail are one job: the kept row shows the stream's truth.
+  expect(useStore.getState().jobs[0]?.status).toBe("completed");
+});
+
+it("never moves a terminal job back to a non-terminal status", async () => {
+  const cancelled = makeJob({ status: "cancelled", stage: "done" });
+  const stale = makeJob({ status: "running", stage: "S1" });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: cancelled,
+    jobs: [cancelled],
+    sseState: "idle",
+    activeStage: null,
+  });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [stale] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  expect(useStore.getState().selectedJob?.status).toBe("cancelled");
+  expect(useStore.getState().jobs[0]?.status).toBe("cancelled");
+});
+
 const SETTINGS_PAYLOAD = {
   settings: {
     llm: { model: "m", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },
