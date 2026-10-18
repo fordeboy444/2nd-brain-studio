@@ -17,6 +17,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
+import { EnumerateError } from "../ingest/enumerate.js";
+import {
+  previewJob,
+  type PreviewInput,
+  type PreviewResult,
+} from "../ingest/preview.js";
 import { InvalidSourceUrlError, normalizeChannelUrl } from "../ingest/urls.js";
 import { getJobQueue } from "../jobs/bootstrap.js";
 import { parseLastEventId, streamJobEvents } from "../jobs/events.js";
@@ -54,6 +60,20 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 const CreateJobBody = z.object({
   vaultId: z.string().min(1).max(128),
+  kind: z.literal("youtube"),
+  channelUrl: z.string().min(1).max(2048),
+  maxVideos: z.number().int().min(1).max(2000),
+  dateFrom: z.string().regex(DATE_RE).optional(),
+  dateTo: z.string().regex(DATE_RE).optional(),
+  minDurationSec: z.number().int().min(0).max(86400).optional(),
+  language: z.string().min(2).max(16).optional(),
+});
+
+/**
+ * POST /api/jobs/preview body: the create body without `vaultId`, because a
+ * preview writes nothing and therefore needs no vault.
+ */
+const PreviewBody = z.object({
   kind: z.literal("youtube"),
   channelUrl: z.string().min(1).max(2048),
   maxVideos: z.number().int().min(1).max(2000),
@@ -122,6 +142,89 @@ async function findJob(id: string): Promise<FoundJob | null> {
   return null;
 }
 
+/** The preview form mapped onto `previewJob`'s input shape. */
+function toPreviewInput(parsed: z.infer<typeof PreviewBody>): PreviewInput {
+  return {
+    channelUrl: parsed.channelUrl,
+    maxVideos: parsed.maxVideos,
+    ...(parsed.dateFrom !== undefined ? { dateFrom: parsed.dateFrom } : {}),
+    ...(parsed.dateTo !== undefined ? { dateTo: parsed.dateTo } : {}),
+    ...(parsed.minDurationSec !== undefined
+      ? { minDurationSec: parsed.minDurationSec }
+      : {}),
+    ...(parsed.language !== undefined ? { language: parsed.language } : {}),
+  };
+}
+
+/** Map an enumeration failure onto the route contract. */
+function previewFailure(
+  error: unknown,
+): { status: 400 | 502 | 504; error: string; message: string } | null {
+  if (error instanceof InvalidSourceUrlError) {
+    return { status: 400, error: "invalid_source_url", message: error.message };
+  }
+  if (error instanceof EnumerateError) {
+    if (error.code === "timeout") {
+      return {
+        status: 504,
+        error: "enumerate_timeout",
+        message: "Channel enumeration timed out.",
+      };
+    }
+    return {
+      status: 502,
+      error: "enumerate_failed",
+      message: "Channel enumeration failed.",
+    };
+  }
+  return null;
+}
+
+/**
+ * GET /preview is not part of the contract. Answering it explicitly (rather
+ * than letting the literal fall through to `GET /:id`) keeps `/preview` from
+ * ever being treated as a job id.
+ */
+jobs.get("/preview", (c) => {
+  c.header("Allow", "POST");
+  return c.json(
+    { error: "method_not_allowed", message: "Use POST /api/jobs/preview." },
+    405,
+  );
+});
+
+/**
+ * The dry run: enumerate, filter and estimate, with zero writes. Registering
+ * the literal route before `/:id` is what keeps the path unambiguous.
+ */
+jobs.post("/preview", async (c) => {
+  let parsed: z.infer<typeof PreviewBody>;
+  try {
+    const body = await c.req.json();
+    parsed = PreviewBody.parse(body);
+  } catch {
+    return c.json(
+      {
+        error: "invalid_body",
+        message:
+          "Request body must be JSON with kind:\"youtube\", channelUrl and maxVideos (1..2000).",
+      },
+      400,
+    );
+  }
+
+  try {
+    const preview = await previewJob(toPreviewInput(parsed));
+    return c.json(preview, 200);
+  } catch (error) {
+    const failure = previewFailure(error);
+    if (failure !== null) {
+      return c.json({ error: failure.error, message: failure.message }, failure.status);
+    }
+    throw error;
+  }
+});
+
 jobs.post("/", async (c) => {
   let parsed: z.infer<typeof CreateJobBody>;
   try {
@@ -153,6 +256,30 @@ jobs.post("/", async (c) => {
       return c.json({ error: "invalid_source_url", message: error.message }, 400);
     }
     throw error;
+  }
+
+  // Enumeration at commit time. The server runs the same preview path instead
+  // of trusting a client-supplied selected count, so an empty selection is
+  // refused before any job record exists. This duplicates one S0 call per
+  // commit; a spoofable count is the alternative, and that is not acceptable.
+  let preview: PreviewResult;
+  try {
+    preview = await previewJob(toPreviewInput(parsed));
+  } catch (error) {
+    const failure = previewFailure(error);
+    if (failure !== null) {
+      return c.json({ error: failure.error, message: failure.message }, failure.status);
+    }
+    throw error;
+  }
+  if (preview.selected === 0) {
+    return c.json(
+      {
+        error: "empty_selection",
+        message: "No videos matched the filters; nothing was queued.",
+      },
+      400,
+    );
   }
 
   const filters: JobSettings["filters"] = {};

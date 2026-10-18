@@ -39,7 +39,20 @@ async function load() {
   const registry = await import("../vaults/registry.js");
   const store = await import("./store.js");
   const bootstrap = await import("./bootstrap.js");
-  return { registry, store, bootstrap };
+  const runner = await import("./runner.js");
+  return { registry, store, bootstrap, runner };
+}
+
+/**
+ * Boot resume is about the queue, not ingestion. Inject the inert adapter set
+ * so a resumed job never spawns yt-dlp; the real S0 wiring is covered by
+ * ingest/enumerate.spec.ts.
+ */
+function inertQueue(
+  bootstrap: typeof import("./bootstrap.js"),
+  runner: typeof import("./runner.js"),
+) {
+  return bootstrap.configureJobQueue(runner.createDefaultStageDeps());
 }
 
 async function makeVault(id: string): Promise<string> {
@@ -75,7 +88,7 @@ function job(
 
 describe("resumeJobs (PIPE-11)", () => {
   it("re-enqueues queued and running jobs in createdAt order across vaults", async () => {
-    const { registry, store, bootstrap } = await load();
+    const { registry, store, bootstrap, runner } = await load();
     const dirA = await makeVault("vault-a");
     const dirB = await makeVault("vault-b");
     await registry.writeRegistryAtomic({
@@ -115,7 +128,7 @@ describe("resumeJobs (PIPE-11)", () => {
     await store.writeJob(dirB, interrupted);
     await store.writeJob(dirA, finished);
 
-    const queue = bootstrap.configureJobQueue();
+    const queue = inertQueue(bootstrap, runner);
     const ids = await bootstrap.resumeJobs();
 
     expect(ids).toEqual([older.id, interrupted.id]);
@@ -128,7 +141,7 @@ describe("resumeJobs (PIPE-11)", () => {
   });
 
   it("skips one corrupt record and still enqueues the valid job", async () => {
-    const { registry, store, bootstrap } = await load();
+    const { registry, store, bootstrap, runner } = await load();
     const dirA = await makeVault("vault-a");
     await registry.writeRegistryAtomic({
       version: 1,
@@ -151,7 +164,7 @@ describe("resumeJobs (PIPE-11)", () => {
     await mkdir(corruptDir, { recursive: true });
     await writeFile(join(corruptDir, "job.json"), "{ this is not json", "utf8");
 
-    const queue = bootstrap.configureJobQueue();
+    const queue = inertQueue(bootstrap, runner);
     const ids = await bootstrap.resumeJobs();
 
     expect(ids).toEqual([valid.id]);

@@ -1,5 +1,13 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,6 +44,55 @@ const harness = vi.hoisted(() => {
 
 vi.mock("../jobs/bootstrap.js", () => ({ getJobQueue: () => harness.queue }));
 
+/**
+ * yt-dlp is replaced at the module boundary the preview and the create route
+ * both import. `failure` makes the next enumerate call throw the SAME
+ * EnumerateError class the route uses for its instanceof mapping.
+ */
+const enumHarness = vi.hoisted(() => {
+  class EnumerateError extends Error {
+    code: "enumerate_failed" | "timeout";
+    detail?: string;
+
+    constructor(code: "enumerate_failed" | "timeout", detail?: string) {
+      super(detail !== undefined && detail !== "" ? detail : code);
+      this.name = "EnumerateError";
+      this.code = code;
+      if (detail !== undefined) this.detail = detail;
+    }
+  }
+  return {
+    candidates: [] as Array<{
+      youtubeId: string;
+      title: string;
+      url: string;
+      published?: string;
+      durationSec?: number;
+      language?: string;
+    }>,
+    foundAtLeast: false,
+    calls: 0,
+    failure: null as null | { code: "enumerate_failed" | "timeout"; detail?: string },
+    EnumerateError,
+  };
+});
+
+vi.mock("../ingest/enumerate.js", () => ({
+  enumerateChannel: async () => {
+    enumHarness.calls += 1;
+    if (enumHarness.failure !== null) {
+      const failure = enumHarness.failure;
+      enumHarness.failure = null;
+      throw new enumHarness.EnumerateError(failure.code, failure.detail);
+    }
+    return {
+      candidates: enumHarness.candidates.map((candidate) => ({ ...candidate })),
+      foundAtLeast: enumHarness.foundAtLeast,
+    };
+  },
+  EnumerateError: enumHarness.EnumerateError,
+}));
+
 const ORIGINAL_VAULT_ROOT = process.env.VAULT_ROOT;
 
 let root = "";
@@ -65,6 +122,19 @@ beforeEach(async () => {
   harness.enqueued.length = 0;
   harness.cancelled.length = 0;
   harness.queue.size = 0;
+  enumHarness.candidates = [
+    {
+      youtubeId: "v1",
+      title: "First Talk",
+      url: "https://youtu.be/v1",
+      published: "2026-01-15",
+      durationSec: 600,
+      language: "en",
+    },
+  ];
+  enumHarness.foundAtLeast = false;
+  enumHarness.calls = 0;
+  enumHarness.failure = null;
 });
 
 afterEach(async () => {
@@ -177,6 +247,122 @@ describe("POST /api/jobs", () => {
 
     const res = await routes.jobs.request("/", jsonInit(validBody(vaultId)));
     expect(res.status).toBe(202);
+  });
+});
+
+describe("POST /api/jobs/preview", () => {
+  function previewBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      kind: "youtube",
+      channelUrl: "https://www.youtube.com/@demo",
+      maxVideos: 5,
+      ...overrides,
+    };
+  }
+
+  it("returns the full breakdown for two candidates and writes nothing", async () => {
+    const routes = await reload();
+    const { vaultDir } = await seeded(routes);
+    enumHarness.candidates = [
+      {
+        youtubeId: "v1",
+        title: "First Talk",
+        url: "https://youtu.be/v1",
+        published: "2026-01-15",
+        durationSec: 600,
+        language: "en",
+      },
+      {
+        youtubeId: "v2",
+        title: "Second Talk",
+        url: "https://youtu.be/v2",
+        published: "2026-02-15",
+        durationSec: 900,
+        language: "en",
+      },
+    ];
+
+    const res = await routes.jobs.request("/preview", jsonInit(previewBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      found: 2,
+      selected: 2,
+      skipped: [],
+      estimatedCalls: 9,
+      estimatedMinutes: 4,
+    });
+    // The literal follows the locked formula, not a rounded guess.
+    expect(2 + 6 + Math.ceil(2 / 5)).toBe(9);
+
+    // A preview is a dry run: no job directory, no raw file, no enqueue.
+    expect(existsSync(join(vaultDir, ".okf", "jobs"))).toBe(false);
+    expect(await readdir(join(vaultDir, "raw"))).toEqual([]);
+    expect(harness.enqueued).toHaveLength(0);
+  });
+
+  it("returns a complete estimate for zero candidates with 200", async () => {
+    const routes = await reload();
+    await seeded(routes);
+    enumHarness.candidates = [];
+
+    const res = await routes.jobs.request("/preview", jsonInit(previewBody()));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      found: 0,
+      selected: 0,
+      skipped: [],
+      estimatedCalls: 6,
+      estimatedMinutes: 0,
+    });
+  });
+
+  it("returns 400 invalid_source_url for a malformed channel URL", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const res = await routes.jobs.request(
+      "/preview",
+      jsonInit(previewBody({ channelUrl: "https://example.com/@x" })),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_source_url");
+    expect(enumHarness.calls).toBe(0);
+  });
+
+  it("maps a timeout to 504 and a non-zero exit to 502", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    enumHarness.failure = { code: "timeout" };
+    const timedOut = await routes.jobs.request("/preview", jsonInit(previewBody()));
+    expect(timedOut.status).toBe(504);
+    expect(((await timedOut.json()) as { error: string }).error).toBe("enumerate_timeout");
+
+    enumHarness.failure = { code: "enumerate_failed", detail: "exit 2" };
+    const failed = await routes.jobs.request("/preview", jsonInit(previewBody()));
+    expect(failed.status).toBe(502);
+    expect(((await failed.json()) as { error: string }).error).toBe("enumerate_failed");
+  });
+
+  it("answers GET /preview with 405 and never treats it as a job id", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const res = await routes.jobs.request("/preview");
+    expect(res.status).toBe(405);
+    expect(((await res.json()) as { error: string }).error).toBe("method_not_allowed");
+  });
+
+  it("refuses a zero-candidate commit and creates no job directory", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    enumHarness.candidates = [];
+
+    const res = await routes.jobs.request("/", jsonInit(validBody(vaultId)));
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("empty_selection");
+    expect(existsSync(join(vaultDir, ".okf", "jobs"))).toBe(false);
+    expect(harness.enqueued).toHaveLength(0);
   });
 });
 
