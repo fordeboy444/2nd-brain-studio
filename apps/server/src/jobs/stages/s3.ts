@@ -28,6 +28,8 @@ import type { LlmClient, LlmMessage } from "../../llm/ollama.js";
 import { listExtractions } from "../extraction.js";
 import type { ExtractionRecord, ExtractionSource } from "../extraction.js";
 import {
+  DEEP_DIVE_MIN_DURATION_SEC,
+  DEEP_DIVE_MIN_WORDS,
   LABEL_BATCH_SIZE,
   sortedUnique,
   writeManifest,
@@ -217,6 +219,65 @@ export function collectLabels(
   }
 
   return mergeDuplicates(occurrences);
+}
+
+/**
+ * The page-creation threshold, decided in code before the model sees a label
+ * (OKF-08). A label survives when at least two *videos* name it, or when any
+ * one source is a deep dive. A web page never counts toward the two-video
+ * branch: one short video plus one ordinary article is a passing mention, not a
+ * topic. Counting by kind is what keeps ">= 2 videos" literal.
+ */
+export function shouldKeepCandidate(
+  candidate: LabelCandidate,
+  sourcesBySlug: ReadonlyMap<string, ExtractionSource>,
+): boolean {
+  let videoSources = 0;
+  let deepDive = false;
+
+  for (const slug of candidate.sources) {
+    const source = sourcesBySlug.get(slug);
+    if (source === undefined) continue;
+    if (source.sourceKind === "video") {
+      videoSources += 1;
+      if ((source.duration ?? 0) >= DEEP_DIVE_MIN_DURATION_SEC) deepDive = true;
+    } else if ((source.wordCount ?? 0) >= DEEP_DIVE_MIN_WORDS) {
+      deepDive = true;
+    }
+  }
+
+  return videoSources >= 2 || deepDive;
+}
+
+/**
+ * Split merged candidates into the ones that earn a page and the ones recorded
+ * under `manifest.filtered`. A label merged away earlier never appears here.
+ */
+export function filterCandidates(
+  candidates: readonly LabelCandidate[],
+  sourcesBySlug: ReadonlyMap<string, ExtractionSource>,
+): { kept: LabelCandidate[]; filtered: FilteredCandidate[] } {
+  const kept: LabelCandidate[] = [];
+  const filtered: FilteredCandidate[] = [];
+
+  for (const candidate of candidates) {
+    if (shouldKeepCandidate(candidate, sourcesBySlug)) {
+      kept.push(candidate);
+      continue;
+    }
+    filtered.push({
+      slug: candidate.slug,
+      kind: candidate.kind,
+      reason: "single_source",
+    });
+  }
+
+  filtered.sort(
+    (left, right) =>
+      compareCodepoint(left.slug, right.slug) ||
+      compareCodepoint(left.kind, right.kind),
+  );
+  return { kept, filtered };
 }
 
 /** `ceil(n / LABEL_BATCH_SIZE)`, the one place a batch cap is calculated. */
@@ -663,8 +724,14 @@ export function createS3Stage(deps: StageDeps): S3Stage {
 
     // The barrier: `listExtractions` resolves only after every file was read.
     const records = await listExtractions(dir);
-    const candidates = collectLabels(records);
-    const filtered: FilteredCandidate[] = [];
+    const sourcesBySlug = new Map(
+      records.map((record) => [record.source.slug, record.source] as const),
+    );
+    // Code decides which labels earn a page before a single paid call.
+    const { kept, filtered } = filterCandidates(
+      collectLabels(records),
+      sourcesBySlug,
+    );
 
     const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
     const context: S3CallContext = {
@@ -674,7 +741,7 @@ export function createS3Stage(deps: StageDeps): S3Stage {
       dir,
     };
 
-    const canonical = await canonicalizeLabels(candidates, context);
+    const canonical = await canonicalizeLabels(kept, context);
     await recordFailures(canonical.failures, job, dir, persist);
 
     const concepts = canonical.labels

@@ -278,9 +278,11 @@ describe("S3 barrier", () => {
     const job = makeJob();
     await seed(job, [
       record("first-talk", {
+        source: { duration: 1500 },
         concepts: [{ name: "Alpha", slug: "alpha", weight: 0.5 }],
       }),
       record("second-talk", {
+        source: { duration: 1500 },
         concepts: [{ name: "Beta", slug: "beta", weight: 0.5 }],
       }),
     ]);
@@ -359,6 +361,7 @@ describe("S3 manifest", () => {
     const job = makeJob();
     await seed(job, [
       record("video-talk", {
+        source: { duration: 1500 },
         concepts: [{ name: "Alpha", slug: "alpha", weight: 0.5 }],
       }),
       record("example-post", {
@@ -394,7 +397,7 @@ describe("S3 manifest", () => {
         concepts: ["alpha"],
         entities: [],
         youtube_id: "yt-video-talk",
-        duration: 600,
+        duration: 1500,
       },
     ]);
   });
@@ -638,7 +641,8 @@ describe("S3 failure containment", () => {
     }));
 
     const job: JobRecord = { ...makeJob(), stage: "S3" };
-    await seed(job, [record("first-talk", { concepts })]);
+    // A deep-dive source so all 36 labels survive into the paid batches.
+    await seed(job, [record("first-talk", { source: { duration: 1500 }, concepts })]);
 
     const llm = fakeLlm({
       canonicalText(call) {
