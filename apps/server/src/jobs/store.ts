@@ -110,7 +110,10 @@ export async function writeJob(vaultDir: string, job: JobRecord): Promise<void> 
  * A missing jobs directory is an empty list. One unreadable or unparseable
  * `job.json` is skipped so a single corrupt record cannot stop the scan.
  */
-export async function listJobs(vaultDir: string): Promise<JobRecord[]> {
+export async function listJobs(
+  vaultDir: string,
+  onError?: (id: string, error: unknown) => void,
+): Promise<JobRecord[]> {
   const base = join(vaultDir, ".okf", "jobs");
   let entries;
   try {
@@ -123,8 +126,9 @@ export async function listJobs(vaultDir: string): Promise<JobRecord[]> {
     if (!entry.isDirectory() || !isJobId(entry.name)) continue;
     try {
       jobs.push(await readJob(vaultDir, entry.name));
-    } catch {
+    } catch (error) {
       // Corrupt or half-written record: skip it, keep scanning.
+      onError?.(entry.name, error);
     }
   }
   jobs.sort((a, b) => {
