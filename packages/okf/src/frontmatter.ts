@@ -320,6 +320,17 @@ function stripQuoted(value: string): string {
 }
 
 /**
+ * Read `source_kind` and normalize it once, so the coverage banner and every
+ * lint rule answer the same question about one page. A missing or non-scalar
+ * value is `null`; a scalar is stripped of quotes, trimmed and lowercased.
+ */
+export function normalizeSourceKind(data: OkfFrontmatter): string | null {
+  const value = data["source_kind"];
+  if (value === undefined || Array.isArray(value)) return null;
+  return stripQuoted(String(value)).toLowerCase();
+}
+
+/**
  * Read the metadata the reference `scripts/build_indexes.py` `meta()` reads.
  *
  * This deliberately does not use `parseFrontmatter`: the reference works on a

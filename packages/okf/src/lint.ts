@@ -12,7 +12,11 @@
  * or process access.
  */
 import type { BundlePage, OkfFrontmatter } from "./frontmatter.js";
-import { FrontmatterError, parseFrontmatter } from "./frontmatter.js";
+import {
+  FrontmatterError,
+  normalizeSourceKind,
+  parseFrontmatter,
+} from "./frontmatter.js";
 import { compareCodepoint } from "./indexes.js";
 import {
   extractLinks,
@@ -365,7 +369,7 @@ export function lintBundle(
   for (const page of kept) {
     const frontmatter = parsed.get(page.path);
     if (frontmatter === null || frontmatter === undefined) continue;
-    const kind = scalarField(frontmatter.data, "source_kind");
+    const kind = normalizeSourceKind(frontmatter.data);
     if (kind === "web") {
       if (declares(frontmatter.data, "youtube_id")) {
         error(
@@ -396,7 +400,7 @@ export function lintBundle(
       const citedPath = `sources/${slug}.md`;
       const cited = parsed.get(citedPath);
       if (cited === null || cited === undefined) continue;
-      if (scalarField(cited.data, "source_kind") !== "web") continue;
+      if (normalizeSourceKind(cited.data) !== "web") continue;
       const rest = bullet.slice(link.index + link[0].length);
       if (/^\s*-\s*"\[(\d+:\d+:\d+)\]/.test(rest)) {
         warning(
@@ -476,7 +480,7 @@ export function lintBundle(
       const sourceKind =
         citedFrontmatter === null
           ? null
-          : scalarField(citedFrontmatter.data, "source_kind");
+          : normalizeSourceKind(citedFrontmatter.data);
       if (sourceKind === "web") {
         const score = citationScore(quote, [], rawPage.text, null);
         if (score < CITATION_OVERLAP_THRESHOLD) {

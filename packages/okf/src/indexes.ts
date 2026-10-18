@@ -8,7 +8,11 @@
  * Pure: pages arrive as plain `{ path, text }` objects and the result is plain
  * strings. No filesystem, no clock, no locale.
  */
-import { parseFrontmatterSafe, readIndexMeta } from "./frontmatter.js";
+import {
+  normalizeSourceKind,
+  parseFrontmatterSafe,
+  readIndexMeta,
+} from "./frontmatter.js";
 import type { BundlePage, OkfFrontmatter } from "./frontmatter.js";
 
 /** A theme name and the slugs it groups. */
@@ -350,8 +354,7 @@ export function countBundle(pages: readonly BundlePage[]): BundleCounts {
     const parsed = parseFrontmatterSafe(page.text);
     if (parsed === null) continue;
     if (frontmatterScalar(parsed.data, "type") !== "source") continue;
-    const kind = frontmatterScalar(parsed.data, "source_kind");
-    if (kind !== null && kind.toLowerCase() === "web") {
+    if (normalizeSourceKind(parsed.data) === "web") {
       counts.webPages += 1;
     } else {
       counts.videos += 1;

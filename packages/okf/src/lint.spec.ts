@@ -614,6 +614,14 @@ describe("E5 source_kind and youtube_id boundaries", () => {
       "E5 source_kind web must not carry youtube_id: sources/subject.md",
     ]);
   });
+
+  it("normalizes source_kind case before comparing (WR-03)", () => {
+    expect(
+      findingMessages(sourceBundle("source_kind: Web\nyoutube_id: abc123\n")),
+    ).toEqual([
+      "E5 source_kind web must not carry youtube_id: sources/subject.md",
+    ]);
+  });
 });
 
 /** A web source, its raw capture and its index listing. */
@@ -991,6 +999,21 @@ describe("E8 citation integrity on a strict sources: page", () => {
       "E8 quote not found in cited page: concepts/subject.md",
     ]);
     expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("treats a mixed-case source_kind as web (WR-03)", () => {
+    const pages = e8Set({
+      provenance: "sources: [web-a]\n",
+      sourceSlug: "web-a",
+      sourceFrontmatter: webSourceFrontmatter("web-a").replace(
+        "source_kind: web",
+        "source_kind: Web",
+      ),
+      bullet:
+        '- [Web A](../sources/web-a.md) - "a sentence about attention mechanisms"',
+      rawText: "a sentence about attention mechanisms and more context",
+    });
+    expect(findingMessages(pages)).toEqual([]);
   });
 
   it("treats a source with no source_kind as a video source", () => {
