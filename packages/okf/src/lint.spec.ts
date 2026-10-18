@@ -519,6 +519,271 @@ describe("E4 sources/raw parity boundaries", () => {
   });
 });
 
+/**
+ * A source page with a matching raw page and an index listing.
+ *
+ * The companions keep E1, E3 and E4 silent, so every finding in an E5 case
+ * comes from the subject source page.
+ */
+function sourceBundle(frontmatter: string): BundlePage[] {
+  return [
+    {
+      path: "sources/subject.md",
+      text: `---\ntype: source\n${frontmatter}---\n\n# Subject\n`,
+    },
+    { path: "sources/index.md", text: "# Sources\n\n- [Subject](subject.md)\n" },
+    {
+      path: "raw/subject.md",
+      text: "---\ntype: raw-transcript\n---\n\n## Transcript\n\n**[0:00:00]** a transcript.\n",
+    },
+  ];
+}
+
+describe("E5 source_kind and youtube_id boundaries", () => {
+  it("finds a web source that carries a youtube_id", () => {
+    expect(
+      findingMessages(sourceBundle("source_kind: web\nyoutube_id: abc123\n")),
+    ).toEqual([
+      "E5 source_kind web must not carry youtube_id: sources/subject.md",
+    ]);
+  });
+
+  it("finds a video source without a youtube_id", () => {
+    expect(findingMessages(sourceBundle("source_kind: video\n"))).toEqual([
+      "E5 source_kind video requires youtube_id: sources/subject.md",
+    ]);
+  });
+
+  it("finds a video source with an empty youtube_id", () => {
+    expect(
+      findingMessages(sourceBundle('source_kind: video\nyoutube_id: ""\n')),
+    ).toEqual([
+      "E5 source_kind video requires youtube_id: sources/subject.md",
+    ]);
+  });
+
+  it("accepts a video source with a non-empty youtube_id", () => {
+    expect(
+      findingMessages(sourceBundle("source_kind: video\nyoutube_id: abc123\n")),
+    ).toEqual([]);
+  });
+
+  it("accepts a web source without a youtube_id", () => {
+    expect(findingMessages(sourceBundle("source_kind: web\n"))).toEqual([]);
+  });
+
+  it("accepts a page with no source_kind even when it carries a youtube_id", () => {
+    expect(findingMessages(sourceBundle("youtube_id: abc123\n"))).toEqual([]);
+  });
+
+  it("reads a single-quoted source_kind as its unquoted value", () => {
+    expect(
+      findingMessages(
+        sourceBundle("source_kind: 'web'\nyoutube_id: abc123\n"),
+      ),
+    ).toEqual([
+      "E5 source_kind web must not carry youtube_id: sources/subject.md",
+    ]);
+  });
+});
+
+/** A web source, its raw capture and its index listing. */
+function webSourcePages(rawBody: string): BundlePage[] {
+  return [
+    {
+      path: "sources/web-a.md",
+      text:
+        "---\ntype: source\nsource_kind: web\ntitle: \"Web A\"\n" +
+        'slug: web-a\nraw: "../raw/web-a.md"\n---\n\n# Web A\n',
+    },
+    { path: "sources/index.md", text: "# Sources\n\n- [Web A](web-a.md)\n" },
+    {
+      path: "raw/web-a.md",
+      text:
+        "---\ntype: raw-capture\n---\n\n## Extracted text\n\n" +
+        `**[#1]** ${rawBody}\n`,
+    },
+  ];
+}
+
+/** A video source, its transcript and its index listing. */
+function videoSourcePages(transcriptBody: string): BundlePage[] {
+  return [
+    {
+      path: "sources/video-a.md",
+      text:
+        "---\ntype: source\nsource_kind: video\nyoutube_id: videoA00001\n" +
+        'title: "Video A"\nslug: video-a\nraw: "../raw/video-a.md"\n---\n\n# Video A\n',
+    },
+    {
+      path: "sources/index.md",
+      text: "# Sources\n\n- [Video A](video-a.md)\n",
+    },
+    {
+      path: "raw/video-a.md",
+      text:
+        "---\ntype: raw-transcript\n---\n\n## Transcript\n\n" +
+        `**[0:00:00]** ${transcriptBody}\n`,
+    },
+  ];
+}
+
+/** A concept with a `## Sources` bullet plus the companions its gate needs. */
+function conceptWithBullet(
+  frontmatter: string,
+  bullet: string,
+  companions: BundlePage[],
+): BundlePage[] {
+  const pages = conceptPair(
+    `---\ntype: concept\n${frontmatter}---\n\n[Partner](partner.md)\n\n` +
+      `## Sources\n\n${bullet}\n`,
+  );
+  pages.push(...companions.map((page) => ({ ...page })));
+  return pages;
+}
+
+describe("E6 web citation boundaries", () => {
+  const rawBody =
+    "a timestamped phrase appears here; a plain phrase and a quote too.";
+
+  it("warns when a web citation on a sources: page carries a timestamp", () => {
+    const pages = conceptWithBullet(
+      "sources: [web-a]\n",
+      '- [Web A](../sources/web-a.md) - "[0:01:00] a timestamped phrase"',
+      webSourcePages(rawBody),
+    );
+    expect(findingMessages(pages)).toEqual([
+      "E6 web citation carries a video timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("warns identically when the same page uses a legacy videos: key", () => {
+    const pages = conceptWithBullet(
+      "videos: [web-a]\n",
+      '- [Web A](../sources/web-a.md) - "[0:01:00] a timestamped phrase"',
+      webSourcePages(rawBody),
+    );
+    expect(findingMessages(pages)).toEqual([
+      "E6 web citation carries a video timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("is silent when the page declares neither provenance key", () => {
+    const pages = conceptWithBullet(
+      "",
+      '- [Web A](../sources/web-a.md) - "[0:01:00] a timestamped phrase"',
+      webSourcePages(rawBody),
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("is silent for a web citation without a timestamp", () => {
+    const pages = conceptWithBullet(
+      "sources: [web-a]\n",
+      '- [Web A](../sources/web-a.md) - "a plain phrase"',
+      webSourcePages(rawBody),
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("is silent for a video citation with a timestamp", () => {
+    const pages = conceptWithBullet(
+      "sources: [video-a]\n",
+      '- [Video A](../sources/video-a.md) - "[0:00:00] a timestamped phrase"',
+      videoSourcePages("a timestamped phrase appears here."),
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("is silent when the timestamp is in the middle of the quote", () => {
+    const pages = conceptWithBullet(
+      "sources: [web-a]\n",
+      '- [Web A](../sources/web-a.md) - "the quote [0:01:00] here"',
+      webSourcePages(rawBody),
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+});
+
+describe("E7 wikilink boundaries", () => {
+  it("finds one wikilink and embeds the matched text", () => {
+    const pages = conceptPair(
+      `${TYPED_CONCEPT}[Partner](partner.md)\n\nSee [[Alpha Concept]] for details.\n`,
+    );
+    expect(findingMessages(pages)).toEqual([
+      "E7 wikilink `[[Alpha Concept]]` in concepts/subject.md",
+    ]);
+  });
+
+  it("finds two wikilinks in document order", () => {
+    const pages = conceptPair(
+      `${TYPED_CONCEPT}[Partner](partner.md)\n\n` +
+        "See [[Alpha Concept]] and [[Beta Concept]].\n",
+    );
+    expect(findingMessages(pages)).toEqual([
+      "E7 wikilink `[[Alpha Concept]]` in concepts/subject.md",
+      "E7 wikilink `[[Beta Concept]]` in concepts/subject.md",
+    ]);
+  });
+
+  it("ignores a wikilink inside a fenced block", () => {
+    const pages = conceptPair(
+      `${TYPED_CONCEPT}[Partner](partner.md)\n\n\`\`\`\n[[Hidden]]\n\`\`\`\n`,
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("ignores a wikilink inside an inline-code span", () => {
+    const pages = conceptPair(
+      `${TYPED_CONCEPT}[Partner](partner.md)\n\nAn example \`[[Hidden]]\`.\n`,
+    );
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("ignores a wikilink on a reserved index page", () => {
+    const pages = conceptPair(`${TYPED_CONCEPT}[Partner](partner.md)\n`);
+    pages[2] = {
+      path: "concepts/index.md",
+      text:
+        "# Concepts\n\n- [Subject](subject.md)\n- [Partner](partner.md)\n\n" +
+        "See [[Ignored]].\n",
+    };
+    expect(findingMessages(pages)).toEqual([]);
+  });
+});
+
+describe("warning order across added rules", () => {
+  it("lists E4, then E6, then E8, then W1", () => {
+    const pages = conceptWithBullet(
+      "videos: [web-a]\n",
+      '- [Web A](../sources/web-a.md) - "[0:01:00] unrelated zebra quantum words"',
+      webSourcePages("a captured page about attention mechanisms."),
+    );
+    pages.push({
+      path: "concepts/orphan.md",
+      text: "---\ntype: concept\n---\n\n",
+    });
+    pages.push({
+      path: "raw/epsilon.md",
+      text: "---\ntype: raw-transcript\n---\n",
+    });
+    const index = pages.find((page) => page.path === "concepts/index.md");
+    if (index !== undefined) {
+      index.text =
+        "# Concepts\n\n- [Subject](subject.md)\n- [Partner](partner.md)\n" +
+        "- [Orphan](orphan.md)\n";
+    }
+
+    const messages = findingMessages(pages);
+    expect(messages).toEqual([
+      "E4 raw/epsilon.md has no matching sources/epsilon.md (not yet ingested)",
+      "E6 web citation carries a video timestamp: concepts/subject.md",
+      "E8 quote not found in cited page: concepts/subject.md",
+      "W1 orphan (no inbound link from a content page): concepts/orphan.md",
+    ]);
+  });
+});
+
 describe("W1 orphan boundaries", () => {
   it("finds a concept linked only from an index page", () => {
     const pages: BundlePage[] = [

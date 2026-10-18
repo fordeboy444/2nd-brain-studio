@@ -390,7 +390,7 @@ export function lintBundle(
       if (cited === null || cited === undefined) continue;
       if (scalarField(cited.data, "source_kind") !== "web") continue;
       const rest = bullet.slice(link.index + link[0].length);
-      if (/^\[(\d+:\d+:\d+)\]/.test(rest)) {
+      if (/^\s*-\s*"\[(\d+:\d+:\d+)\]/.test(rest)) {
         warning(
           "E6",
           `E6 web citation carries a video timestamp: ${page.path}`,
