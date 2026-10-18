@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import { parseFrontmatter } from "@2nd-brain/okf";
 import type { ExtractionSource } from "./extraction.js";
 import {
+  edgeSection,
   pagePathFor,
+  renderConceptPage,
+  renderEntityPage,
   renderSourcePage,
   renderSourcesSection,
   sourceFrontmatter,
   sourcesBullet,
+  type ConceptPageInput,
+  type EntityPageInput,
   type SourcePageInput,
 } from "./pages.js";
 
@@ -183,6 +188,136 @@ describe("sourcesBullet", () => {
   it("returns no section for an empty bullet list", () => {
     expect(renderSourcesSection([])).toBe("");
     expect(renderSourcesSection(["- one"])).toBe("## Sources\n\n- one\n");
+  });
+});
+
+function conceptPage(overrides: Partial<ConceptPageInput> = {}): ConceptPageInput {
+  return {
+    slug: "agentic-workflow",
+    title: "Agentic Workflow",
+    tags: ["agents"],
+    sources: [
+      {
+        slug: "first-talk",
+        title: "First Talk",
+        quotes: [{ text: "hello there", startSec: 65 }],
+      },
+    ],
+    body: "First paragraph.\n\nSecond paragraph.",
+    edges: [
+      {
+        kind: "builds_on",
+        target: {
+          kind: "concept",
+          slug: "context-engineering",
+          title: "Context Engineering",
+        },
+      },
+      {
+        kind: "related_to",
+        target: { kind: "entity", slug: "n8n", title: "n8n", entityType: "tool" },
+      },
+    ],
+    created: FIXED_ISO,
+    updated: FIXED_ISO,
+    ...overrides,
+  };
+}
+
+function entityPage(overrides: Partial<EntityPageInput> = {}): EntityPageInput {
+  return {
+    ...conceptPage({ slug: "n8n", title: "n8n" }),
+    entityType: "tool",
+    ...overrides,
+  };
+}
+
+describe("label page renderers", () => {
+  it("assembles concept frontmatter in code and keeps the model body prose-only", () => {
+    const text = renderConceptPage(conceptPage());
+    const parsed = parseFrontmatter(text);
+    expect(parsed).not.toBeNull();
+    expect(Object.keys(parsed!.data)).toEqual([
+      "type",
+      "title",
+      "slug",
+      "sources",
+      "tags",
+      "created",
+      "updated",
+    ]);
+    expect(parsed!.data.type).toBe("concept");
+    expect(parsed!.data.sources).toEqual(["first-talk"]);
+    expect(parsed!.data.created).toBe(FIXED_ISO);
+    expect(parsed!.data.updated).toBe(FIXED_ISO);
+    expect(parsed!.body).toContain("## Overview");
+    expect(parsed!.body).toContain("First paragraph.");
+    expect(parsed!.body).toContain("Second paragraph.");
+  });
+
+  it("renders one edge heading per kind in the fixed order", () => {
+    const body = renderConceptPage(conceptPage()).split("## Overview")[1] ?? "";
+    const buildsAt = body.indexOf("## Builds on");
+    const relatedAt = body.indexOf("## Related");
+    const sourcesAt = body.indexOf("## Sources");
+    expect(buildsAt).toBeGreaterThan(-1);
+    expect(relatedAt).toBeGreaterThan(buildsAt);
+    expect(sourcesAt).toBeGreaterThan(relatedAt);
+    expect(body).not.toContain("## Part of");
+    expect(body).not.toContain("## Contrasts with");
+    expect(body).toContain(
+      "- [Context Engineering](../concepts/context-engineering.md)",
+    );
+    expect(body).toContain("- [n8n](../entities/tool/n8n.md)");
+  });
+
+  it("renders the reference citation grammar from the first quote", () => {
+    const text = renderConceptPage(
+      conceptPage({
+        sources: [
+          {
+            slug: "first-talk",
+            title: "First Talk",
+            quotes: [
+              { text: "later", startSec: 130 },
+              { text: "hello there", startSec: 65 },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(text).toContain(
+      '## Sources\n\n- [First Talk](../sources/first-talk.md) - "[0:01:05] hello there"\n',
+    );
+  });
+
+  it("adds entity_type before the title for an entity page", () => {
+    const text = renderEntityPage(entityPage());
+    const parsed = parseFrontmatter(text);
+    expect(Object.keys(parsed!.data)).toEqual([
+      "type",
+      "entity_type",
+      "title",
+      "slug",
+      "sources",
+      "tags",
+      "created",
+      "updated",
+    ]);
+    expect(parsed!.data.type).toBe("entity");
+    expect(parsed!.data.entity_type).toBe("tool");
+  });
+
+  it("omits an edge heading for a kind with no edge", () => {
+    expect(edgeSection("part_of", [])).toBe("");
+    expect(
+      edgeSection("part_of", [
+        {
+          kind: "part_of",
+          target: { kind: "concept", slug: "workflow", title: "Workflow" },
+        },
+      ]),
+    ).toBe("## Part of\n\n- [Workflow](../concepts/workflow.md)\n");
   });
 });
 

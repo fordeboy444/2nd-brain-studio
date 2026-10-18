@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseFrontmatter } from "@2nd-brain/okf";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeTextAtomic } from "../../http/writeAtomic.js";
+import type { LlmChatOptions, LlmClient, LlmMessage } from "../../llm/ollama.js";
 import { writeExtraction, type ExtractionRecord } from "../extraction.js";
 import {
   writeManifest,
@@ -13,7 +15,14 @@ import {
 import type { StageDeps, UnitContext } from "../runner.js";
 import { createJobRecord, newJobId, readEvents, writeJob } from "../store.js";
 import type { JobRecord } from "../types.js";
-import { createS4Stage, PROMPT_VERSION_S4 } from "./s4.js";
+import {
+  buildPageMessages,
+  buildPageRequests,
+  createS4Stage,
+  PAGES_PER_CALL,
+  PROMPT_VERSION_S4,
+  renderSourcePages,
+} from "./s4.js";
 
 const JOB_CREATED = "2026-10-18T10:00:00.000Z";
 const CAPTURE_AT = "2026-10-17T09:00:00.000Z";
@@ -46,11 +55,16 @@ function ctxFor(job: JobRecord): UnitContext {
   };
 }
 
-function makeDeps(): {
-  deps: StageDeps;
-  calls: () => number;
-} {
-  let calls = 0;
+interface CapturedCall {
+  messages: LlmMessage[];
+  requests: Array<{ slug: string }>;
+  rawPath?: string;
+}
+
+function makeDeps(options: {
+  reply?: (call: CapturedCall) => string;
+} = {}): { deps: StageDeps; calls: CapturedCall[] } {
+  const calls: CapturedCall[] = [];
   const deps: StageDeps = {
     async fetchTranscript() {
       throw new Error("not used in this spec");
@@ -70,9 +84,25 @@ function makeDeps(): {
     now: () => Date.parse(JOB_CREATED),
     vaultDirFor: () => root,
     llm: {
-      async chat() {
-        calls += 1;
-        return { text: "[]", tokensIn: 0, tokensOut: 0 };
+      async chat(messages: LlmMessage[], chatOptions: LlmChatOptions) {
+        const payload = messages[1]?.content ?? "";
+        const requests = payload
+          .split("\n")
+          .filter((line) => line.trim() !== "")
+          .map((line) => JSON.parse(line) as { slug: string });
+        const call: CapturedCall = {
+          messages,
+          requests,
+          ...(chatOptions.rawPath !== undefined
+            ? { rawPath: chatOptions.rawPath }
+            : {}),
+        };
+        calls.push(call);
+        const text = options.reply?.(call) ?? "[]";
+        if (chatOptions.rawPath !== undefined) {
+          await writeTextAtomic(chatOptions.rawPath, text);
+        }
+        return { text, tokensIn: 1, tokensOut: 1 };
       },
     },
     cacheDirFor: () => join(root, ".okf", "cache", "llm"),
@@ -82,7 +112,7 @@ function makeDeps(): {
       await writeFile(target, text);
     },
   };
-  return { deps, calls: () => calls };
+  return { deps, calls };
 }
 
 function videoRecord(overrides: Partial<ExtractionRecord> = {}): ExtractionRecord {
@@ -200,7 +230,13 @@ function taxonomyFixture(): TaxonomyRecord {
 async function writeFixtures(
   manifest: ManifestRecord,
   records: ExtractionRecord[],
-): Promise<{ job: JobRecord; dir: string; deps: StageDeps; calls: () => number }> {
+  options: { reply?: (call: CapturedCall) => string } = {},
+): Promise<{
+  job: JobRecord;
+  dir: string;
+  deps: StageDeps;
+  calls: CapturedCall[];
+}> {
   const job = makeJob();
   const dir = join(root, ".okf", "jobs", job.id);
   await mkdir(dir, { recursive: true });
@@ -208,7 +244,7 @@ async function writeFixtures(
   await writeManifest(dir, manifest);
   await writeTaxonomy(dir, taxonomyFixture());
   for (const record of records) await writeExtraction(dir, record);
-  const { deps, calls } = makeDeps();
+  const { deps, calls } = makeDeps(options);
   return { job, dir, deps, calls };
 }
 
@@ -227,9 +263,17 @@ describe("S4a source pages", () => {
       webRecord(),
     ]);
 
-    const cancelled = await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
-    expect(cancelled).toBe(false);
-    expect(calls()).toBe(0);
+    const result = await renderSourcePages(
+      job,
+      ctxFor(job),
+      dir,
+      deps,
+      manifestFixture(),
+      taxonomyFixture(),
+      async () => {},
+    );
+    expect(result.cancelled).toBe(false);
+    expect(calls).toHaveLength(0);
 
     const video = parseFrontmatter(
       await readFile(join(root, "sources", "first-talk.md"), "utf8"),
@@ -347,5 +391,223 @@ describe("S4a source pages", () => {
 
   it("exposes the S4 prompt version", () => {
     expect(PROMPT_VERSION_S4).toBe("s4-v1");
+  });
+});
+
+const GOOD_BODY =
+  "The label names a way of working with agents.\n\nIt appears in the first talk.";
+
+function pagePayload(bodies: Record<string, string>): string {
+  return JSON.stringify(
+    Object.entries(bodies).map(([slug, body]) => ({ slug, body })),
+  );
+}
+
+function elevenLabelManifest(): ManifestRecord {
+  const concepts = Array.from({ length: 11 }, (_, index) => ({
+    slug: `label-${index}`,
+    title: `Label ${index}`,
+    tags: ["agents"],
+    sources: ["first-talk"],
+    weight: 1,
+  }));
+  const manifest = manifestFixture();
+  manifest.concepts = concepts;
+  manifest.entities = [];
+  return manifest;
+}
+
+describe("S4b label pages", () => {
+  it("makes three calls for eleven labels and never more than five requests a call", async () => {
+    const { job, dir, deps, calls } = await writeFixtures(elevenLabelManifest(), [
+      videoRecord(),
+    ]);
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.requests.length <= PAGES_PER_CALL)).toBe(
+      true,
+    );
+    expect(
+      calls.reduce((count, call) => count + call.requests.length, 0),
+    ).toBe(11);
+    const requests = buildPageRequests(
+      elevenLabelManifest(),
+      [videoRecord()],
+      taxonomyFixture(),
+    );
+    expect(requests).toHaveLength(11);
+    expect(() =>
+      buildPageMessages([
+        ...requests,
+        ...requests.slice(0, 1),
+        ...requests.slice(0, 1),
+        ...requests.slice(0, 1),
+        ...requests.slice(0, 1),
+        ...requests.slice(0, 1),
+      ]),
+    ).toThrow();
+  });
+
+  it("rejects a body with a heading, writes the code fallback and keeps the raw reply", async () => {
+    const { job, dir, deps } = await writeFixtures(
+      manifestFixture(),
+      [videoRecord(), webRecord()],
+      {
+        reply: () =>
+          pagePayload({
+            "agentic-workflow": "## Heading\n\nBody text.",
+          }),
+      },
+    );
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const page = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(page).not.toBeNull();
+    expect(page!.body).not.toContain("## Heading");
+    expect(page!.body).toContain("## Overview");
+    expect(page!.body).toContain("A summary of the talk.");
+    expect(job.skipped).toContainEqual(
+      expect.objectContaining({
+        slug: "agentic-workflow",
+        stage: "S4",
+        reason: "model_error",
+      }),
+    );
+
+    const raw = await readFile(
+      join(dir, "llm", "S4-pages-0-1.txt"),
+      "utf8",
+    );
+    expect(raw).toContain("## Heading");
+  });
+
+  it("rejects a body with a markdown link", async () => {
+    const { job, dir, deps } = await writeFixtures(
+      manifestFixture(),
+      [videoRecord(), webRecord()],
+      {
+        reply: () =>
+          pagePayload({
+            "agentic-workflow":
+              "One paragraph with [a link](https://example.com).\n\nSecond paragraph.",
+          }),
+      },
+    );
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+    const page = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(page!.body).not.toContain("](https://example.com)");
+  });
+
+  it("keeps frontmatter and `## Sources` when the model body is one bare paragraph", async () => {
+    const { job, dir, deps } = await writeFixtures(
+      manifestFixture(),
+      [videoRecord(), webRecord()],
+      {
+        reply: () =>
+          pagePayload({ "agentic-workflow": "Only one paragraph." }),
+      },
+    );
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const page = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(Object.keys(page!.data)).toEqual([
+      "type",
+      "title",
+      "slug",
+      "sources",
+      "tags",
+      "created",
+      "updated",
+    ]);
+    expect(page!.data.type).toBe("concept");
+    expect(page!.data.sources).toEqual(["first-talk"]);
+    expect(page!.body).not.toContain("Only one paragraph.");
+    expect(page!.body).toContain("## Overview");
+    expect(page!.body).toContain("## Sources");
+    expect(page!.body).toContain(
+      '- [First Talk](../sources/first-talk.md) - "[0:01:05] hello there"',
+    );
+  });
+
+  it("takes only a requested slug once and ignores an unknown slug", async () => {
+    const { job, dir, deps } = await writeFixtures(
+      manifestFixture(),
+      [videoRecord(), webRecord()],
+      {
+        reply: () =>
+          JSON.stringify([
+            { slug: "agentic-workflow", body: GOOD_BODY },
+            { slug: "agentic-workflow", body: "Second.\n\nDuplicate body." },
+            { slug: "evil-page", body: GOOD_BODY },
+          ]),
+      },
+    );
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const page = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(page!.body).toContain("The label names a way of working with agents.");
+    expect(page!.body).not.toContain("Duplicate body.");
+    await expect(
+      readFile(join(root, "concepts", "evil-page.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readFile(join(root, "entities", "tool", "evil-page.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("stamps both timestamps from the job and renders the reference citation", async () => {
+    const { job, dir, deps } = await writeFixtures(
+      manifestFixture(),
+      [videoRecord(), webRecord()],
+      {
+        reply: () =>
+          pagePayload({
+            "agentic-workflow": GOOD_BODY,
+            n8n: "n8n is a workflow tool.\n\nIt connects services.",
+          }),
+      },
+    );
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const concept = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(concept!.data.created).toBe(JOB_CREATED);
+    expect(concept!.data.updated).toBe(JOB_CREATED);
+    expect(concept!.body).toContain(
+      '## Sources\n\n- [First Talk](../sources/first-talk.md) - "[0:01:05] hello there"\n',
+    );
+
+    const entity = parseFrontmatter(
+      await readFile(join(root, "entities", "tool", "n8n.md"), "utf8"),
+    );
+    expect(Object.keys(entity!.data)).toEqual([
+      "type",
+      "entity_type",
+      "title",
+      "slug",
+      "sources",
+      "tags",
+      "created",
+      "updated",
+    ]);
+    expect(entity!.data.type).toBe("entity");
+    expect(entity!.data.entity_type).toBe("tool");
+    expect(entity!.body).toContain("It connects services.");
   });
 });

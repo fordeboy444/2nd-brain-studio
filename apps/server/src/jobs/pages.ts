@@ -10,7 +10,11 @@
  * `deps.writePage`, which resolves it through the vault jail. The partial path
  * uses the same renderer with `partial: true`, so there is exactly one template.
  */
-import { formatTimestamp, renderFrontmatter } from "@2nd-brain/okf";
+import {
+  compareCodepoint,
+  formatTimestamp,
+  renderFrontmatter,
+} from "@2nd-brain/okf";
 import type { OkfFrontmatter } from "@2nd-brain/okf";
 import type {
   ExtractionSource,
@@ -227,6 +231,190 @@ export function renderSourcePage(input: SourcePageInput): string {
   if (momentsSection !== "") parts.push(momentsSection);
 
   return parts.join("\n");
+}
+
+/** The four edge kinds, in the one order a page renders them. */
+export type PageEdgeKind =
+  | "builds_on"
+  | "part_of"
+  | "contrasts_with"
+  | "related_to";
+
+/** One typed edge endpoint, resolved by the caller to a written page. */
+export interface PageEdgeTarget {
+  kind: PageKind;
+  slug: string;
+  title: string;
+  /** Entities only. It selects `entities/<type>/`. */
+  entityType?: string;
+}
+
+/** One typed edge, exactly as `manifest.edges` declares it. */
+export interface PageEdge {
+  kind: PageEdgeKind;
+  target: PageEdgeTarget;
+}
+
+/** The fixed heading for each edge kind; a kind with no edge emits nothing. */
+export const EDGE_HEADINGS: Readonly<Record<PageEdgeKind, string>> = {
+  builds_on: "## Builds on",
+  part_of: "## Part of",
+  contrasts_with: "## Contrasts with",
+  related_to: "## Related",
+};
+
+/** The render order; it is a contract, not an iteration accident. */
+const EDGE_ORDER: readonly PageEdgeKind[] = [
+  "builds_on",
+  "part_of",
+  "contrasts_with",
+  "related_to",
+];
+
+/** A link to an edge target, relative to a page below the bundle root. */
+function edgeTargetPath(target: PageEdgeTarget): string {
+  return `../${pagePathFor(target.kind, target.slug, target.entityType)}`;
+}
+
+/**
+ * One edge section, or the empty string when this kind has no edge.
+ *
+ * A repeated target is written once. The caller decides which edges survive;
+ * this function only renders the ones it receives.
+ */
+export function edgeSection(
+  kind: PageEdgeKind,
+  edges: readonly PageEdge[],
+): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  for (const edge of edges) {
+    if (edge.kind !== kind) continue;
+    const path = edgeTargetPath(edge.target);
+    if (seen.has(path)) continue;
+    seen.add(path);
+    lines.push(linkLine(edge.target.title, path));
+  }
+  return section(EDGE_HEADINGS[kind], lines);
+}
+
+/** One source a label page cites, with the quotes its extraction stored. */
+export interface LabelPageSource {
+  slug: string;
+  title: string;
+  quotes: readonly SourcePageQuote[];
+}
+
+/** Everything one concept page renders from. */
+export interface ConceptPageInput {
+  slug: string;
+  title: string;
+  tags: string[];
+  sources: readonly LabelPageSource[];
+  /** The validated model prose: 2-4 paragraphs, no heading and no link. */
+  body: string;
+  edges: readonly PageEdge[];
+  /** Both are the job `createdAt`; never a wall-clock read. */
+  created: string;
+  updated: string;
+}
+
+/** An entity page is a concept page with one more frontmatter key. */
+export interface EntityPageInput extends ConceptPageInput {
+  entityType: string;
+}
+
+/** `sources:` lists the cited slugs once, in codepoint order. */
+function labelSourceSlugs(input: ConceptPageInput): string[] {
+  return sortedUnique(input.sources.map((source) => source.slug));
+}
+
+/** One copy of each value, sorted by codepoint. */
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(compareCodepoint);
+}
+
+/**
+ * The first quote in timestamp order. A web quote has no timestamp, so every
+ * web quote sorts together and the first stored one wins.
+ */
+function firstQuote(quotes: readonly SourcePageQuote[]): SourcePageQuote | null {
+  if (quotes.length === 0) return null;
+  const ordered = [...quotes].sort(
+    (left, right) => (left.startSec ?? 0) - (right.startSec ?? 0),
+  );
+  return ordered[0] ?? null;
+}
+
+/** One `## Sources` bullet per cited source that has a citable quote. */
+function labelBullets(sources: readonly LabelPageSource[]): string[] {
+  const ordered = [...sources].sort((left, right) =>
+    compareCodepoint(left.slug, right.slug),
+  );
+  const bullets: string[] = [];
+  const seen = new Set<string>();
+  for (const source of ordered) {
+    if (seen.has(source.slug)) continue;
+    seen.add(source.slug);
+    const quote = firstQuote(source.quotes);
+    if (quote === null) continue;
+    bullets.push(sourcesBullet(source.title, source.slug, quote));
+  }
+  return bullets;
+}
+
+/**
+ * The code-owned body of a label page: `## Overview`, the typed edges and
+ * `## Sources`. The model supplies the overview prose and nothing else.
+ */
+export function renderPageBody(input: ConceptPageInput): string {
+  const parts: string[] = [];
+  const overview = input.body.trim();
+  if (overview !== "") parts.push(section("## Overview", [overview]));
+  for (const kind of EDGE_ORDER) {
+    const rendered = edgeSection(kind, input.edges);
+    if (rendered !== "") parts.push(rendered);
+  }
+  const sources = renderSourcesSection(labelBullets(input.sources));
+  if (sources !== "") parts.push(sources);
+  return parts.join("\n");
+}
+
+/** Render a concept page: code frontmatter, H1, then the code-owned body. */
+export function renderConceptPage(input: ConceptPageInput): string {
+  const data: OkfFrontmatter = {
+    type: "concept",
+    title: input.title,
+    slug: input.slug,
+    sources: labelSourceSlugs(input),
+    tags: input.tags,
+    created: input.created,
+    updated: input.updated,
+  };
+  return [
+    renderFrontmatter(data),
+    `# ${input.title}\n`,
+    renderPageBody(input),
+  ].join("\n");
+}
+
+/** Render an entity page; `entity_type` is its one extra frontmatter key. */
+export function renderEntityPage(input: EntityPageInput): string {
+  const data: OkfFrontmatter = {
+    type: "entity",
+    entity_type: input.entityType,
+    title: input.title,
+    slug: input.slug,
+    sources: labelSourceSlugs(input),
+    tags: input.tags,
+    created: input.created,
+    updated: input.updated,
+  };
+  return [
+    renderFrontmatter(data),
+    `# ${input.title}\n`,
+    renderPageBody(input),
+  ].join("\n");
 }
 
 /** The page input an extraction record renders from. */

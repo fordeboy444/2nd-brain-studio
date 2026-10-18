@@ -10,6 +10,10 @@
  * edge are assembled here, so a model omission cannot produce an uncited page.
  */
 import { compareCodepoint } from "@2nd-brain/okf";
+import { callCached, createLlmCache } from "../../llm/cache.js";
+import { PageBodiesSchema, rawPathForAttempt } from "../../llm/json.js";
+import { DEFAULT_OLLAMA_BASE_URL } from "../../llm/ollama.js";
+import type { LlmMessage } from "../../llm/ollama.js";
 import { readExtraction, type ExtractionRecord, type ExtractionSource } from "../extraction.js";
 import {
   readManifest,
@@ -20,18 +24,58 @@ import {
 } from "../manifest.js";
 import {
   pagePathFor,
+  renderConceptPage,
+  renderEntityPage,
   renderSourcePage,
   sourcePageInput,
+  type LabelPageSource,
+  type PageEdge,
+  type PageEdgeKind,
   type SourcePageConcept,
   type SourcePageEntity,
   type SourcePageInput,
+  type SourcePageQuote,
 } from "../pages.js";
 import type { StageDeps, UnitContext } from "../runner.js";
 import { appendEvent, readJob } from "../store.js";
 import type { JobRecord, SkippedUnit } from "../types.js";
+import { redactDetail } from "./fetch.js";
 
 /** Bumping this invalidates every cached S4b reply. S4a makes no call. */
 export const PROMPT_VERSION_S4 = "s4-v1";
+
+/**
+ * Label bodies per model call (T-P4-18). A large channel grows the call count
+ * linearly instead of building one huge prompt.
+ */
+export const PAGES_PER_CALL = 5;
+
+/** The body rules the model sees. Every structure key stays in code. */
+const PAGE_BODY_RULES = `You write the body of knowledge pages.
+
+Return ONLY one JSON array with one entry per request:
+[{"slug": "<request slug>", "body": "<2 to 4 paragraphs>"}]
+
+- "slug" is copied exactly from its request.
+- "body" is 2 to 4 paragraphs of plain prose, separated by a blank line.
+- Do not add a heading, a markdown link, frontmatter or a "## Sources" section.
+- Do not invent an edge, a citation or a source.
+- Use only the material in the request.
+
+Output the JSON array itself. Do not wrap it in a fence or add prose.`;
+
+/** One concept or entity body the model is asked to write. */
+export interface PageRequest {
+  slug: string;
+  title: string;
+  kind: "concept" | "entity";
+  /** Entities only. */
+  entityType?: string;
+  tags: string[];
+  sources: Array<{ slug: string; title: string; summary: string }>;
+  /** The manifest edges, as plain text. The model never writes a link from them. */
+  edges: string[];
+}
 
 export type S4Stage = (
   job: JobRecord,
@@ -44,6 +88,8 @@ export type S4Stage = (
 export interface S4RunResult {
   /** Bundle-relative paths of the pages this run wrote. */
   written: Set<string>;
+  /** The extraction each source page rendered from, keyed by source slug. */
+  records: Map<string, ExtractionRecord>;
   cancelled: boolean;
 }
 
@@ -145,13 +191,15 @@ export async function renderSourcePages(
   persist: () => Promise<void>,
 ): Promise<S4RunResult> {
   const written = new Set<string>();
+  const records = new Map<string, ExtractionRecord>();
 
   for (const source of manifest.sources) {
     const latest = await readJob(ctx.vaultDir, job.id);
     job.cancelRequested = latest.cancelRequested;
-    if (job.cancelRequested) return { written, cancelled: true };
+    if (job.cancelRequested) return { written, records, cancelled: true };
 
     const record = await readExtraction(dir, source.slug);
+    if (record !== null) records.set(source.slug, record);
     if (record === null) {
       const skipped: SkippedUnit = {
         slug: source.slug,
@@ -184,12 +232,307 @@ export async function renderSourcePages(
     });
   }
 
-  return { written, cancelled: false };
+  return { written, records, cancelled: false };
 }
 
 /**
- * Build the S4 stage. In this task it runs S4a only; Task 2 adds the bounded
- * model path for concept and entity bodies.
+ * One request per manifest concept and entity, sorted by slug.
+ *
+ * A request carries derived text only: source titles, extraction summaries,
+ * tags and plain-text edges. It never carries a transcript, a full page or a
+ * quote longer than the extraction cap.
+ */
+export function buildPageRequests(
+  manifest: ManifestRecord,
+  extractions: readonly ExtractionRecord[],
+  _taxonomy: TaxonomyRecord | null,
+): PageRequest[] {
+  const summaries = new Map(
+    extractions.map((record) => [record.source.slug, record.summary.trim()] as const),
+  );
+  const sourceBySlug = new Map(
+    manifest.sources.map((source) => [source.slug, source] as const),
+  );
+  const titles = new Map<string, string>();
+  for (const concept of manifest.concepts) titles.set(concept.slug, concept.title);
+  for (const entity of manifest.entities) titles.set(entity.slug, entity.title);
+  for (const source of manifest.sources) titles.set(source.slug, source.title);
+
+  const sourceBlocks = (slugs: readonly string[]): PageRequest["sources"] =>
+    sortedUnique(slugs).flatMap((slug) => {
+      const source = sourceBySlug.get(slug);
+      if (source === undefined) return [];
+      return [
+        {
+          slug,
+          title: source.title,
+          summary: summaries.get(slug) ?? "",
+        },
+      ];
+    });
+
+  const edgesOf = (slug: string): string[] =>
+    manifest.edges
+      .filter((edge) => edge.from === slug)
+      .map((edge) => `${edge.kind}: ${titles.get(edge.to) ?? edge.to}`)
+      .sort(compareCodepoint);
+
+  const requests: PageRequest[] = [];
+  for (const concept of manifest.concepts) {
+    requests.push({
+      slug: concept.slug,
+      title: concept.title,
+      kind: "concept",
+      tags: sortedUnique(concept.tags),
+      sources: sourceBlocks(concept.sources),
+      edges: edgesOf(concept.slug),
+    });
+  }
+  for (const entity of manifest.entities) {
+    requests.push({
+      slug: entity.slug,
+      title: entity.title,
+      kind: "entity",
+      entityType: entity.type,
+      tags: sortedUnique(entity.tags),
+      sources: sourceBlocks(entity.sources),
+      edges: edgesOf(entity.slug),
+    });
+  }
+  return requests.sort((left, right) => compareCodepoint(left.slug, right.slug));
+}
+
+/** One copy of each value, sorted by codepoint. */
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].sort(compareCodepoint);
+}
+
+/**
+ * The system message (body rules) and one user line per request. A call over
+ * the cap is a programming error, never a bigger prompt.
+ */
+export function buildPageMessages(
+  requests: readonly PageRequest[],
+): LlmMessage[] {
+  if (requests.length === 0) {
+    throw new Error("a page call needs at least one request");
+  }
+  if (requests.length > PAGES_PER_CALL) {
+    throw new Error(`a page call holds at most ${PAGES_PER_CALL} requests`);
+  }
+  return [
+    {
+      role: "system",
+      content: `${PAGE_BODY_RULES}\nPrompt version: ${PROMPT_VERSION_S4}.`,
+    },
+    {
+      role: "user",
+      content: requests.map((request) => JSON.stringify(request)).join("\n"),
+    },
+  ];
+}
+
+/** The call options every S4b batch uses, taken from the job snapshot. */
+function pageCallOptions(job: JobRecord) {
+  return {
+    model: job.settings.llm.model,
+    baseUrl: job.settings.llm.baseUrl ?? DEFAULT_OLLAMA_BASE_URL,
+    timeoutMs: job.settings.llm.requestTimeoutMs ?? 180_000,
+    maxRetries: job.settings.llm.maxRetries ?? 4,
+    stage: "S4",
+    promptVersion: PROMPT_VERSION_S4,
+    at: job.createdAt,
+  };
+}
+
+/** The code fallback body: the source summaries, or one truthful sentence. */
+function fallbackBody(request: PageRequest): string {
+  const summaries: string[] = [];
+  for (const source of request.sources) {
+    const summary = source.summary.trim();
+    if (summary !== "" && !summaries.includes(summary)) summaries.push(summary);
+  }
+  if (summaries.length === 0) {
+    return `No extraction summary was available for ${request.title}.`;
+  }
+  return summaries.join("\n\n");
+}
+
+/** The quotes one source extraction stored, for the `## Sources` bullet. */
+function quotesFor(
+  records: readonly ExtractionRecord[],
+  slug: string,
+): SourcePageQuote[] {
+  const record = records.find((candidate) => candidate.source.slug === slug);
+  return record === undefined ? [] : (record.quotes as SourcePageQuote[]);
+}
+
+/** The typed edges that name this label, as page links. */
+function pageEdges(manifest: ManifestRecord, slug: string): PageEdge[] {
+  const concepts = new Map(
+    manifest.concepts.map((concept) => [concept.slug, concept] as const),
+  );
+  const entities = new Map(
+    manifest.entities.map((entity) => [entity.slug, entity] as const),
+  );
+  const edges: PageEdge[] = [];
+  for (const edge of manifest.edges) {
+    if (edge.from !== slug) continue;
+    const concept = concepts.get(edge.to);
+    if (concept !== undefined) {
+      edges.push({
+        kind: edge.kind as PageEdgeKind,
+        target: { kind: "concept", slug: concept.slug, title: concept.title },
+      });
+      continue;
+    }
+    const entity = entities.get(edge.to);
+    if (entity !== undefined) {
+      edges.push({
+        kind: edge.kind as PageEdgeKind,
+        target: {
+          kind: "entity",
+          slug: entity.slug,
+          title: entity.title,
+          entityType: entity.type,
+        },
+      });
+    }
+  }
+  return edges;
+}
+
+/** Split an array into fixed-size batches. */
+function batchSlices<T>(items: readonly T[], size: number): T[][] {
+  const batches: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    batches.push(items.slice(index, index + size));
+  }
+  return batches;
+}
+
+/**
+ * S4b: ask for bounded page bodies, then wrap each one in code (T-P4-14,
+ * T-P4-16, T-P4-17, T-P4-18).
+ *
+ * Only a `{slug, body}` entry for a requested slug is accepted. A rejected or
+ * missing body becomes the code fallback plus a retryable `model_error` skip,
+ * so no page ships without its code-owned citations and edges.
+ */
+export async function renderLabelPages(
+  job: JobRecord,
+  ctx: UnitContext,
+  dir: string,
+  deps: StageDeps,
+  manifest: ManifestRecord,
+  taxonomy: TaxonomyRecord | null,
+  records: readonly ExtractionRecord[],
+  written: Set<string>,
+  persist: () => Promise<void>,
+): Promise<boolean> {
+  const requests = buildPageRequests(manifest, records, taxonomy);
+  if (requests.length === 0) return false;
+
+  const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
+  const options = pageCallOptions(job);
+  const requested = new Set(requests.map((request) => request.slug));
+  const bodies = new Map<string, string>();
+  const failures = new Map<string, string>();
+
+  const batches = batchSlices(requests, PAGES_PER_CALL);
+  for (let index = 0; index < batches.length; index += 1) {
+    const latest = await readJob(ctx.vaultDir, job.id);
+    job.cancelRequested = latest.cancelRequested;
+    if (job.cancelRequested) return true;
+
+    const batch = batches[index] as PageRequest[];
+    try {
+      const result = await callCached(
+        cache,
+        deps.llm,
+        {
+          ...options,
+          messages: buildPageMessages(batch),
+          rawPathForAttempt: (attempt) =>
+            rawPathForAttempt(dir, "S4", `pages-${index}`, attempt),
+        },
+        PageBodiesSchema,
+      );
+      for (const entry of result.output) {
+        // T-P4-16: an unknown slug is ignored, and the first entry wins.
+        if (!requested.has(entry.slug)) continue;
+        if (bodies.has(entry.slug)) continue;
+        bodies.set(entry.slug, entry.body);
+      }
+    } catch (error) {
+      const detail =
+        redactDetail(error instanceof Error ? error.message : String(error)) ??
+        "model_error";
+      for (const request of batch) failures.set(request.slug, detail);
+    }
+  }
+
+  for (const request of requests) {
+    const body = bodies.get(request.slug);
+    const hasBody = body !== undefined;
+    if (!hasBody) {
+      const skipped: SkippedUnit = {
+        slug: request.slug,
+        stage: "S4",
+        reason: "model_error",
+        detail: failures.get(request.slug) ?? "missing body",
+      };
+      job.skipped.push(skipped);
+      await persist();
+      await appendEvent(dir, "unit", {
+        slug: request.slug,
+        stage: "S4",
+        status: "skipped",
+        reason: skipped.reason,
+        detail: skipped.detail,
+      });
+    }
+
+    const sources: LabelPageSource[] = request.sources.map((source) => ({
+      slug: source.slug,
+      title: source.title,
+      quotes: quotesFor(records, source.slug),
+    }));
+    const input = {
+      slug: request.slug,
+      title: request.title,
+      tags: request.tags,
+      sources,
+      body: body ?? fallbackBody(request),
+      edges: pageEdges(manifest, request.slug),
+      created: job.createdAt,
+      updated: job.createdAt,
+    };
+    const relPath =
+      request.kind === "concept"
+        ? pagePathFor("concept", request.slug)
+        : pagePathFor("entity", request.slug, request.entityType);
+    const text =
+      request.kind === "concept"
+        ? renderConceptPage(input)
+        : renderEntityPage({
+            ...input,
+            entityType: request.entityType ?? "",
+          });
+    await deps.writePage(ctx.vaultDir, relPath, text);
+    written.add(relPath);
+    await appendEvent(dir, "unit", {
+      slug: request.slug,
+      stage: "S4",
+      status: "written",
+    });
+  }
+
+  return false;
+}
+
+/**
+ * Build the S4 stage. It runs S4a, then the bounded S4b model path.
  */
 export function createS4Stage(deps: StageDeps): S4Stage {
   return async function runS4(
@@ -215,6 +558,18 @@ export function createS4Stage(deps: StageDeps): S4Stage {
       taxonomy,
       persist,
     );
-    return result.cancelled;
+    if (result.cancelled) return true;
+
+    return renderLabelPages(
+      job,
+      ctx,
+      dir,
+      deps,
+      manifest,
+      taxonomy,
+      [...result.records.values()],
+      result.written,
+      persist,
+    );
   };
 }
