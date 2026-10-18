@@ -24,7 +24,12 @@ import {
   parseVideoSegments,
 } from "@2nd-brain/okf";
 import type { OkfFrontmatter } from "@2nd-brain/okf";
-import type { Extraction } from "../llm/json.js";
+import { z } from "zod";
+import {
+  EDGE_KINDS,
+  ENTITY_TYPES,
+  type Extraction,
+} from "../llm/json.js";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
 
 /** A capture slug is kebab-case and can never name a directory or an escape. */
@@ -279,19 +284,87 @@ export function extractionPath(jobDir: string, slug: string): string {
   return join(jobDir, "extractions", `${slug}.json`);
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const storedSlug = z.string().regex(EXTRACTION_SLUG_RE);
+
+const StoredConceptSchema = z
+  .object({
+    name: z.string(),
+    slug: storedSlug,
+    weight: z.number(),
+  })
+  .strict();
+
+const StoredEntitySchema = z
+  .object({
+    name: z.string(),
+    slug: storedSlug,
+    type: z.enum(ENTITY_TYPES),
+    weight: z.number(),
+  })
+  .strict();
+
+const StoredQuoteSchema = z
+  .object({
+    text: z.string(),
+    startSec: z.number().optional(),
+  })
+  .strict();
+
+const StoredRelationSchema = z
+  .object({
+    to: storedSlug,
+    kind: z.enum(EDGE_KINDS),
+  })
+  .strict();
+
+const StoredSourceSchema = z
+  .object({
+    slug: storedSlug,
+    title: z.string(),
+    sourceKind: z.enum(["video", "web"]),
+    youtubeId: z.string().optional(),
+    url: z.string().optional(),
+    published: z.string().optional(),
+    duration: z.number().optional(),
+    rawPath: z.string(),
+    fetchedAt: z.string(),
+    site: z.string().optional(),
+    wordCount: z.number().optional(),
+  })
+  .strict();
+
+/**
+ * The full stored shape. A record missing an array or a source field is not
+ * usable: S3 spreads `tags` and iterates `concepts`/`entities` before it can
+ * record a skip, so a half-record would fail the whole job unretryably
+ * (WR-02).
+ */
+const StoredExtractionSchema = z
+  .object({
+    slug: storedSlug,
+    title: z.string(),
+    thesis: z.string(),
+    summary: z.string(),
+    tags: z.array(z.string()),
+    concepts: z.array(StoredConceptSchema),
+    entities: z.array(StoredEntitySchema),
+    quotes: z.array(StoredQuoteSchema),
+    relations: z.array(StoredRelationSchema),
+    source: StoredSourceSchema,
+    at: z.string(),
+    partial: z.literal(true).optional(),
+  })
+  .strict();
 
 /** A stored record is usable only when its identity matches the requested one. */
-function isExtractionRecord(value: unknown, slug: string): value is ExtractionRecord {
-  if (!isObject(value)) return false;
-  if (value.slug !== slug) return false;
-  if (typeof value.at !== "string") return false;
-  if (!isObject(value.source)) return false;
-  if (typeof value.source.rawPath !== "string") return false;
-  if (!Array.isArray(value.quotes)) return false;
-  return true;
+function parseExtractionRecord(
+  value: unknown,
+  slug: string,
+): ExtractionRecord | null {
+  const result = StoredExtractionSchema.safeParse(value);
+  if (!result.success) return null;
+  if (result.data.slug !== slug) return null;
+  return result.data;
 }
 
 /**
@@ -317,7 +390,7 @@ export async function readExtraction(
   } catch {
     return null;
   }
-  return isExtractionRecord(parsed, slug) ? parsed : null;
+  return parseExtractionRecord(parsed, slug);
 }
 
 /** Write one extraction through the atomic temp+rename writer. */

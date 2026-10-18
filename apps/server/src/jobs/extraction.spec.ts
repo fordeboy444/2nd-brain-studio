@@ -201,6 +201,26 @@ describe("extraction records", () => {
     expect(await readExtraction(jobDir, "first-talk")).toBeNull();
   });
 
+  it("rejects a record missing a required array or source field", async () => {
+    const record = toExtractionRecord(EXTRACTION, videoCapture());
+    await writeExtraction(jobDir, record);
+    const { tags: _tags, ...withoutTags } = record;
+    await writeFile(
+      extractionPath(jobDir, "first-talk"),
+      JSON.stringify(withoutTags),
+      "utf8",
+    );
+    expect(await readExtraction(jobDir, "first-talk")).toBeNull();
+
+    const { sourceKind: _kind, ...source } = record.source;
+    await writeFile(
+      extractionPath(jobDir, "first-talk"),
+      JSON.stringify({ ...record, source }),
+      "utf8",
+    );
+    expect(await readExtraction(jobDir, "first-talk")).toBeNull();
+  });
+
   it("rejects a slug that could escape the job directory", () => {
     for (const slug of ["../escape", "a/b", "Bad Slug", ".hidden", ""]) {
       expect(() => extractionPath(jobDir, slug)).toThrow();
