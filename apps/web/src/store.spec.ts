@@ -133,6 +133,25 @@ it("merges poll results by job id, so a job never appears twice", async () => {
   expect(useStore.getState().jobsLoading).toBe(false);
 });
 
+it("lets a fresher poll replace the stale selected detail", async () => {
+  const stale = makeJob({ status: "running", updatedAt: "2026-10-18T12:00:00Z" });
+  const fresh = makeJob({
+    status: "completed",
+    stage: "done",
+    updatedAt: "2026-10-18T13:00:00Z",
+  });
+  useStore.setState({ selectedJobId: "j1", selectedJob: stale, jobs: [stale] });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [fresh] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  // The poll is the fallback truth while the stream reconnects.
+  expect(useStore.getState().selectedJob?.status).toBe("completed");
+  expect(useStore.getState().jobs[0]?.status).toBe("completed");
+});
+
 const SETTINGS_PAYLOAD = {
   settings: {
     llm: { model: "m", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },

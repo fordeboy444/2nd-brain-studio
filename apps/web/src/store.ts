@@ -856,12 +856,14 @@ export const useStore = create<AppState>((set, get) => {
           // returns unique ids; this keeps the invariant local to the store.
           const byId = new Map<string, JobSummary>();
           for (const job of jobs) byId.set(job.id, job);
+          const merged = [...byId.values()];
+          // The poll is the fallback truth, so it wins for every scalar field
+          // (`status`, `progress`, `cancelRequested`, `updatedAt`). Letting a
+          // stored detail object win here masked a job that completed while
+          // the stream was down, and it overwrote the fresh status that
+          // `cancelSelectedJob` fetches on purpose. This object carries no
+          // stream-only fields, so no fields are merged back.
           const selected = s.selectedJob;
-          const merged = [...byId.values()].map((job) =>
-            // The stream may be ahead of the poll. For the SAME id the stream's
-            // fields win, because they are the newer observation.
-            selected !== null && selected.id === job.id ? { ...job, ...selected } : job,
-          );
           const selectedJob =
             selected !== null
               ? (merged.find((job) => job.id === selected.id) ?? selected)
