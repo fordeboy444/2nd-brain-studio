@@ -18,6 +18,7 @@ import {
 } from "../ingest/transcript.js";
 import { isYouTubeChannelUrl } from "../ingest/urls.js";
 import { classifyYtDlpError, type YtDlpRun } from "../ingest/ytdlp.js";
+import { createOllamaClient } from "../llm/ollama.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
   createDefaultStageDeps,
@@ -81,6 +82,12 @@ export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
 
   return {
     ...base,
+    // The key is the only live secret here. Every per-job value travels on
+    // each `callCached` request from the job snapshot, never from this seam.
+    llm:
+      config.ollamaApiKey === undefined
+        ? base.llm
+        : createOllamaClient({ apiKey: config.ollamaApiKey }),
     fetchTranscript: createTranscriptFetcher(cascade),
     fetchWeb: createWebFetcher({
       fetch: overrides.fetch,

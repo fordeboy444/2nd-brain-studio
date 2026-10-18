@@ -5,6 +5,7 @@ import { parseFrontmatter } from "@2nd-brain/okf";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../http/writeAtomic.js";
 import { previewJob } from "../ingest/preview.js";
+import type { LlmChatOptions, LlmClient, LlmMessage } from "../llm/ollama.js";
 import {
   CaptureMismatchError,
   findCaptureByUrl,
@@ -47,6 +48,32 @@ vi.mock("pino", () => {
     },
   });
   return { default: logger };
+});
+
+/**
+ * Test seam for the S3 prompt-version bump. The real stage reads its own
+ * constant, so the observable effect of a bump is a different cache key. This
+ * state rewrites the key input in `callCached` for S3 calls only.
+ */
+const cacheState = vi.hoisted(() => ({ bumpS3: false }));
+
+vi.mock("../llm/cache.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../llm/cache.js")>();
+  return {
+    ...actual,
+    callCached(...args: Parameters<typeof actual.callCached>) {
+      const [cache, client, request, schema] = args;
+      if (cacheState.bumpS3 && request.stage === "S3") {
+        return actual.callCached(
+          cache,
+          client,
+          { ...request, promptVersion: `${request.promptVersion}-bumped` },
+          schema,
+        );
+      }
+      return actual.callCached(cache, client, request, schema);
+    },
+  };
 });
 
 const SETTINGS: JobSettings = {
@@ -1037,6 +1064,366 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       expect(text, name).not.toContain(KEY);
     }
     expect(rawFiles).toEqual(["first-talk.md"]);
+  });
+});
+
+/** The four units the PIPE-07 proof runs in every job. */
+const PIPELINE_CANDIDATES: VideoCandidate[] = [
+  {
+    youtubeId: "vid1",
+    title: "Agent Talk",
+    url: "https://youtu.be/vid1",
+    published: "2026-01-01",
+    durationSec: 600,
+    language: "en",
+  },
+  {
+    youtubeId: "vid2",
+    title: "Workflow Basics",
+    url: "https://youtu.be/vid2",
+    published: "2026-01-02",
+    durationSec: 620,
+    language: "en",
+  },
+  {
+    youtubeId: "vid3",
+    title: "Tool Roundup",
+    url: "https://youtu.be/vid3",
+    published: "2026-01-03",
+    durationSec: 640,
+    language: "en",
+  },
+  {
+    youtubeId: "vid4",
+    title: "Source Notes",
+    url: "https://youtu.be/vid4",
+    published: "2026-01-04",
+    durationSec: 660,
+    language: "en",
+  },
+];
+
+const PIPELINE_BODY =
+  "First paragraph about the label.\n\nSecond paragraph about the label.";
+
+interface PipelineCall {
+  stage: "S2" | "S3" | "S4" | "unknown";
+  system: string;
+  model: string;
+  baseUrl: string | undefined;
+  timeoutMs: number | undefined;
+  maxRetries: number | undefined;
+}
+
+function stageOf(system: string): PipelineCall["stage"] {
+  if (system.includes("Prompt version: s2-v1.")) return "S2";
+  if (system.includes("Prompt version: s3-v1.")) return "S3";
+  if (system.includes("Prompt version: s4-v1.")) return "S4";
+  return "unknown";
+}
+
+function requestLines(content: string): { slug: string; name?: string }[] {
+  return content
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => JSON.parse(line) as { slug: string; name?: string });
+}
+
+/**
+ * A stage-aware fake. It answers each prompt with the shape that prompt asks
+ * for and records the cache-facing options, so a run can prove which stage
+ * called and which model/timeout values it used.
+ */
+function pipelineLlm(): { calls: PipelineCall[]; client: LlmClient } {
+  const calls: PipelineCall[] = [];
+  const client: LlmClient = {
+    async chat(messages: LlmMessage[], options: LlmChatOptions) {
+      const system = messages[0]?.content ?? "";
+      const stage = stageOf(system);
+      calls.push({
+        stage,
+        system,
+        model: options.model,
+        baseUrl: options.baseUrl,
+        timeoutMs: options.timeoutMs,
+        maxRetries: options.maxRetries,
+      });
+      const user = messages[1]?.content ?? "";
+
+      if (stage === "S2") {
+        const title = /^Title: (.*)$/m.exec(user)?.[1] ?? "Untitled";
+        return {
+          text: JSON.stringify({
+            slug: null,
+            title,
+            thesis: `Thesis of ${title}.`,
+            summary: `Summary of ${title}.`,
+            tags: [],
+            concepts: [
+              { name: "Agentic Workflow", slug: "agentic-workflow", weight: 1 },
+            ],
+            entities: [{ name: "n8n", slug: "n8n", type: "tool", weight: 1 }],
+            quotes: [],
+            relations: [],
+          }),
+          tokensIn: 1,
+          tokensOut: 1,
+        };
+      }
+
+      if (stage === "S3") {
+        const requests = requestLines(user);
+        if (system.includes("canonicalise")) {
+          return {
+            text: JSON.stringify({
+              labels: requests.map((request) => ({
+                from: request.slug,
+                to: request.slug,
+                title: request.name ?? request.slug,
+                tags: [],
+                aliases: [],
+              })),
+            }),
+            tokensIn: 1,
+            tokensOut: 1,
+          };
+        }
+        return {
+          text: JSON.stringify({
+            concept_themes: [],
+            tool_themes: [],
+            source_clusters: [],
+          }),
+          tokensIn: 1,
+          tokensOut: 1,
+        };
+      }
+
+      if (stage === "S4") {
+        return {
+          text: JSON.stringify(
+            requestLines(user).map((request) => ({
+              slug: request.slug,
+              body: PIPELINE_BODY,
+            })),
+          ),
+          tokensIn: 1,
+          tokensOut: 1,
+        };
+      }
+
+      throw new Error(`unexpected prompt: ${system.slice(0, 40)}`);
+    },
+  };
+  return { calls, client };
+}
+
+/** Every page in the vault, keyed by its path relative to the vault root. */
+async function vaultPages(): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  async function walk(relPath: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(join(root, relPath), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
+      if (entry.name === ".okf" || entry.name === ".git") continue;
+      const next = relPath === "" ? entry.name : `${relPath}/${entry.name}`;
+      if (entry.isDirectory()) {
+        await walk(next);
+      } else {
+        files[next] = await readFile(join(root, next), "utf8");
+      }
+    }
+  }
+  await walk("");
+  return files;
+}
+
+/** The job-scoped artifacts the determinism proof compares. */
+async function jobArtifacts(job: JobRecord): Promise<Record<string, string>> {
+  const dir = join(root, ".okf", "jobs", job.id);
+  const files: Record<string, string> = {};
+  const extractions = (
+    await readdir(join(dir, "extractions"))
+  ).sort();
+  for (const name of extractions) {
+    files[`extractions/${name}`] = await readFile(
+      join(dir, "extractions", name),
+      "utf8",
+    );
+  }
+  for (const name of ["manifest.json", "taxonomy.json", "lint-report.json"]) {
+    files[name] = await readFile(join(dir, name), "utf8");
+  }
+  // The log lives at the vault root; S5 rewrites it on every run.
+  files["log.md"] = await readFile(join(root, "log.md"), "utf8");
+  return files;
+}
+
+function expectSameBytes(
+  left: Record<string, string>,
+  right: Record<string, string>,
+): void {
+  expect(Object.keys(right).sort()).toEqual(Object.keys(left).sort());
+  for (const key of Object.keys(left)) {
+    expect(right[key], key).toBe(left[key]);
+  }
+}
+
+/** One end-to-end job over the four fixed candidates. */
+async function runPipeline(
+  job: JobRecord,
+  client: LlmClient,
+  counters: { fetchTranscript: number; fetchWeb: number },
+): Promise<void> {
+  await writeJob(root, job);
+  const deps = makeDeps({
+    llm: client,
+    async enumerate() {
+      return PIPELINE_CANDIDATES;
+    },
+    async fetchTranscript(candidate) {
+      counters.fetchTranscript += 1;
+      return videoCapture(candidate);
+    },
+    async fetchWeb() {
+      counters.fetchWeb += 1;
+      throw new SkipError("fetch_error", "web is not used here");
+    },
+  });
+  await runJob(job, deps);
+}
+
+describe("PIPE-07: a repeat run makes no paid call", () => {
+  beforeEach(() => {
+    cacheState.bumpS3 = false;
+  });
+
+  it("reuses the cache, recreates a deleted page byte for byte, and changes nothing", async () => {
+    const first = pipelineLlm();
+    const firstCounters = { fetchTranscript: 0, fetchWeb: 0 };
+    const jobA = makeVideoJob();
+    await runPipeline(jobA, first.client, firstCounters);
+
+    expect(firstCounters.fetchTranscript).toBe(4);
+    expect(first.calls.map((call) => call.stage).sort()).toEqual([
+      "S2",
+      "S2",
+      "S2",
+      "S2",
+      "S3",
+      "S3",
+      "S4",
+    ]);
+    const pagesA = await vaultPages();
+    const artifactsA = await jobArtifacts(jobA);
+
+    // A page missing from the vault is rebuilt from code and cache, not lost.
+    await rm(join(root, "concepts", "agentic-workflow.md"));
+    await rm(join(root, "sources", "agent-talk.md"));
+
+    const second = pipelineLlm();
+    const secondCounters = { fetchTranscript: 0, fetchWeb: 0 };
+    const jobB = makeVideoJob();
+    await runPipeline(jobB, second.client, secondCounters);
+
+    expect(second.calls).toEqual([]);
+    expect(secondCounters).toEqual({ fetchTranscript: 0, fetchWeb: 0 });
+    expectSameBytes(pagesA, await vaultPages());
+    expectSameBytes(artifactsA, await jobArtifacts(jobB));
+  });
+
+  it("changes only the model name, which invalidates every stage cache", async () => {
+    const first = pipelineLlm();
+    const jobA = makeVideoJob();
+    await runPipeline(jobA, first.client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+    const pagesA = await vaultPages();
+
+    const changed = pipelineLlm();
+    const counters = { fetchTranscript: 0, fetchWeb: 0 };
+    const jobC = makeVideoJob({
+      settings: {
+        ...SETTINGS,
+        llm: { model: "other-model" },
+      },
+    });
+    await runPipeline(jobC, changed.client, counters);
+
+    // A new model is a new cache key at S2, S3 and S4. No capture is re-read.
+    expect(
+      changed.calls.every(
+        (call) =>
+          call.stage === "S2" || call.stage === "S3" || call.stage === "S4",
+      ),
+    ).toBe(true);
+    expect(changed.calls.filter((call) => call.stage === "S2")).toHaveLength(4);
+    expect(counters.fetchTranscript).toBe(0);
+    expect(counters.fetchWeb).toBe(0);
+
+    // Source-derived pages do not carry the model name.
+    const pagesC = await vaultPages();
+    expect(pagesC["raw/index.md"]).toBe(pagesA["raw/index.md"]);
+    expect(pagesC["entities/index.md"]).toBe(pagesA["entities/index.md"]);
+  });
+
+  it("makes new S3 calls when the S3 prompt version changes, and no S2 call", async () => {
+    const first = pipelineLlm();
+    const jobA = makeVideoJob();
+    await runPipeline(jobA, first.client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    // The seam above changes only the S3 cache key, the same observable effect
+    // as bumping PROMPT_VERSION_S3 in the stage.
+    cacheState.bumpS3 = true;
+    const bumped = pipelineLlm();
+    const jobD = makeVideoJob();
+    await runPipeline(jobD, bumped.client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    expect(bumped.calls.filter((call) => call.stage === "S2")).toHaveLength(0);
+    expect(
+      bumped.calls.filter((call) => call.stage === "S3").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("writes the same bytes when the wall clock moves two days", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-18T10:00:00.000Z"));
+      const first = pipelineLlm();
+      const jobA = makeVideoJob();
+      await runPipeline(jobA, first.client, {
+        fetchTranscript: 0,
+        fetchWeb: 0,
+      });
+      const pagesA = await vaultPages();
+      const artifactsA = await jobArtifacts(jobA);
+
+      vi.setSystemTime(new Date("2026-10-20T10:00:00.000Z"));
+      const second = pipelineLlm();
+      const jobB = makeVideoJob();
+      await runPipeline(jobB, second.client, {
+        fetchTranscript: 0,
+        fetchWeb: 0,
+      });
+
+      expectSameBytes(pagesA, await vaultPages());
+      expectSameBytes(artifactsA, await jobArtifacts(jobB));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

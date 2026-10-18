@@ -2,6 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LlmChatOptions, LlmClient, LlmMessage } from "../llm/ollama.js";
+import { DEFAULT_OLLAMA_BASE_URL } from "../llm/ollama.js";
+import { writeCapture } from "./capture.js";
 import type { JobRecord, JobSettings } from "./types.js";
 
 /**
@@ -40,7 +43,8 @@ async function load() {
   const store = await import("./store.js");
   const bootstrap = await import("./bootstrap.js");
   const runner = await import("./runner.js");
-  return { registry, store, bootstrap, runner };
+  const settings = await import("../settings/store.js");
+  return { registry, store, bootstrap, runner, settings };
 }
 
 /**
@@ -85,6 +89,132 @@ function job(
     ...overrides,
   };
 }
+
+/** A valid S2 reply with no labels, so only the S2 call runs. */
+function extractionReply(): string {
+  return JSON.stringify({
+    slug: null,
+    title: "Snapshot Talk",
+    thesis: "A thesis.",
+    summary: "A summary.",
+    tags: [],
+    concepts: [],
+    entities: [],
+    quotes: [],
+    relations: [],
+  });
+}
+
+async function writeVideoCapture(vaultDir: string, slug: string): Promise<void> {
+  await writeCapture(vaultDir, {
+    kind: "video",
+    slug,
+    url: `https://youtu.be/${slug}`,
+    youtubeId: slug,
+    title: "Snapshot Talk",
+    published: "2026-01-01",
+    durationSec: 600,
+    tier: 1,
+    fetchedAt: "2026-10-18T08:00:00.000Z",
+    segments: [
+      { startSec: 0, text: "hello" },
+      { startSec: 65, text: "world" },
+    ],
+  });
+}
+
+describe("job snapshot settings (PIPE-07)", () => {
+  it("uses the creation-time model values, not a later settings.json write", async () => {
+    const { store, runner, settings } = await load();
+    const dir = await makeVault("vault-a");
+    await writeVideoCapture(dir, "snapshot-talk");
+
+    const snapshot: JobSettings = {
+      maxVideos: 1,
+      filters: {},
+      fetch: { concurrency: 1 },
+      llm: {
+        model: "snapshot-model",
+        baseUrl: "http://snapshot:11434",
+        requestTimeoutMs: 12_345,
+        maxRetries: 2,
+      },
+    };
+    const running = job(
+      "j_20261018_0000dd",
+      "vault-a",
+      "2026-10-18T09:00:00.000Z",
+      { status: "running", stage: "S2", settings: snapshot },
+    );
+    await store.writeJob(dir, running);
+
+    // The live settings file changes after the job was created.
+    await settings.writeSettings({
+      llm: {
+        model: "live-model",
+        baseUrl: "http://live:9999",
+        requestTimeoutMs: 1_500,
+        maxRetries: 5,
+      },
+    });
+
+    const seen: LlmChatOptions[] = [];
+    const llm: LlmClient = {
+      async chat(_messages: LlmMessage[], options: LlmChatOptions) {
+        seen.push(options);
+        return { text: extractionReply(), tokensIn: 1, tokensOut: 1 };
+      },
+    };
+    const deps = { ...runner.createDefaultStageDeps(), llm };
+    await runner.runJob(running, deps);
+
+    expect(seen.length).toBeGreaterThan(0);
+    for (const options of seen) {
+      expect(options.model).toBe("snapshot-model");
+      expect(options.baseUrl).toBe("http://snapshot:11434");
+      expect(options.timeoutMs).toBe(12_345);
+      expect(options.maxRetries).toBe(2);
+    }
+  });
+
+  it("falls back to the default Ollama URL when the snapshot has none", async () => {
+    const { store, runner } = await load();
+    const dir = await makeVault("vault-a");
+    await writeVideoCapture(dir, "snapshot-talk");
+
+    const running = job(
+      "j_20261018_0000ee",
+      "vault-a",
+      "2026-10-18T09:00:00.000Z",
+      {
+        status: "running",
+        stage: "S2",
+        settings: {
+          maxVideos: 1,
+          filters: {},
+          fetch: { concurrency: 1 },
+          llm: { model: "snapshot-model" },
+        },
+      },
+    );
+    await store.writeJob(dir, running);
+
+    const seen: LlmChatOptions[] = [];
+    const deps = {
+      ...runner.createDefaultStageDeps(),
+      llm: {
+        async chat(_messages: LlmMessage[], options: LlmChatOptions) {
+          seen.push(options);
+          return { text: extractionReply(), tokensIn: 1, tokensOut: 1 };
+        },
+      },
+    };
+    await runner.runJob(running, deps);
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]!.baseUrl).toBe(DEFAULT_OLLAMA_BASE_URL);
+  });
+});
 
 describe("resumeJobs (PIPE-11)", () => {
   it("re-enqueues queued and running jobs in createdAt order across vaults", async () => {
