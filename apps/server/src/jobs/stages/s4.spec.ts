@@ -2,7 +2,9 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseFrontmatter } from "@2nd-brain/okf";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { BundlePage } from "@2nd-brain/okf";
+import { lintBundle } from "@2nd-brain/okf";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../../http/writeAtomic.js";
 import type { LlmChatOptions, LlmClient, LlmMessage } from "../../llm/ollama.js";
 import { writeExtraction, type ExtractionRecord } from "../extraction.js";
@@ -15,6 +17,7 @@ import {
 import type { StageDeps, UnitContext } from "../runner.js";
 import { createJobRecord, newJobId, readEvents, writeJob } from "../store.js";
 import type { JobRecord } from "../types.js";
+import { createS3Stage } from "./s3.js";
 import {
   buildPageMessages,
   buildPageRequests,
@@ -23,6 +26,20 @@ import {
   PROMPT_VERSION_S4,
   renderSourcePages,
 } from "./s4.js";
+
+/** A tripwire: S3 and S4 must never open a raw capture. */
+const spy = vi.hoisted(() => ({ captureReads: 0 }));
+
+vi.mock("../capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../capture.js")>();
+  return {
+    ...actual,
+    readCapture() {
+      spy.captureReads += 1;
+      throw new Error("S3-S4 must never open a raw capture");
+    },
+  };
+});
 
 const JOB_CREATED = "2026-10-18T10:00:00.000Z";
 const CAPTURE_AT = "2026-10-17T09:00:00.000Z";
@@ -57,7 +74,7 @@ function ctxFor(job: JobRecord): UnitContext {
 
 interface CapturedCall {
   messages: LlmMessage[];
-  requests: Array<{ slug: string }>;
+  requests: Array<{ slug: string; name?: string }>;
   rawPath?: string;
 }
 
@@ -263,6 +280,14 @@ describe("S4a source pages", () => {
       webRecord(),
     ]);
 
+    const records = new Map([
+      ["first-talk", videoRecord()],
+      ["example-post", webRecord()],
+    ]);
+    const labels = new Set([
+      "concepts/agentic-workflow.md",
+      "entities/tool/n8n.md",
+    ]);
     const result = await renderSourcePages(
       job,
       ctxFor(job),
@@ -270,6 +295,8 @@ describe("S4a source pages", () => {
       deps,
       manifestFixture(),
       taxonomyFixture(),
+      records,
+      labels,
       async () => {},
     );
     expect(result.cancelled).toBe(false);
@@ -609,5 +636,238 @@ describe("S4b label pages", () => {
     expect(entity!.data.type).toBe("entity");
     expect(entity!.data.entity_type).toBe("tool");
     expect(entity!.body).toContain("It connects services.");
+  });
+});
+
+const CONCEPT_NAMES: Record<string, string> = {
+  "agentic-workflow": "Agentic Workflow",
+  "passing-mention": "Passing Mention",
+};
+
+function talkRecord(slug: string, conceptSlugs: string[]): ExtractionRecord {
+  return videoRecord({
+    slug,
+    title: `Talk ${slug}`,
+    thesis: `Thesis of ${slug}.`,
+    summary: `Summary of ${slug}.`,
+    concepts: conceptSlugs.map((conceptSlug) => ({
+      name: CONCEPT_NAMES[conceptSlug] ?? conceptSlug,
+      slug: conceptSlug,
+      weight: 1,
+    })),
+    entities: [{ name: "n8n", slug: "n8n", type: "tool", weight: 1 }],
+    quotes: [{ text: `hello there from ${slug}`, startSec: 65 }],
+    source: {
+      slug,
+      title: `Talk ${slug}`,
+      sourceKind: "video",
+      youtubeId: `id-${slug}`,
+      url: `https://youtu.be/id-${slug}`,
+      published: "2026-01-01",
+      duration: 600,
+      rawPath: `raw/${slug}.md`,
+      fetchedAt: CAPTURE_AT,
+    },
+  });
+}
+
+function emptyManifest(): ManifestRecord {
+  return {
+    concepts: [],
+    entities: [],
+    sources: [],
+    edges: [],
+    filtered: [],
+    at: JOB_CREATED,
+  };
+}
+
+/** Route each S3 prompt and each S4 page call to a valid fake reply. */
+function chainReply(call: CapturedCall): string {
+  const system = call.messages[0]?.content ?? "";
+  if (system.includes("canonicalise")) {
+    return JSON.stringify({
+      labels: call.requests.map((request) => ({
+        from: request.slug,
+        to: request.slug,
+        title: request.name ?? request.slug,
+        tags: [],
+        aliases: [],
+      })),
+    });
+  }
+  if (system.includes("group knowledge labels")) {
+    return JSON.stringify({
+      concept_themes: [],
+      tool_themes: [],
+      source_clusters: [],
+    });
+  }
+  return pagePayload(
+    Object.fromEntries(
+      call.requests.map((request) => [request.slug, GOOD_BODY]),
+    ),
+  );
+}
+
+describe("S4 typed edges and written-page links", () => {
+  it("renders a builds_on edge on both linked concept pages", async () => {
+    const manifest = manifestFixture();
+    manifest.concepts = [
+      { slug: "alpha", title: "Alpha", tags: [], sources: ["first-talk"], weight: 1 },
+      { slug: "beta", title: "Beta", tags: [], sources: ["first-talk"], weight: 1 },
+    ];
+    manifest.entities = [];
+    manifest.edges = [
+      { from: "alpha", to: "beta", kind: "builds_on" },
+      { from: "beta", to: "alpha", kind: "builds_on" },
+    ];
+    const { job, dir, deps } = await writeFixtures(manifest, [videoRecord()], {
+      reply: () =>
+        pagePayload({ alpha: GOOD_BODY, beta: GOOD_BODY }),
+    });
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const alpha = parseFrontmatter(
+      await readFile(join(root, "concepts", "alpha.md"), "utf8"),
+    );
+    expect(alpha!.body).toContain(
+      "## Builds on\n\n- [Beta](../concepts/beta.md)\n",
+    );
+    expect(alpha!.body.indexOf("## Builds on")).toBeLessThan(
+      alpha!.body.indexOf("## Sources"),
+    );
+
+    const beta = parseFrontmatter(
+      await readFile(join(root, "concepts", "beta.md"), "utf8"),
+    );
+    expect(beta!.body).toContain(
+      "## Builds on\n\n- [Alpha](../concepts/alpha.md)\n",
+    );
+  });
+
+  it("omits an edge whose target has no page", async () => {
+    const manifest = manifestFixture();
+    manifest.concepts = [
+      { slug: "alpha", title: "Alpha", tags: [], sources: ["first-talk"], weight: 1 },
+    ];
+    manifest.entities = [];
+    manifest.edges = [
+      { from: "alpha", to: "missing-label", kind: "builds_on" },
+    ];
+    const { job, dir, deps } = await writeFixtures(manifest, [videoRecord()], {
+      reply: () => pagePayload({ alpha: GOOD_BODY }),
+    });
+
+    await createS4Stage(deps)(job, ctxFor(job), dir, async () => {});
+
+    const page = parseFrontmatter(
+      await readFile(join(root, "concepts", "alpha.md"), "utf8"),
+    );
+    expect(page!.body).not.toContain("## Builds on");
+    expect(page!.body).not.toContain("../concepts/missing-label.md");
+  });
+
+  it("links only label pages that were written from a source page", async () => {
+    const manifest = manifestFixture();
+    const records = new Map([
+      ["first-talk", videoRecord()],
+      ["example-post", webRecord()],
+    ]);
+    const { job, dir, deps } = await writeFixtures(manifest, [
+      videoRecord(),
+      webRecord(),
+    ]);
+
+    await renderSourcePages(
+      job,
+      ctxFor(job),
+      dir,
+      deps,
+      manifest,
+      taxonomyFixture(),
+      records,
+      new Set(["concepts/agentic-workflow.md"]),
+      async () => {},
+    );
+
+    const page = parseFrontmatter(
+      await readFile(join(root, "sources", "first-talk.md"), "utf8"),
+    );
+    expect(page!.body).toContain(
+      "- [Agentic Workflow](../concepts/agentic-workflow.md)",
+    );
+    expect(page!.body).not.toContain("../entities/tool/n8n.md");
+  });
+
+  it("runs S3 and S4 without opening a raw capture", async () => {
+    spy.captureReads = 0;
+    const records = [
+      talkRecord("talk-1", ["agentic-workflow"]),
+      talkRecord("talk-2", ["agentic-workflow"]),
+      talkRecord("talk-3", ["agentic-workflow"]),
+      talkRecord("talk-4", ["agentic-workflow"]),
+    ];
+    const { job, dir, deps } = await writeFixtures(emptyManifest(), records, {
+      reply: chainReply,
+    });
+
+    const persist = async () => {};
+    expect(await createS3Stage(deps)(job, ctxFor(job), dir, persist)).toBe(false);
+    expect(await createS4Stage(deps)(job, ctxFor(job), dir, persist)).toBe(false);
+    expect(spy.captureReads).toBe(0);
+  });
+
+  it("produces a four-extraction page set with no broken link", async () => {
+    const records = [
+      talkRecord("talk-1", ["agentic-workflow", "passing-mention"]),
+      talkRecord("talk-2", ["agentic-workflow"]),
+      talkRecord("talk-3", ["agentic-workflow"]),
+      talkRecord("talk-4", ["agentic-workflow"]),
+    ];
+    const { job, dir, deps } = await writeFixtures(emptyManifest(), records, {
+      reply: chainReply,
+    });
+    const persist = async () => {};
+    await createS3Stage(deps)(job, ctxFor(job), dir, persist);
+    await createS4Stage(deps)(job, ctxFor(job), dir, persist);
+
+    await mkdir(join(root, "raw"), { recursive: true });
+    for (const record of records) {
+      const quote = record.quotes[0]?.text ?? "";
+      await writeFile(
+        join(root, "raw", `${record.slug}.md`),
+        `---\ntype: raw-transcript\nslug: ${record.slug}\n---\n\n## Transcript\n\n**[0:01:05]** ${quote}\n`,
+      );
+    }
+
+    const files: string[] = [];
+    for (const prefix of ["sources", "concepts", "entities", "raw"]) {
+      const names = (await readdir(join(root, prefix), {
+        recursive: true,
+      })) as string[];
+      for (const name of names) {
+        if (name.endsWith(".md")) files.push(`${prefix}/${name}`);
+      }
+    }
+    // A filtered label earns no page.
+    expect(files).not.toContain("concepts/passing-mention.md");
+
+    const indexLinks = files
+      .filter((path) => !path.startsWith("raw/"))
+      .map((path) => `- [${path}](${path})`);
+    const indexText = `# Index\n\n${indexLinks.join("\n")}\n`;
+    await writeFile(join(root, "index.md"), indexText);
+
+    const pages: BundlePage[] = [];
+    for (const path of files) {
+      pages.push({ path, text: await readFile(join(root, path), "utf8") });
+    }
+    pages.push({ path: "index.md", text: indexText });
+
+    const result = lintBundle(pages, "bundle");
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 });

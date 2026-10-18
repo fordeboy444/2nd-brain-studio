@@ -5,16 +5,23 @@
  * the manifest. It makes no model call, never opens `raw/`, and every timestamp
  * it writes is the extraction record's own capture time.
  *
- * S4b (added in Task 2) asks the model only for the 2-4 paragraph body of a
- * concept or entity page. Frontmatter, `sources:`, `## Sources` and every typed
- * edge are assembled here, so a model omission cannot produce an uncited page.
+ * S4b asks the model only for the 2-4 paragraph body of a concept or entity
+ * page. Frontmatter, `sources:`, `## Sources` and every typed edge are
+ * assembled here, so a model omission cannot produce an uncited page.
+ *
+ * S4b runs first, because a source page links only to label pages that exist.
+ * Every extraction is read once, through `listExtractions`, before either half.
  */
 import { compareCodepoint } from "@2nd-brain/okf";
 import { callCached, createLlmCache } from "../../llm/cache.js";
 import { PageBodiesSchema, rawPathForAttempt } from "../../llm/json.js";
 import { DEFAULT_OLLAMA_BASE_URL } from "../../llm/ollama.js";
 import type { LlmMessage } from "../../llm/ollama.js";
-import { readExtraction, type ExtractionRecord, type ExtractionSource } from "../extraction.js";
+import {
+  listExtractions,
+  type ExtractionRecord,
+  type ExtractionSource,
+} from "../extraction.js";
 import {
   readManifest,
   readTaxonomy,
@@ -88,29 +95,37 @@ export type S4Stage = (
 export interface S4RunResult {
   /** Bundle-relative paths of the pages this run wrote. */
   written: Set<string>;
-  /** The extraction each source page rendered from, keyed by source slug. */
-  records: Map<string, ExtractionRecord>;
   cancelled: boolean;
 }
 
-/** The manifest labels that name this source, as page links. */
+/** The manifest labels with a written page that name this source. */
 function conceptsFor(
   manifest: ManifestRecord,
   sourceSlug: string,
+  written: ReadonlySet<string>,
 ): SourcePageConcept[] {
   return manifest.concepts
-    .filter((concept) => concept.sources.includes(sourceSlug))
+    .filter(
+      (concept) =>
+        concept.sources.includes(sourceSlug) &&
+        written.has(pagePathFor("concept", concept.slug)),
+    )
     .map((concept) => ({ name: concept.title, slug: concept.slug }))
     .sort((left, right) => compareCodepoint(left.slug, right.slug));
 }
 
-/** The manifest entities that name this source, as page links. */
+/** The manifest entities with a written page that name this source. */
 function entitiesFor(
   manifest: ManifestRecord,
   sourceSlug: string,
+  written: ReadonlySet<string>,
 ): SourcePageEntity[] {
   return manifest.entities
-    .filter((entity) => entity.sources.includes(sourceSlug))
+    .filter(
+      (entity) =>
+        entity.sources.includes(sourceSlug) &&
+        written.has(pagePathFor("entity", entity.slug, entity.type)),
+    )
     .map((entity) => ({ name: entity.title, slug: entity.slug, type: entity.type }))
     .sort((left, right) => compareCodepoint(left.slug, right.slug));
 }
@@ -144,9 +159,10 @@ export function manifestSourceInput(
   source: ManifestSource,
   manifest: ManifestRecord,
   record: ExtractionRecord | null,
+  written: ReadonlySet<string>,
 ): SourcePageInput {
-  const concepts = conceptsFor(manifest, source.slug);
-  const entities = entitiesFor(manifest, source.slug);
+  const concepts = conceptsFor(manifest, source.slug, written);
+  const entities = entitiesFor(manifest, source.slug, written);
 
   if (record !== null) {
     return {
@@ -177,9 +193,10 @@ export function manifestSourceInput(
 /**
  * S4a: one page per manifest source, built in code (T-P4-14, T-P4-15).
  *
- * The extraction is read exactly once per source. A missing extraction is data,
- * not an exception: the partial page is written and a skipped S4 unit records
- * that the page is not backed by an extraction.
+ * A source page links only to label pages already in `written`, so no source
+ * page can carry a broken link. A missing extraction is data, not an
+ * exception: the partial page is written and a skipped S4 unit records that
+ * the page is not backed by an extraction.
  */
 export async function renderSourcePages(
   job: JobRecord,
@@ -188,18 +205,16 @@ export async function renderSourcePages(
   deps: StageDeps,
   manifest: ManifestRecord,
   _taxonomy: TaxonomyRecord | null,
+  records: ReadonlyMap<string, ExtractionRecord>,
+  written: Set<string>,
   persist: () => Promise<void>,
 ): Promise<S4RunResult> {
-  const written = new Set<string>();
-  const records = new Map<string, ExtractionRecord>();
-
   for (const source of manifest.sources) {
     const latest = await readJob(ctx.vaultDir, job.id);
     job.cancelRequested = latest.cancelRequested;
-    if (job.cancelRequested) return { written, records, cancelled: true };
+    if (job.cancelRequested) return { written, cancelled: true };
 
-    const record = await readExtraction(dir, source.slug);
-    if (record !== null) records.set(source.slug, record);
+    const record = records.get(source.slug) ?? null;
     if (record === null) {
       const skipped: SkippedUnit = {
         slug: source.slug,
@@ -222,7 +237,7 @@ export async function renderSourcePages(
     await deps.writePage(
       ctx.vaultDir,
       relPath,
-      renderSourcePage(manifestSourceInput(source, manifest, record)),
+      renderSourcePage(manifestSourceInput(source, manifest, record, written)),
     );
     written.add(relPath);
     await appendEvent(dir, "unit", {
@@ -232,7 +247,7 @@ export async function renderSourcePages(
     });
   }
 
-  return { written, records, cancelled: false };
+  return { written, cancelled: false };
 }
 
 /**
@@ -367,8 +382,12 @@ function quotesFor(
   return record === undefined ? [] : (record.quotes as SourcePageQuote[]);
 }
 
-/** The typed edges that name this label, as page links. */
-function pageEdges(manifest: ManifestRecord, slug: string): PageEdge[] {
+/** The typed edges that name this label and resolve to a written page. */
+function pageEdges(
+  manifest: ManifestRecord,
+  slug: string,
+  written: ReadonlySet<string>,
+): PageEdge[] {
   const concepts = new Map(
     manifest.concepts.map((concept) => [concept.slug, concept] as const),
   );
@@ -377,9 +396,12 @@ function pageEdges(manifest: ManifestRecord, slug: string): PageEdge[] {
   );
   const edges: PageEdge[] = [];
   for (const edge of manifest.edges) {
-    if (edge.from !== slug) continue;
+    if (edge.from !== slug || edge.to === slug) continue;
     const concept = concepts.get(edge.to);
-    if (concept !== undefined) {
+    if (
+      concept !== undefined &&
+      written.has(pagePathFor("concept", concept.slug))
+    ) {
       edges.push({
         kind: edge.kind as PageEdgeKind,
         target: { kind: "concept", slug: concept.slug, title: concept.title },
@@ -387,7 +409,10 @@ function pageEdges(manifest: ManifestRecord, slug: string): PageEdge[] {
       continue;
     }
     const entity = entities.get(edge.to);
-    if (entity !== undefined) {
+    if (
+      entity !== undefined &&
+      written.has(pagePathFor("entity", entity.slug, entity.type))
+    ) {
       edges.push({
         kind: edge.kind as PageEdgeKind,
         target: {
@@ -438,6 +463,15 @@ export async function renderLabelPages(
   const requested = new Set(requests.map((request) => request.slug));
   const bodies = new Map<string, string>();
   const failures = new Map<string, string>();
+
+  // Every request gets a page, so an edge to a requested label resolves even
+  // before that page is written. A filtered label has no request and no page.
+  const labelPaths = new Set(
+    requests.map((request) =>
+      pagePathFor(request.kind, request.slug, request.entityType),
+    ),
+  );
+  const visible = new Set([...written, ...labelPaths]);
 
   const batches = batchSlices(requests, PAGES_PER_CALL);
   for (let index = 0; index < batches.length; index += 1) {
@@ -504,7 +538,7 @@ export async function renderLabelPages(
       tags: request.tags,
       sources,
       body: body ?? fallbackBody(request),
-      edges: pageEdges(manifest, request.slug),
+      edges: pageEdges(manifest, request.slug, visible),
       created: job.createdAt,
       updated: job.createdAt,
     };
@@ -549,27 +583,38 @@ export function createS4Stage(deps: StageDeps): S4Stage {
     const taxonomy = await readTaxonomy(dir);
     if (manifest === null) return false;
 
-    const result = await renderSourcePages(
-      job,
-      ctx,
-      dir,
-      deps,
-      manifest,
-      taxonomy,
-      persist,
+    // One read of every extraction serves both S4a and S4b.
+    const records = await listExtractions(dir);
+    const bySlug = new Map(
+      records.map((record) => [record.source.slug, record] as const),
     );
-    if (result.cancelled) return true;
+    const written = new Set<string>();
 
-    return renderLabelPages(
+    // S4b first: a source page links only to label pages that exist.
+    const labelsCancelled = await renderLabelPages(
       job,
       ctx,
       dir,
       deps,
       manifest,
       taxonomy,
-      [...result.records.values()],
-      result.written,
+      records,
+      written,
       persist,
     );
+    if (labelsCancelled) return true;
+
+    const sourceResult = await renderSourcePages(
+      job,
+      ctx,
+      dir,
+      deps,
+      manifest,
+      taxonomy,
+      bySlug,
+      written,
+      persist,
+    );
+    return sourceResult.cancelled;
   };
 }

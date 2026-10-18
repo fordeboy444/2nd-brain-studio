@@ -77,6 +77,7 @@ interface FakeLlm {
   client: LlmClient;
   canonicalCalls: number;
   taxonomyCalls: number;
+  pageCalls: number;
 }
 
 function defaultCanonical(labels: BatchLabel[]): string {
@@ -110,6 +111,7 @@ function fakeLlm(options: {
     calls: [],
     canonicalCalls: 0,
     taxonomyCalls: 0,
+    pageCalls: 0,
     client: undefined as unknown as LlmClient,
   };
 
@@ -117,6 +119,8 @@ function fakeLlm(options: {
     async chat(messages: LlmMessage[], chatOptions: LlmChatOptions) {
       const system = messages[0]?.content ?? "";
       const canonical = system.includes("canonicalise");
+      // A job run continues into S4, whose page calls are neither S3 prompt.
+      const pages = system.includes("body of knowledge pages");
       const payload = messages[1]?.content ?? "";
       const labels = payload
         .split("\n")
@@ -130,11 +134,19 @@ function fakeLlm(options: {
         ...(chatOptions.rawPath !== undefined ? { rawPath: chatOptions.rawPath } : {}),
       };
       state.calls.push(call);
-      if (canonical) state.canonicalCalls += 1;
+      if (pages) state.pageCalls += 1;
+      else if (canonical) state.canonicalCalls += 1;
       else state.taxonomyCalls += 1;
 
       let text: string;
-      if (canonical) {
+      if (pages) {
+        text = JSON.stringify(
+          labels.map((label) => ({
+            slug: label.slug,
+            body: "First paragraph.\n\nSecond paragraph.",
+          })),
+        );
+      } else if (canonical) {
         text = options.canonicalText?.(call) ?? defaultCanonical(labels);
       } else {
         text = options.taxonomyText?.(call) ?? EMPTY_TAXONOMY;
@@ -812,8 +824,9 @@ describe("S3 failure containment", () => {
     const taxonomy = await readTaxonomy(dir);
     expect(taxonomy).not.toBeNull();
 
-    // Only the successful calls wrote cache entries: batch 1 plus two taxonomy.
+    // Only successful calls wrote cache entries: S3 batch 1 plus two taxonomy
+    // calls, then the eight S4 page batches (36 labels at five per call).
     const cacheDir = join(root, ".okf", "cache", "llm", "vault");
-    expect((await readdir(cacheDir)).length).toBe(3);
+    expect((await readdir(cacheDir)).length).toBe(11);
   });
 });

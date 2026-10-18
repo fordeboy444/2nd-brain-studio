@@ -119,8 +119,10 @@ export function sourcesBullet(
   title: string,
   slug: string,
   quote: SourcePageQuote,
+  /** Directory levels between the page and the bundle root. */
+  up = 1,
 ): string {
-  const link = `- [${title}](../sources/${slug}.md) - `;
+  const link = `- [${title}](${"../".repeat(up)}sources/${slug}.md) - `;
   if (quote.startSec === undefined) return `${link}"${quote.text}"`;
   return `${link}"[${formatTimestamp(quote.startSec)}] ${quote.text}"`;
 }
@@ -272,8 +274,12 @@ const EDGE_ORDER: readonly PageEdgeKind[] = [
 ];
 
 /** A link to an edge target, relative to a page below the bundle root. */
-function edgeTargetPath(target: PageEdgeTarget): string {
-  return `../${pagePathFor(target.kind, target.slug, target.entityType)}`;
+function edgeTargetPath(target: PageEdgeTarget, up: number): string {
+  return `${"../".repeat(up)}${pagePathFor(
+    target.kind,
+    target.slug,
+    target.entityType,
+  )}`;
 }
 
 /**
@@ -285,12 +291,14 @@ function edgeTargetPath(target: PageEdgeTarget): string {
 export function edgeSection(
   kind: PageEdgeKind,
   edges: readonly PageEdge[],
+  /** Directory levels between the page and the bundle root. */
+  up = 1,
 ): string {
   const seen = new Set<string>();
   const lines: string[] = [];
   for (const edge of edges) {
     if (edge.kind !== kind) continue;
-    const path = edgeTargetPath(edge.target);
+    const path = edgeTargetPath(edge.target, up);
     if (seen.has(path)) continue;
     seen.add(path);
     lines.push(linkLine(edge.target.title, path));
@@ -347,7 +355,10 @@ function firstQuote(quotes: readonly SourcePageQuote[]): SourcePageQuote | null 
 }
 
 /** One `## Sources` bullet per cited source that has a citable quote. */
-function labelBullets(sources: readonly LabelPageSource[]): string[] {
+function labelBullets(
+  sources: readonly LabelPageSource[],
+  up: number,
+): string[] {
   const ordered = [...sources].sort((left, right) =>
     compareCodepoint(left.slug, right.slug),
   );
@@ -358,7 +369,7 @@ function labelBullets(sources: readonly LabelPageSource[]): string[] {
     seen.add(source.slug);
     const quote = firstQuote(source.quotes);
     if (quote === null) continue;
-    bullets.push(sourcesBullet(source.title, source.slug, quote));
+    bullets.push(sourcesBullet(source.title, source.slug, quote, up));
   }
   return bullets;
 }
@@ -367,15 +378,19 @@ function labelBullets(sources: readonly LabelPageSource[]): string[] {
  * The code-owned body of a label page: `## Overview`, the typed edges and
  * `## Sources`. The model supplies the overview prose and nothing else.
  */
-export function renderPageBody(input: ConceptPageInput): string {
+export function renderPageBody(
+  input: ConceptPageInput,
+  /** Directory levels between the page and the bundle root. */
+  up = 1,
+): string {
   const parts: string[] = [];
   const overview = input.body.trim();
   if (overview !== "") parts.push(section("## Overview", [overview]));
   for (const kind of EDGE_ORDER) {
-    const rendered = edgeSection(kind, input.edges);
+    const rendered = edgeSection(kind, input.edges, up);
     if (rendered !== "") parts.push(rendered);
   }
-  const sources = renderSourcesSection(labelBullets(input.sources));
+  const sources = renderSourcesSection(labelBullets(input.sources, up));
   if (sources !== "") parts.push(sources);
   return parts.join("\n");
 }
@@ -413,7 +428,8 @@ export function renderEntityPage(input: EntityPageInput): string {
   return [
     renderFrontmatter(data),
     `# ${input.title}\n`,
-    renderPageBody(input),
+    // `entities/<type>/` is two levels below the bundle root.
+    renderPageBody(input, 2),
   ].join("\n");
 }
 
