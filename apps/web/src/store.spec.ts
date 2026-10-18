@@ -152,6 +152,32 @@ it("lets a fresher poll replace the stale selected detail", async () => {
   expect(useStore.getState().jobs[0]?.status).toBe("completed");
 });
 
+it("reseeds the stepper when a poll ends the selected job while the stream is down", async () => {
+  const running = makeJob({ status: "running", stage: "S1" });
+  const done = makeJob({
+    status: "completed",
+    stage: "done",
+    progress: { done: 2, total: 2 },
+  });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: running,
+    jobs: [running],
+    sseState: "idle",
+    stagesDone: ["S0"],
+    activeStage: "S1",
+  });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [done] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  expect(useStore.getState().selectedJob?.status).toBe("completed");
+  expect(useStore.getState().activeStage).toBeNull();
+  expect(useStore.getState().stagesDone).toEqual(["S0", "S1"]);
+});
+
 const SETTINGS_PAYLOAD = {
   settings: {
     llm: { model: "m", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },

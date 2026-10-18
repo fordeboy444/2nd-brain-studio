@@ -874,7 +874,21 @@ export const useStore = create<AppState>((set, get) => {
             selected !== null
               ? (merged.find((job) => job.id === selected.id) ?? selected)
               : null;
-          return { jobs: merged, selectedJob, jobsLoading: false };
+          // The stepper is derived from the job record, so a poll that moves the
+          // selected job to a terminal state must reseed it too. Without this,
+          // a job that ends while the stream is down shows "Completed" beside a
+          // stage that is still marked active.
+          if (selectedJob === null) {
+            return { jobs: merged, selectedJob, jobsLoading: false };
+          }
+          const statusChanged = selected === null || selected.status !== selectedJob.status;
+          const seeded = statusChanged ? seedStages(selectedJob) : null;
+          return {
+            jobs: merged,
+            selectedJob,
+            jobsLoading: false,
+            ...(seeded ?? {}),
+          };
         });
       } catch (e) {
         set({ jobsError: (e as Error).message, jobsLoading: false });
