@@ -458,8 +458,8 @@ it("shows the failed units as slug, stage and reason, and the empty copy when no
   serverJobs = [
     makeJob({
       skipped: [
-        { slug: "video-a", stage: "S1", reason: "timeout" },
-        { slug: "video-b", stage: "S1", reason: "blocked" },
+        { slug: "video-a", stage: "S3", reason: "timeout" },
+        { slug: "video-b", stage: "S4", reason: "blocked" },
       ],
     }),
   ];
@@ -468,7 +468,7 @@ it("shows the failed units as slug, stage and reason, and the empty copy when no
   const rows = first.host.querySelectorAll(".job-failed-table tbody tr");
   expect(rows.length).toBe(2);
   expect(rows[0]?.textContent).toContain("video-a");
-  expect(rows[0]?.textContent).toContain("S1");
+  expect(rows[0]?.textContent).toContain("S3");
   expect(rows[0]?.textContent).toContain("timeout");
   await first.unmount();
 
@@ -477,6 +477,30 @@ it("shows the failed units as slug, stage and reason, and the empty copy when no
   await selectRow(second.host, 0, second.render);
   expect(second.host.textContent).toContain("No failed units");
   expect(second.host.textContent).toContain("Every selected unit completed.");
+});
+
+it("keeps non-retryable and informational skips out of the failed table", async () => {
+  serverJobs = [
+    makeJob({
+      skipped: [{ slug: "video-a", stage: "S1", reason: "no_captions" }],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  // A resumed unit reports a skip with no reason: it is not a failure.
+  await render(() =>
+    source.emit(
+      "unit",
+      { slug: "video-b", stage: "S1", status: "skipped", detail: "capture present" },
+      1,
+    ),
+  );
+
+  expect(host.querySelectorAll(".job-failed-table tbody tr").length).toBe(0);
+  expect(actionButton(host, "Retry failed").disabled).toBe(true);
 });
 
 it("renders the empty jobs list copy while never showing a blank list", async () => {
@@ -531,7 +555,7 @@ it("retries once, swaps the label to Retrying…, then refreshes the record", as
     makeJob({
       status: "completed",
       stage: "done",
-      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+      skipped: [{ slug: "video-a", stage: "S2", reason: "timeout" }],
     }),
   ];
   holdRetry();
@@ -577,7 +601,7 @@ it("gives every failed row its own secondary Retry button in a Retry column", as
       status: "failed",
       stage: "done",
       skipped: [
-        { slug: "video-a", stage: "S1", reason: "timeout" },
+        { slug: "video-a", stage: "S4", reason: "timeout" },
         { slug: "video-b", stage: "S2", reason: "validator" },
       ],
     }),
@@ -609,7 +633,7 @@ it("disables every row Retry under the same condition as the primary action", as
   serverJobs = [
     makeJob({
       status: "running",
-      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+      skipped: [{ slug: "video-a", stage: "S2", reason: "timeout" }],
     }),
   ];
   const { host, render } = await mountJobs();
@@ -625,7 +649,7 @@ it("sends the shared whole-job retry from a row button", async () => {
     makeJob({
       status: "failed",
       stage: "done",
-      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+      skipped: [{ slug: "video-a", stage: "S2", reason: "timeout" }],
     }),
   ];
   const { host, render } = await mountJobs();
@@ -668,7 +692,7 @@ it("shows the approved toast and re-enables Retry when the request is refused", 
     makeJob({
       status: "failed",
       stage: "done",
-      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+      skipped: [{ slug: "video-a", stage: "S2", reason: "timeout" }],
     }),
   ];
   const { host, render } = await mountJobs();

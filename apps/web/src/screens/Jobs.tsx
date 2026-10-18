@@ -39,6 +39,12 @@ const TERMINAL: ReadonlySet<JobSummary["status"]> = new Set([
   "cancelled",
 ]);
 
+/**
+ * The stages a retry can re-run. S0, S1 and S1w entries are display-only, so
+ * they never make a row in the failed-unit table (CR-03).
+ */
+const RETRYABLE: ReadonlySet<string> = new Set(["S2", "S3", "S4", "S6"]);
+
 function isTerminal(status: JobSummary["status"]): boolean {
   return TERMINAL.has(status);
 }
@@ -239,6 +245,7 @@ export function Jobs() {
     >();
     if (selectedJob !== null) {
       for (const skip of selectedJob.skipped) {
+        if (!RETRYABLE.has(skip.stage)) continue;
         rows.set(`${skip.slug}\u0000${skip.reason}`, {
           slug: skip.slug,
           stage: skip.stage,
@@ -249,7 +256,11 @@ export function Jobs() {
     }
     for (const row of unitFeed) {
       if (row.status !== "skipped") continue;
-      const reason = row.reason ?? row.detail ?? "";
+      // An informational skip ("capture present") carries no reason and is not
+      // a failure.
+      if (row.reason === undefined) continue;
+      if (!RETRYABLE.has(row.stage)) continue;
+      const reason = row.reason;
       rows.set(`${row.slug}\u0000${reason}`, {
         slug: row.slug,
         stage: row.stage,
