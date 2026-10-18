@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../../http/writeAtomic.js";
 import type { LlmClient, LlmChatOptions } from "../../llm/ollama.js";
 import { writeCapture } from "../capture.js";
@@ -10,6 +10,23 @@ import { createJobRecord, jobDir, newJobId, writeJob } from "../store.js";
 import type { JobRecord, JobSettings } from "../types.js";
 import type { UnitContext } from "../runner.js";
 import { createS2Stage } from "./s2.js";
+
+/**
+ * The read-once proof needs a count of `readCapture` calls, not a guess from
+ * the filesystem. The mock forwards everything else (notably `writeCapture`).
+ */
+const captureReads = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("../capture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../capture.js")>();
+  return {
+    ...actual,
+    async readCapture(vaultDir: string, slug: string) {
+      captureReads.count += 1;
+      return actual.readCapture(vaultDir, slug);
+    },
+  };
+});
 
 const FIXED_ISO = "2026-10-18T10:00:00.000Z";
 const FIXED_NOW = Date.parse(FIXED_ISO);
@@ -78,6 +95,7 @@ let root: string;
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "s2-spec-"));
   await mkdir(join(root, "raw"), { recursive: true });
+  captureReads.count = 0;
 });
 
 afterEach(async () => {
@@ -143,6 +161,34 @@ async function writeVideo(slug: string, title: string): Promise<void> {
       { startSec: 0, text: "hello there" },
       { startSec: 1402, text: "goodbye now" },
     ],
+  });
+}
+
+async function writeWeb(slug: string, title: string): Promise<void> {
+  await writeCapture(root, {
+    kind: "web",
+    slug,
+    url: `https://example.com/${slug}`,
+    site: "example.com",
+    title,
+    capturedAt: FIXED_ISO,
+    wordCount: 4,
+    paragraphs: ["alpha paragraph", "beta paragraph"],
+  });
+}
+
+/** A schema-valid reply carrying the given quotes. */
+function replyWith(quotes: Array<{ text: string; startSec?: number }>): string {
+  return JSON.stringify({
+    slug: "model-chosen-slug",
+    title: "Model Title",
+    thesis: "A thesis.",
+    summary: "A summary.",
+    tags: ["agents"],
+    concepts: [],
+    entities: [],
+    quotes,
+    relations: [],
   });
 }
 
@@ -222,5 +268,99 @@ describe("S2 stage", () => {
     const record = await readExtraction(dir, "first-talk");
     expect(record?.partial).toBe(true);
     expect(record?.source.rawPath).toBe("raw/first-talk.md");
+  });
+});
+
+describe("S2 extraction contract", () => {
+  it("reads each raw capture exactly once, even at 300 segments", async () => {
+    const segments = Array.from({ length: 300 }, (_, index) => ({
+      startSec: index * 5,
+      text: `segment number ${index}`,
+    }));
+    await writeCapture(root, {
+      kind: "video",
+      slug: "long-talk",
+      url: "https://youtu.be/long-talk",
+      youtubeId: "long-talk",
+      title: "Long Talk",
+      tier: 1,
+      fetchedAt: FIXED_ISO,
+      segments,
+    });
+
+    const job = makeJob(0.5);
+    await runS2(job, fakeLlm(VALID_REPLY).client);
+
+    expect(captureReads.count).toBe(1);
+  });
+
+  it("keeps a verbatim quote and drops a paraphrased one", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const job = makeJob(0.5);
+    await runS2(
+      job,
+      fakeLlm(
+        replyWith([
+          { text: "hello there", startSec: 0 },
+          { text: "completely different topic", startSec: 0 },
+        ]),
+      ).client,
+    );
+
+    const record = await readExtraction(jobDir(root, job.id), "first-talk");
+    expect(record?.quotes).toEqual([{ text: "hello there", startSec: 0 }]);
+  });
+
+  it("stores no timestamp on a web quote and no youtube_id in its source", async () => {
+    await writeWeb("example-post", "Example Post");
+
+    const job = makeJob(0.5);
+    await runS2(
+      job,
+      fakeLlm(
+        replyWith([
+          { text: "alpha paragraph", startSec: 0 },
+          { text: "totally invented content", startSec: 0 },
+        ]),
+      ).client,
+    );
+
+    const dir = jobDir(root, job.id);
+    const record = await readExtraction(dir, "example-post");
+    expect(record?.quotes).toEqual([{ text: "alpha paragraph" }]);
+    expect(record?.quotes[0]).not.toHaveProperty("startSec");
+    expect(record?.source.sourceKind).toBe("web");
+    expect(record?.source).not.toHaveProperty("youtubeId");
+
+    const page = await readFile(join(root, "sources", "example-post.md"), "utf8");
+    expect(page).not.toContain("youtube_id");
+  });
+
+  it("keys the file on the capture slug when the model answers with another", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const job = makeJob(0.5);
+    await runS2(job, fakeLlm(VALID_REPLY).client);
+
+    const dir = jobDir(root, job.id);
+    expect(await readdir(join(dir, "extractions"))).toEqual(["first-talk.json"]);
+    expect((await readExtraction(dir, "first-talk"))?.slug).toBe("first-talk");
+  });
+
+  it("stores no transcript body and no producing tier in the extraction file", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const job = makeJob(0.5);
+    await runS2(job, fakeLlm(VALID_REPLY).client);
+
+    const raw = await readFile(
+      join(jobDir(root, job.id), "extractions", "first-talk.json"),
+      "utf8",
+    );
+    expect(raw).not.toContain("goodbye now");
+    expect(raw).not.toMatch(/"transcript"\s*:/);
+    expect(raw).not.toMatch(/"body"\s*:/);
+    expect(raw).not.toMatch(/"tier"\s*:/);
   });
 });
