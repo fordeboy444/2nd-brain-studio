@@ -524,6 +524,99 @@ it("retries once, swaps the label to Retrying…, then refreshes the record", as
   expect(host.textContent).toContain("Retry after the job finishes.");
 });
 
+/* ---- Task 2: the per-row Retry column ---- */
+
+it("gives every failed row its own secondary Retry button in a Retry column", async () => {
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [
+        { slug: "video-a", stage: "S1", reason: "timeout" },
+        { slug: "video-b", stage: "S2", reason: "validator" },
+      ],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const headers = [...host.querySelectorAll(".job-failed-table th")].map((th) => th.textContent);
+  expect(headers).toEqual(["Unit", "Stage", "Reason", "Retry"]);
+
+  const rowButtons = [
+    ...host.querySelectorAll<HTMLButtonElement>(".job-failed-table tbody button"),
+  ];
+  expect(rowButtons.length).toBe(2);
+  expect(rowButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Retry video-a",
+    "Retry video-b",
+  ]);
+  // Secondary by definition: the default surface, never accent and never danger.
+  for (const button of rowButtons) {
+    expect(button.className).toContain("ghost-pill");
+    expect(button.className).not.toContain("primary");
+    expect(button.className).not.toContain("danger");
+    expect(button.disabled).toBe(false);
+  }
+});
+
+it("disables every row Retry under the same condition as the primary action", async () => {
+  serverJobs = [
+    makeJob({
+      status: "running",
+      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const rowButton = host.querySelector<HTMLButtonElement>(".job-failed-table tbody button");
+  expect(rowButton?.disabled).toBe(true);
+  expect(actionButton(host, "Retry failed").disabled).toBe(true);
+});
+
+it("sends the shared whole-job retry from a row button", async () => {
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  await render(() =>
+    host.querySelector<HTMLButtonElement>(".job-failed-table tbody button")?.click(),
+  );
+
+  expect(retryCalls).toBe(1);
+});
+
+it("shows the exact S2 copy and keeps the server detail as the title", async () => {
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [
+        {
+          slug: "video-a",
+          stage: "S2",
+          reason: "validator",
+          detail: "Missing summary field.",
+        },
+      ],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const row = host.querySelector(".job-failed-table tbody tr");
+  expect(row?.textContent).toContain("Extraction failed. Source page saved as partial.");
+  // The validator's own words stay reachable without replacing the approved copy.
+  expect(row?.querySelector('[title="Missing summary field."]')).toBeTruthy();
+});
+
 it("shows the approved toast and re-enables Retry when the request is refused", async () => {
   retryStatus = 409;
   serverJobs = [
