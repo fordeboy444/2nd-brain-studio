@@ -229,6 +229,25 @@ describe("ExtractionSchema normalisation", () => {
       ExtractionSchema.parse({ ...base(), surprise: true }),
     ).toThrow();
   });
+
+  it("flattens a multi-line quote and strips unsafe title characters", () => {
+    const parsed = parseWith(
+      JSON.stringify(
+        base({
+          title: "## A Title\nwith a [bracket]",
+          concepts: [{ name: "A ] broken\nname", slug: "a", weight: 0.5 }],
+          entities: [{ name: "# Tool [x]", slug: "tool", type: "tool", weight: 1 }],
+          quotes: [{ text: "line one\n\n## block\nline two", startSec: 10 }],
+        }),
+      ),
+      ExtractionSchema,
+    );
+
+    expect(parsed.title).toBe("A Title with a bracket");
+    expect(parsed.concepts[0]?.name).toBe("A broken name");
+    expect(parsed.entities[0]?.name).toBe("Tool x");
+    expect(parsed.quotes[0]?.text).toBe("line one ## block line two");
+  });
 });
 
 describe("PageBodiesSchema", () => {
@@ -321,6 +340,23 @@ describe("S3 schemas", () => {
       tags: ["workflow"],
       aliases: ["Plan Implement Validate"],
     });
+  });
+
+  it("normalises a canonical title to one safe line", () => {
+    const parsed = CanonicalizeSchema.parse({
+      labels: [
+        {
+          kind: "concept",
+          from: "a",
+          to: "b",
+          title: "# B\n[label]",
+          tags: [],
+          aliases: [],
+        },
+      ],
+    });
+
+    expect(parsed.labels[0]?.title).toBe("B label");
   });
 
   it("rejects a canonicalisation label with an empty title, no kind or unknown top-level key", () => {

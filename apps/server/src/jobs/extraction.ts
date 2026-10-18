@@ -28,6 +28,8 @@ import { z } from "zod";
 import {
   EDGE_KINDS,
   ENTITY_TYPES,
+  markdownSafeTitle,
+  singleLineText,
   type Extraction,
 } from "../llm/json.js";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
@@ -292,7 +294,8 @@ const StoredConceptSchema = z
     slug: storedSlug,
     weight: z.number(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, name: markdownSafeTitle(value.name) }));
 
 const StoredEntitySchema = z
   .object({
@@ -301,14 +304,17 @@ const StoredEntitySchema = z
     type: z.enum(ENTITY_TYPES),
     weight: z.number(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, name: markdownSafeTitle(value.name) }));
 
+/** Stored text is re-normalised on read, so an older record renders safely. */
 const StoredQuoteSchema = z
   .object({
     text: z.string(),
     startSec: z.number().optional(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, text: singleLineText(value.text) }));
 
 const StoredRelationSchema = z
   .object({
@@ -354,7 +360,8 @@ const StoredExtractionSchema = z
     at: z.string(),
     partial: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, title: markdownSafeTitle(value.title) }));
 
 /** A stored record is usable only when its identity matches the requested one. */
 function parseExtractionRecord(

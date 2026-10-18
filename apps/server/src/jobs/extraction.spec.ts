@@ -189,6 +189,28 @@ describe("extraction records", () => {
     expect(read).toEqual(record);
   });
 
+  it("normalises stored text on read, so an older record renders safely", async () => {
+    const record = toExtractionRecord(EXTRACTION, videoCapture());
+    await writeExtraction(jobDir, record);
+    await writeFile(
+      extractionPath(jobDir, "first-talk"),
+      JSON.stringify({
+        ...record,
+        title: "First\nTalk",
+        quotes: [{ text: "line one\n\n## block", startSec: 65 }],
+        concepts: [
+          { name: "Agent ] Workflow", slug: "agentic-workflow", weight: 1 },
+        ],
+      }),
+      "utf8",
+    );
+
+    const read = await readExtraction(jobDir, "first-talk");
+    expect(read?.title).toBe("First Talk");
+    expect(read?.quotes[0]?.text).toBe("line one ## block");
+    expect(read?.concepts[0]?.name).toBe("Agent Workflow");
+  });
+
   it("returns null for a missing extraction", async () => {
     expect(await readExtraction(jobDir, "absent")).toBeNull();
   });

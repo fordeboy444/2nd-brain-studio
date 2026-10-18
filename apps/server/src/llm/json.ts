@@ -519,9 +519,28 @@ const RelationSchema = z.object({
 });
 
 /**
+ * Collapse whitespace in model text. One line cannot open a new markdown
+ * block inside `## Sources` or `## Key moments` (WR-09).
+ */
+export function singleLineText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * One-line title text that is safe inside `# ${title}` and `[${title}](...)`:
+ * no leading heading marker and no bracket that would end a link label.
+ */
+export function markdownSafeTitle(value: string): string {
+  return singleLineText(
+    singleLineText(value).replace(/^#+\s*/, "").replace(/[[\]]/g, ""),
+  );
+}
+
+/**
  * The S2 extraction contract. Every field is normalised before a stage sees
  * it: slugs are kebab-case, types are in the enum, weights are clamped, quote
- * text is capped and an unparseable timestamp drops only that quote.
+ * text is one line and capped, and an unparseable timestamp drops only that
+ * quote.
  */
 export const ExtractionSchema = z
   .object({
@@ -538,17 +557,17 @@ export const ExtractionSchema = z
   .strict()
   .transform((value) => ({
     slug: slugOr(value.slug, value.title),
-    title: value.title.trim(),
+    title: markdownSafeTitle(value.title),
     thesis: value.thesis.trim(),
     summary: value.summary.trim(),
     tags: normalizeTags(value.tags),
     concepts: value.concepts.map((concept) => ({
-      name: concept.name.trim(),
+      name: markdownSafeTitle(concept.name),
       slug: slugOr(concept.slug, concept.name),
       weight: normalizeWeight(concept.weight),
     })),
     entities: value.entities.map((entity) => ({
-      name: entity.name.trim(),
+      name: markdownSafeTitle(entity.name),
       slug: slugOr(entity.slug, entity.name),
       type: normalizeEntityType(entity.type),
       weight: normalizeWeight(entity.weight),
@@ -558,7 +577,7 @@ export const ExtractionSchema = z
       if (startSec === null) return [];
       return [
         {
-          text: quote.text.trim().slice(0, MAX_QUOTE_CHARS),
+          text: singleLineText(quote.text).slice(0, MAX_QUOTE_CHARS),
           startSec,
         },
       ];
@@ -755,7 +774,7 @@ const CanonicalLabelSchema = z
     kind: value.kind,
     from: slugOr(value.from, undefined),
     to: slugOr(value.to, undefined),
-    title: value.title,
+    title: markdownSafeTitle(value.title),
     tags: normalizeTags(value.tags),
     aliases: normalizeStrings(value.aliases),
   }));
