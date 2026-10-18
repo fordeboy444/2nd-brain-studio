@@ -302,6 +302,35 @@ describe("E1 frontmatter type boundaries", () => {
   });
 });
 
+describe("E1 unsupported frontmatter (CR-01)", () => {
+  it("reports unsupported YAML instead of silently skipping E5, E6 and E8", () => {
+    // A valid `type:` line plus an indented nested key: E1's type read passes,
+    // so without this rule the page would opt out of every semantic check.
+    const pages = conceptWithBullet(
+      "sources: [web-a]\nmetadata:\n  owner: someone\n",
+      '- [Web A](../sources/web-a.md) - "[0:01:00] a timestamped phrase"',
+      webSourcePages(
+        "a timestamped phrase appears here; a plain phrase and a quote too.",
+      ),
+    );
+    const result = lintBundle(pages, "edge");
+    expect(result.errors.map((finding) => finding.message)).toEqual([
+      "E1 unsupported YAML in frontmatter: concepts/subject.md",
+    ]);
+    expect(result.findings).toHaveLength(1);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("reports one error per unsupported page, in path order", () => {
+    const pages = conceptPair(
+      "---\ntype: concept\nmeta:\n  nested: true\n---\n\n[Partner](partner.md)\n",
+    );
+    expect(findingMessages(pages)).toEqual([
+      "E1 unsupported YAML in frontmatter: concepts/subject.md",
+    ]);
+  });
+});
+
 describe("E2 link boundaries", () => {
   it("resolves a relative link", () => {
     const pages = conceptPair(`${TYPED_CONCEPT}[Partner](partner.md)\n`);

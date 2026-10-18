@@ -12,7 +12,7 @@
  * or process access.
  */
 import type { BundlePage, OkfFrontmatter } from "./frontmatter.js";
-import { parseFrontmatterSafe } from "./frontmatter.js";
+import { FrontmatterError, parseFrontmatter } from "./frontmatter.js";
 import { compareCodepoint } from "./indexes.js";
 import {
   extractLinks,
@@ -234,16 +234,6 @@ export function lintBundle(
     .sort((left, right) => compareCodepoint(left.path, right.path));
   const paths = bundlePathSet(kept, options.paths);
 
-  // Every page is parsed exactly once; E5-E8 share the result. A page with no
-  // frontmatter or an unsupported block yields `null` and produces no finding
-  // from those rules; E1 has already reported the missing type.
-  const byPath = new Map<string, BundlePage>();
-  const parsed = new Map<string, ParsedPage>();
-  for (const page of kept) {
-    byPath.set(page.path, page);
-    parsed.set(page.path, parseFrontmatterSafe(page.text));
-  }
-
   const errors: LintFinding[] = [];
   const warnings: LintFinding[] = [];
   const findings: LintFinding[] = [];
@@ -264,6 +254,24 @@ export function lintBundle(
   const warning = (rule: LintRule, message: string): void => {
     record(rule, "warning", message);
   };
+
+  // Every page is parsed exactly once; E5-E8 share the result. A page with no
+  // frontmatter yields `null` and produces no finding from those rules; E1
+  // reports the missing type. A block outside the supported subset is a hard
+  // E1 error: without it, one unsupported page would silently opt out of E5,
+  // E6 and E8 while E1 still saw a valid `type:` line.
+  const byPath = new Map<string, BundlePage>();
+  const parsed = new Map<string, ParsedPage>();
+  for (const page of kept) {
+    byPath.set(page.path, page);
+    try {
+      parsed.set(page.path, parseFrontmatter(page.text));
+    } catch (cause) {
+      if (!(cause instanceof FrontmatterError)) throw cause;
+      parsed.set(page.path, null);
+      error("E1", `E1 unsupported YAML in frontmatter: ${page.path}`);
+    }
+  }
 
   // E1 — every non-reserved page carries a non-empty `type:`.
   for (const page of kept) {

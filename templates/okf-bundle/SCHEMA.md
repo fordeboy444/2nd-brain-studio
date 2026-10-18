@@ -152,7 +152,9 @@ For each source:
 ## 9. Validation
 
 The lint pass (Phase 2 `packages/okf`) enforces, deterministically:
-- E1: every non-reserved `.md` has frontmatter with a non-empty `type`;
+- E1: every non-reserved `.md` has frontmatter with a non-empty `type`, and every
+  frontmatter block stays inside the supported YAML subset (a nested map, anchor,
+  alias, block scalar or duplicate key is an E1 error, never a silent skip);
 - E2: every relative markdown link resolves to a file in the bundle;
 - E3: every concept/entity/source page appears in its directory `index.md`;
 - E4: every `sources/<slug>.md` has a matching `raw/<slug>.md` and vice-versa;
@@ -170,7 +172,7 @@ Semantic checks (contradictions, staleness, missing concepts) are an LLM pass, n
 
 | Code | Meaning |
 |------|---------|
-| E1 | A non-reserved `.md` is missing frontmatter or its `type` is empty |
+| E1 | A non-reserved `.md` is missing frontmatter, its `type` is empty, or its frontmatter uses unsupported YAML |
 | E2 | A relative markdown link does not resolve to a file |
 | E3 | A concept/entity/source page is absent from its directory `index.md` |
 | E4 | A `sources/<slug>.md` has no matching `raw/<slug>.md` or vice-versa |
