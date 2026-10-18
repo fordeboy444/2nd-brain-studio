@@ -14,6 +14,7 @@ import {
   previewJob as apiPreviewJob,
   putSettings as apiPutSettings,
   readFile,
+  retryJob as apiRetryJob,
   saveYoutubeCookieHeader as apiSaveYoutubeCookieHeader,
   startJob as apiStartJob,
   testLlm as apiTestLlm,
@@ -32,6 +33,7 @@ import {
 } from "./lib/api.js";
 import { readLastTab, writeLastTab, type RightPanelTab } from "./components/rightPanelTab.js";
 import { dirOf, EMPTY_TREE, type TreeState } from "./lib/tree/lazyTree.js";
+import { toast } from "./lib/toast.js";
 
 /**
  * The app store. Baalda's panel model — `sidebar`, `editor`, `rightPanel` plus
@@ -314,6 +316,12 @@ export interface AppState {
    */
   applyJobEvent: (seq: number, type: string, data: Record<string, unknown>) => void;
   cancelSelectedJob: () => Promise<void>;
+  /**
+   * Reset and requeue the selected job's failed units (PIPE-12). A refusal is
+   * reported as a sticky error toast; the record is left as the server has it
+   * and the promise resolves, so the control re-enables.
+   */
+  retrySelectedJob: () => Promise<void>;
 }
 
 /** Is there anything to save? Only meaningful once the read has landed: a tab
@@ -1053,6 +1061,24 @@ export const useStore = create<AppState>((set, get) => {
       // The runner's own record is the authority on the status that follows the
       // cancel flag, so refresh the list rather than inventing one here.
       await get().loadJobs();
+    },
+
+    retrySelectedJob: async () => {
+      const job = get().selectedJob;
+      if (job === null) return;
+      try {
+        await apiRetryJob(job.id);
+      } catch {
+        // The server's 409 carries the reason, but the screen already names the
+        // two conditions it can refuse for. One approved copy covers both, and
+        // the record stays exactly as it was.
+        toast("Couldn't retry the failed units. Try again in a moment.", "error");
+        return;
+      }
+      // The reset record is the server's, not a guess: refresh the list, then
+      // re-select so the unit feed and the seq cursor start from the new run.
+      await get().loadJobs();
+      await get().selectJob(job.id);
     },
   };
 });

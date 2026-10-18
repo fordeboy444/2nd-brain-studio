@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "../components/Banner.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
+import { Spinner } from "../components/Spinner.js";
 import { jobEventsUrl, type JobStage, type JobSummary } from "../lib/api.js";
+import { useAsyncAction } from "../lib/useAsyncAction.js";
 import { LIVE_STAGES, useStore, type UnitFeedRow } from "../store.js";
 
 /**
@@ -121,6 +123,11 @@ export function Jobs() {
   const sseState = useStore((s) => s.sseState);
   const applyJobEvent = useStore((s) => s.applyJobEvent);
   const cancelSelectedJob = useStore((s) => s.cancelSelectedJob);
+  const retrySelectedJob = useStore((s) => s.retrySelectedJob);
+
+  // `pending` guards the very first press; `showPending` waits 140 ms before
+  // the label changes, so a fast retry does not flash a spinner.
+  const retry = useAsyncAction(retrySelectedJob);
 
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [resumed, setResumed] = useState(false);
@@ -246,6 +253,17 @@ export function Jobs() {
     selectedJob !== null &&
     selectedJob.status === "failed" &&
     selectedJob.error === "preflight_failed";
+
+  // The server refuses a retry on a running job and on a job with no failed
+  // units. The screen names both conditions before the press, in that order.
+  const retryBlockedReason =
+    selectedJob === null
+      ? "No failed units to retry."
+      : !isTerminal(selectedJob.status)
+        ? "Retry after the job finishes."
+        : failedRows.length === 0
+          ? "No failed units to retry."
+          : null;
 
   return (
     <div
@@ -377,10 +395,25 @@ export function Jobs() {
 
                 <div className="job-actions">
                   <div className="job-action">
-                    <button type="button" className="ghost-pill" disabled>
-                      Retry failed
+                    <button
+                      type="button"
+                      className="ghost-pill"
+                      // `pending` disables on the first press, not 140 ms later.
+                      disabled={retryBlockedReason !== null || retry.pending}
+                      aria-busy={retry.pending || undefined}
+                      onClick={() => void retry.run()}
+                    >
+                      {retry.showPending ? (
+                        <>
+                          <Spinner size="xs" /> Retrying…
+                        </>
+                      ) : (
+                        "Retry failed"
+                      )}
                     </button>
-                    <span className="muted">Retry is available in Phase 4.</span>
+                    {retryBlockedReason !== null && (
+                      <span className="muted">{retryBlockedReason}</span>
+                    )}
                   </div>
                   <div className="job-action">
                     <button type="button" className="ghost-pill" disabled>

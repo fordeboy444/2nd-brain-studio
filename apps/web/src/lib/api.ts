@@ -100,13 +100,16 @@ export function listVaults(): Promise<Vault[]> {
 export type JobKind = "youtube" | "web";
 export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 /** `done` is terminal; every other value names the stage to run next. */
-export type JobStage = "S0" | "S1" | "S1w" | "done";
+export type JobStage = "S0" | "S1" | "S1w" | "S2" | "S3" | "S4" | "S5" | "S6" | "done";
+
+/** Every stage a unit can be skipped at; `done` is not a unit stage. */
+export type UnitStage = Exclude<JobStage, "done">;
 
 /** One unit that did not produce a capture, as the server records it. */
 export interface SkippedUnit {
   slug: string;
   youtubeId?: string;
-  stage: "S0" | "S1" | "S1w";
+  stage: UnitStage;
   reason: string;
   detail?: string;
 }
@@ -115,8 +118,9 @@ export interface SkippedUnit {
  * A job record as the list and detail routes return it.
  *
  * The list route returns the full record; the fields here are the ones the
- * screen reads. Settings are deliberately absent: the Jobs screen has no use
- * for them, and the API response is not a place to widen the client's surface.
+ * screen reads. `settings` is a client-side narrowing of the full record: only
+ * the sweep flag changes what this screen claims about the pipeline. The rest
+ * of the settings block is not read here.
  */
 export interface JobSummary {
   id: string;
@@ -131,6 +135,7 @@ export interface JobSummary {
   skipped: SkippedUnit[];
   error: string | null;
   cancelRequested: boolean;
+  settings?: { sweep?: { enabled: boolean } };
 }
 
 export interface JobListQuery {
@@ -159,6 +164,20 @@ export function getJob(id: string): Promise<JobSummary> {
 export function cancelJob(id: string): Promise<{ id: string; status: JobStatus }> {
   return request<{ id: string; status: JobStatus }>(`/jobs/${encodeURIComponent(id)}`, {
     method: "DELETE",
+  });
+}
+
+/**
+ * POST /api/jobs/:id/retry — reset and enqueue the failed units (PIPE-12).
+ *
+ * `onlyFailed` is sent explicitly so the request states its own mode rather
+ * than relying on the route's empty-body default. The answer is the record's
+ * new status; the units themselves come back through the list and the stream.
+ */
+export function retryJob(id: string): Promise<{ id: string; status: JobStatus }> {
+  return request<{ id: string; status: JobStatus }>(`/jobs/${encodeURIComponent(id)}/retry`, {
+    method: "POST",
+    body: JSON.stringify({ onlyFailed: true }),
   });
 }
 

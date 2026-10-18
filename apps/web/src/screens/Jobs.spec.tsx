@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Jobs } from "./Jobs.js";
 import { useStore, type AppState } from "../store.js";
 import type { JobSummary } from "../lib/api.js";
+import { clearToasts, getToasts } from "../lib/toast.js";
 
 /**
  * The Jobs screen's contract, driven through a fake `EventSource` and a stub of
@@ -127,6 +128,9 @@ function lastSource(): FakeEventSource {
 let serverJobs: JobSummary[] = [];
 let listCalls = 0;
 let cancelCalls = 0;
+let retryCalls = 0;
+let retryStatus = 202;
+let retryHold: { promise: Promise<void>; release: () => void } | null = null;
 let failList = false;
 
 const originalFetch = globalThis.fetch;
@@ -141,6 +145,20 @@ function stubServer(): void {
       listCalls += 1;
       if (failList) return json({ message: "server is down" }, 500);
       return json({ jobs: serverJobs });
+    }
+
+    const retryMatch = /^\/api\/jobs\/([^/?]+)\/retry$/.exec(url);
+    if (retryMatch !== null) {
+      retryCalls += 1;
+      if (retryHold !== null) await retryHold.promise;
+      if (retryStatus !== 202) {
+        return json({ error: "no_failed_units", message: "No failed units to retry." }, retryStatus);
+      }
+      const id = decodeURIComponent(retryMatch[1] ?? "");
+      serverJobs = serverJobs.map((job) =>
+        job.id === id ? { ...job, status: "queued", stage: "S0", skipped: [] } : job,
+      );
+      return json({ id, status: "queued" }, 202);
     }
 
     const match = /^\/api\/jobs\/([^/?]+)$/.exec(url);
@@ -205,7 +223,11 @@ beforeEach(() => {
   serverJobs = [];
   listCalls = 0;
   cancelCalls = 0;
+  retryCalls = 0;
+  retryStatus = 202;
+  retryHold = null;
   failList = false;
+  clearToasts();
   FakeEventSource.instances = [];
   (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
   stubServer();
@@ -419,23 +441,111 @@ it("renders the empty jobs list copy while never showing a blank list", async ()
   expect(host.textContent).toContain("Start an ingest from Settings to see progress here.");
 });
 
-it("shows Retry and Lint disabled with their reasons as visible text", async () => {
-  serverJobs = [makeJob()];
+function actionButton(host: HTMLElement, label: string): HTMLButtonElement {
+  const found = [...host.querySelectorAll<HTMLButtonElement>(".job-actions button")].find(
+    (el) => el.textContent?.trim() === label,
+  );
+  if (found === undefined) throw new Error(`no action button ${label}`);
+  return found;
+}
+
+it("shows Retry disabled while the job runs, with the server's own reason", async () => {
+  serverJobs = [makeJob({ status: "running" })];
   const { host, render } = await mountJobs();
   await selectRow(host, 0, render);
 
-  const button = (label: string): HTMLButtonElement => {
-    const found = [...host.querySelectorAll<HTMLButtonElement>(".job-actions button")].find(
-      (el) => el.textContent === label,
-    );
-    if (found === undefined) throw new Error(`no action button ${label}`);
-    return found;
-  };
+  expect(actionButton(host, "Retry failed").disabled).toBe(true);
+  expect(host.textContent).toContain("Retry after the job finishes.");
 
-  expect(button("Retry failed").disabled).toBe(true);
-  expect(button("Lint bundle").disabled).toBe(true);
-  expect(host.textContent).toContain("Retry is available in Phase 4.");
+  // Lint is a later phase and keeps its own honest note.
+  expect(actionButton(host, "Lint bundle").disabled).toBe(true);
   expect(host.textContent).toContain("Lint is available in Phase 5.");
+  expect(host.textContent).not.toContain("Retry is available in Phase 4.");
+});
+
+it("disables Retry with the empty reason when a finished job has no failed units", async () => {
+  serverJobs = [makeJob({ status: "completed", stage: "done" })];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  expect(actionButton(host, "Retry failed").disabled).toBe(true);
+  expect(host.textContent).toContain("No failed units to retry.");
+});
+
+function holdRetry(): void {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  retryHold = { promise, release };
+}
+
+it("retries once, swaps the label to Retrying…, then refreshes the record", async () => {
+  vi.useFakeTimers();
+  serverJobs = [
+    makeJob({
+      status: "completed",
+      stage: "done",
+      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+    }),
+  ];
+  holdRetry();
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const retry = actionButton(host, "Retry failed");
+  expect(retry.disabled).toBe(false);
+  await render(() => {
+    retry.click();
+    // The second press is in the same tick: `pending` must already bite.
+    retry.click();
+  });
+
+  expect(retryCalls).toBe(1);
+  expect(retry.disabled).toBe(true);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(140);
+  });
+  expect(host.textContent).toContain("Retrying…");
+
+  await act(async () => {
+    retryHold?.release();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(retryCalls).toBe(1);
+  expect(host.textContent).not.toContain("Retrying…");
+  // The list and the detail were re-read; the reset record is the server's.
+  expect(serverJobs[0]?.status).toBe("queued");
+  expect(actionButton(host, "Retry failed").disabled).toBe(true);
+  expect(host.textContent).toContain("Retry after the job finishes.");
+});
+
+it("shows the approved toast and re-enables Retry when the request is refused", async () => {
+  retryStatus = 409;
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  await render(() => actionButton(host, "Retry failed").click());
+
+  expect(retryCalls).toBe(1);
+  const toasts = getToasts();
+  expect(toasts.map((t) => t.text)).toEqual([
+    "Couldn't retry the failed units. Try again in a moment.",
+  ]);
+  expect(toasts[0]?.tone).toBe("error");
+  // The control is usable again: a refusal is not a dead end.
+  expect(actionButton(host, "Retry failed").disabled).toBe(false);
 });
 
 it("cancels once after the exact confirmation, and not at all when dismissed", async () => {

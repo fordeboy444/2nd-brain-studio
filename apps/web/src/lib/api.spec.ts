@@ -460,6 +460,54 @@ describe("ingest calls", () => {
   });
 });
 
+describe("retryJob", () => {
+  it("POSTs onlyFailed to the job's retry route and resolves the new status", async () => {
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedBody = "";
+    let capturedContentType = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      capturedContentType = readHeader(init?.headers, "content-type") ?? "";
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ id: "j1", status: "queued" }, 202);
+    });
+    const { retryJob } = await load();
+    const out = await retryJob("j1");
+
+    expect(capturedUrl).toBe("/api/jobs/j1/retry");
+    expect(capturedMethod).toBe("POST");
+    expect(capturedContentType).toContain("application/json");
+    // The mode is explicit, not left to the route's empty-body default.
+    expect(JSON.parse(capturedBody)).toEqual({ onlyFailed: true });
+    expect(out).toEqual({ id: "j1", status: "queued" });
+  });
+
+  it("percent-encodes the id into the path", async () => {
+    let capturedUrl = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      capturedUrl = String(input);
+      return jsonResponse({ id: "a b", status: "queued" }, 202);
+    });
+    const { retryJob } = await load();
+    await retryJob("a b");
+    expect(capturedUrl).toBe("/api/jobs/a%20b/retry");
+  });
+
+  it("rejects with the server's refusal message and status", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(
+        { error: "no_failed_units", message: "No failed units to retry." },
+        409,
+      ),
+    );
+    const { retryJob } = await load();
+    await expect(retryJob("j1")).rejects.toThrow("No failed units to retry.");
+    await expect(retryJob("j1")).rejects.toMatchObject({ status: 409 });
+  });
+});
+
 describe("request helper (no real network)", () => {
   it("never performs a real network call (fetch is stubbed, URL is same-origin relative)", async () => {
     const calls: string[] = [];

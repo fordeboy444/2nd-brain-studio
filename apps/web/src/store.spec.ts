@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { seedStages, useStore, type AppState } from "./store.js";
 import type { JobSummary, Vault } from "./lib/api.js";
+import { clearToasts, getToasts } from "./lib/toast.js";
 
 /**
  * The jobs slice's invariants, asserted without a DOM.
@@ -64,6 +65,7 @@ function json(payload: unknown, status = 200): Response {
 
 beforeEach(() => {
   useStore.setState(INITIAL);
+  clearToasts();
 });
 
 afterEach(() => {
@@ -430,6 +432,74 @@ it("clears the save-failure banner when keep mine lands", async () => {
 
   expect(useStore.getState().conflict).toBeNull();
   expect(useStore.getState().saveError).toBeNull();
+});
+
+it("retries the selected job, refreshes the list and reselects the reset record", async () => {
+  const terminal = makeJob({
+    status: "completed",
+    stage: "done",
+    skipped: [{ slug: "video-a", stage: "S1", reason: "timeout" }],
+  });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: terminal,
+    jobs: [terminal],
+    unitFeed: [{ seq: 1, slug: "video-a", stage: "S1", status: "skipped", reason: "timeout" }],
+    lastSeq: 1,
+  });
+  const queued = makeJob({ status: "queued", stage: "S0", skipped: [] });
+  const calls: string[] = [];
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/jobs/j1/retry") return json({ id: "j1", status: "queued" }, 202);
+    if (url === "/api/jobs") return json({ jobs: [queued] });
+    if (url === "/api/jobs/j1") return json(queued);
+    return json({});
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().retrySelectedJob();
+
+  // One mutation, then the list and the detail; no third write is invented.
+  expect(calls).toEqual(["POST /api/jobs/j1/retry", "GET /api/jobs", "GET /api/jobs/j1"]);
+  expect(useStore.getState().selectedJob?.status).toBe("queued");
+  // The feed and the cursor belong to the old run, so the reset record clears them.
+  expect(useStore.getState().unitFeed).toEqual([]);
+  expect(useStore.getState().lastSeq).toBe(0);
+  expect(getToasts()).toEqual([]);
+});
+
+it("toasts the approved retry failure copy and leaves the record untouched", async () => {
+  const refused = makeJob({
+    status: "failed",
+    stage: "done",
+    skipped: [{ slug: "video-a", stage: "S2", reason: "validator" }],
+  });
+  useStore.setState({ selectedJobId: "j1", selectedJob: refused, jobs: [refused] });
+  globalThis.fetch = vi.fn(async () =>
+    json({ error: "retry_running", message: "Retry after the job finishes." }, 409),
+  ) as unknown as typeof fetch;
+
+  await expect(useStore.getState().retrySelectedJob()).resolves.toBeUndefined();
+
+  const toasts = getToasts();
+  expect(toasts.map((t) => t.text)).toEqual([
+    "Couldn't retry the failed units. Try again in a moment.",
+  ]);
+  expect(toasts[0]?.tone).toBe("error");
+  // No status, stage or skipped row was invented from a request that failed.
+  expect(useStore.getState().selectedJob).toBe(refused);
+  expect(useStore.getState().jobs).toEqual([refused]);
+});
+
+it("does nothing when no job is selected", async () => {
+  const fetchSpy = vi.fn(async () => json({}));
+  globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+  await useStore.getState().retrySelectedJob();
+
+  expect(fetchSpy).not.toHaveBeenCalled();
+  expect(getToasts()).toEqual([]);
 });
 
 it("keeps the last list on a failed load and records the error", async () => {
