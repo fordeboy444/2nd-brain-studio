@@ -482,6 +482,25 @@ describe("S2 failure containment", () => {
     expect(secondJob.skipped).toEqual([]);
   });
 
+  it("redacts a header-shaped value from the skip detail, job and page", async () => {
+    await writeVideo("first-talk", "First Talk");
+    const marker = "SYNTHETIC_SECRET_MARKER_123";
+
+    const job = makeJob(0.5);
+    await runS2(job, {
+      async chat() {
+        throw new Error(`request failed: api_key=${marker}`);
+      },
+    });
+
+    const dir = jobDir(root, job.id);
+    expect(await readFile(join(dir, "job.json"), "utf8")).not.toContain(marker);
+    expect(
+      await readFile(join(root, "sources", "first-talk.md"), "utf8"),
+    ).not.toContain(marker);
+    expect(job.skipped[0]?.detail).toContain("[redacted]");
+  });
+
   it("skips a unit whose extraction is already complete", async () => {
     await writeVideo("first-talk", "First Talk");
 
