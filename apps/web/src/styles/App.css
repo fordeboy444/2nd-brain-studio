@@ -464,7 +464,8 @@ html[data-platform="windows"]:has(.booting):not(:has(.app)) .windows-boot-drag {
   -webkit-user-select: none;
 }
 .sidebar-resizer:focus-visible {
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 /* While dragging, the pointer owns the window: the resize cursor holds as it
    passes over the editor, and nothing anywhere can be selected by the sweep. */

@@ -7,6 +7,7 @@ import { MarkdownEditor } from "../components/MarkdownEditor.js";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { RightPanel } from "../components/RightPanel.js";
 import { SidebarHeader } from "../components/SidebarHeader.js";
+import { SidebarResizer } from "../components/SidebarResizer.js";
 import { Spinner } from "../components/Spinner.js";
 import { TabBar } from "../components/TabBar.js";
 import { ThemeToggle } from "../components/ThemeToggle.js";
@@ -42,7 +43,7 @@ import { useStore } from "../store.js";
 type ViewMode = "edit" | "read";
 
 export function Browse() {
-  const { width } = useSidebarWidth();
+  const { width, setWidth } = useSidebarWidth();
   const currentVault = useStore((s) => s.currentVault);
   const health = useStore((s) => s.health);
   const healthError = useStore((s) => s.healthError);
@@ -105,6 +106,7 @@ export function Browse() {
 
   return (
     <div className="app" style={{ "--sidebar-w": `${width}px` } as CSSProperties}>
+      <SidebarResizer width={width} onWidthChange={setWidth} />
       <aside className="sidebar">
         <SidebarHeader />
         {/* The tree region. The boundary means a broken tree can never take the

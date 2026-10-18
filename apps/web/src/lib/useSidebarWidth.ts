@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { clampSidebarWidth, readSidebarWidth } from "./sidebarWidth.js";
+import {
+  clampSidebarWidth,
+  readSidebarWidth,
+  writeSidebarWidth,
+} from "./sidebarWidth.js";
 
 /**
  * The user's sidebar width, restored from localStorage and kept honest against
@@ -20,7 +24,11 @@ export function useSidebarWidth(): {
   const [width, setWidthState] = useState(readSidebarWidth);
 
   const setWidth = useCallback((px: number) => {
-    setWidthState(clampSidebarWidth(px, window.innerWidth));
+    const next = clampSidebarWidth(px, window.innerWidth);
+    setWidthState(next);
+    // Persist the clamped value: the stored width is what the next load
+    // restores, so it must be the width the user actually got.
+    writeSidebarWidth(next);
   }, []);
 
   // A window narrow enough to squeeze the editor pulls the sidebar back in with
