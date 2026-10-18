@@ -15,7 +15,11 @@
  */
 import { readdir } from "node:fs/promises";
 import { callCached, createLlmCache } from "../../llm/cache.js";
-import { ExtractionSchema, rawPathForAttempt } from "../../llm/json.js";
+import {
+  ExtractionSchema,
+  JsonRecoveryError,
+  rawPathForAttempt,
+} from "../../llm/json.js";
 import { DEFAULT_OLLAMA_BASE_URL } from "../../llm/ollama.js";
 import type { LlmMessage } from "../../llm/ollama.js";
 import { resolveInVault } from "../../paths/jail.js";
@@ -25,6 +29,7 @@ import {
   captureTitle,
   EXTRACTION_SLUG_RE,
   filterQuotes,
+  readExtraction,
   sourceFromCapture,
   toExtractionRecord,
   transcriptText,
@@ -33,13 +38,19 @@ import {
   type ExtractionRecord,
   type ExtractionSource,
 } from "../extraction.js";
+import { redactDetail } from "./fetch.js";
 import {
   renderSourcePage,
   sourcePageInput,
   type SourcePageInput,
 } from "../pages.js";
 import { appendEvent, readJob } from "../store.js";
-import type { JobRecord, SkippedUnit } from "../types.js";
+import {
+  SkipError,
+  type JobRecord,
+  type SkipReason,
+  type SkippedUnit,
+} from "../types.js";
 import type { StageDeps, UnitContext } from "../runner.js";
 
 /** Bumping this invalidates every cached S2 reply without touching the model. */
@@ -145,6 +156,34 @@ function pageInput(record: ExtractionRecord): SourcePageInput {
   return sourcePageInput(record);
 }
 
+/** The reason a failed S2 unit records; nothing else ever reaches `skipped[]`. */
+function reasonFor(error: unknown): SkipReason {
+  if (error instanceof JsonRecoveryError) return "malformed_json";
+  if (error instanceof SkipError) {
+    return error.reason === "llm_not_configured"
+      ? "llm_not_configured"
+      : "model_error";
+  }
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    if (
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      code === "ETIMEDOUT"
+    ) {
+      return "model_timeout";
+    }
+  }
+  return "model_error";
+}
+
+/** The bounded detail persisted with the skip. */
+function detailFor(error: unknown): string | undefined {
+  if (error instanceof SkipError) return error.detail ?? error.reason;
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
 export type S2Stage = (
   job: JobRecord,
   ctx: UnitContext,
@@ -198,6 +237,19 @@ export function createS2Stage(deps: StageDeps): S2Stage {
         continue;
       }
 
+      // A complete record is authoritative: only a missing or partial one is
+      // worth another paid call. A partial record is retried exactly once.
+      const existing = await readExtraction(dir, slug);
+      if (existing !== null && existing.partial !== true) {
+        await appendEvent(dir, "unit", {
+          slug,
+          stage: "S2",
+          status: "skipped",
+          detail: "extraction present",
+        });
+        continue;
+      }
+
       try {
         const messages = buildS2Messages(
           {
@@ -247,14 +299,44 @@ export function createS2Stage(deps: StageDeps): S2Stage {
           status: "written",
           ...(result.hit ? { detail: "cache hit" } : {}),
         });
-      } catch {
-        // Containment lands in Task 3; for now the unit still leaves an
-        // extraction record so a later stage can build the raw index.
+      } catch (error) {
+        // One bad unit never fails the job: it leaves a partial page, a
+        // partial extraction (so the raw index keeps one row per capture) and
+        // a typed skip, then the loop moves on.
+        const reason = reasonFor(error);
+        const detail = redactDetail(detailFor(error));
+        const record = partialRecord(capture);
+
         try {
-          await writeExtraction(dir, partialRecord(capture));
+          await writeExtraction(dir, record);
         } catch {
-          // A metadata failure already produced its own skip above.
+          // A failed write must not stop the remaining captures.
         }
+        try {
+          await deps.writePage(
+            vaultDir,
+            `sources/${slug}.md`,
+            renderSourcePage(pageInput(record)),
+          );
+        } catch {
+          // Same: the skip below is still recorded.
+        }
+
+        const skipped: SkippedUnit = { slug, stage: "S2", reason };
+        if (source.sourceKind === "video" && source.youtubeId !== undefined) {
+          skipped.youtubeId = source.youtubeId;
+        }
+        if (detail !== undefined) skipped.detail = detail;
+        job.skipped.push(skipped);
+
+        await persist();
+        await appendEvent(dir, "unit", {
+          slug,
+          stage: "S2",
+          status: "skipped",
+          reason,
+          ...(detail !== undefined ? { detail } : {}),
+        });
       }
     }
 
