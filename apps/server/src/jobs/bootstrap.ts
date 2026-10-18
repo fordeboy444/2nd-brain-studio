@@ -6,13 +6,16 @@
  * `createdAt` order, and ignores completed/failed/cancelled jobs. One corrupt
  * record is logged and skipped so it can never stop the scan — or the server.
  */
+import { existsSync } from "node:fs";
 import pino from "pino";
+import { config } from "../config.js";
 import { enumerateChannel } from "../ingest/enumerate.js";
+import { probeFirstCandidate } from "../ingest/preflight.js";
 import {
-  fetchJson3Transcript,
-  runYtDlp,
-  type TierResult,
-} from "../ingest/ytdlp.js";
+  createTranscriptCascade,
+  type PythonRun,
+} from "../ingest/transcript.js";
+import { classifyYtDlpError, type YtDlpRun } from "../ingest/ytdlp.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
   createDefaultStageDeps,
@@ -20,60 +23,73 @@ import {
   type JobQueue,
   type StageDeps,
 } from "./runner.js";
-import {
-  createTranscriptFetcher,
-  type TranscriptCascade,
-} from "./stages/fetch.js";
+import { createTranscriptFetcher } from "./stages/fetch.js";
 import { listJobs } from "./store.js";
-import type { JobRecord } from "./types.js";
+import type { JobRecord, SkipReason } from "./types.js";
 
 const log = pino({ name: "jobs" });
 
 let queue: JobQueue | null = null;
 
+/** Test seams: the factory never reaches a real subprocess or network in a spec. */
+export interface IngestDeps {
+  runYtDlp?: YtDlpRun;
+  runPython?: PythonRun;
+  fetch?: typeof globalThis.fetch;
+  /** `null` disables tier 3 even when the environment carries a key. */
+  supadataKey?: string | null;
+}
+
+/** Map an untagged adapter error through the subprocess classifier. */
+function classifyVideoFailure(error: unknown): SkipReason {
+  const record = error as { stderr?: unknown; exitCode?: unknown } | null;
+  const stderr =
+    typeof record?.stderr === "string"
+      ? record.stderr
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  const exitCode = typeof record?.exitCode === "number" ? record.exitCode : null;
+  return classifyYtDlpError(stderr, exitCode);
+}
+
 /**
- * The Phase 3 dependency set: the real S0 enumerator and the tier-1 S1
- * transcript stage. The runner reads flat fields, so the wiring is one flat
+ * The Phase 3 dependency set: the real S0 enumerator and the three-tier S1
+ * transcript cascade. The runner reads flat fields, so the wiring is one flat
  * function per dependency.
  *
  * `signal` is passed inside the options object `enumerateChannel`
  * destructures; passing it as a third argument would drop S0 cancellation.
  *
- * The probe cache is what makes the first video cost one fetch: S1's preflight
- * stores its winning result and the first unit's `fetch` consumes it. Tier 2
- * and tier 3 join this cascade in the next task.
+ * The cascade's probe cache is what makes the first video cost one fetch:
+ * `preflight` probes and caches, the first unit's `fetch` consumes that entry.
  */
-export function createIngestStageDeps(): StageDeps {
+export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
   const base = createDefaultStageDeps();
-  const probed = new Map<string, TierResult>();
-
-  const tierOne: TranscriptCascade = {
-    async fetch(candidate, ctx) {
-      const cached = probed.get(candidate.youtubeId);
-      if (cached !== undefined) {
-        probed.delete(candidate.youtubeId);
-        return cached;
-      }
-      return fetchJson3Transcript(candidate, ctx, { run: runYtDlp });
-    },
-  };
+  const cascade = createTranscriptCascade({
+    runYtDlp: overrides.runYtDlp,
+    runPython: overrides.runPython,
+    fetch: overrides.fetch,
+    supadataKey:
+      "supadataKey" in overrides ? overrides.supadataKey : config.supadataApiKey,
+  });
 
   return {
     ...base,
-    fetchTranscript: createTranscriptFetcher(tierOne),
+    fetchTranscript: createTranscriptFetcher(cascade),
     async preflight(candidates, ctx) {
-      const first = candidates[0];
-      if (first === undefined) return;
-      const result = await fetchJson3Transcript(first, ctx, { run: runYtDlp });
-      if (!result.ok) {
-        throw new Error(`all transcript tiers failed: ${result.reason}`);
-      }
-      probed.set(first.youtubeId, result);
+      await probeFirstCandidate(candidates, cascade, ctx);
     },
     async enumerate(url, opts, signal) {
       const { candidates } = await enumerateChannel(url, { ...opts, signal });
       return candidates;
     },
+    classifyVideoError: classifyVideoFailure,
+    cookiePath() {
+      const path = config.youtubeCookiePath;
+      return existsSync(path) ? path : undefined;
+    },
+    now: () => Date.now(),
   };
 }
 

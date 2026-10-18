@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseFrontmatter } from "@2nd-brain/okf";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../http/writeAtomic.js";
 import {
   CaptureMismatchError,
@@ -28,6 +28,24 @@ import {
   type VideoCandidate,
   type VideoRawCapture,
 } from "./types.js";
+import { createIngestStageDeps } from "./bootstrap.js";
+
+/** Captured pino lines, so the redaction scan covers the log surface too. */
+const { pinoLines } = vi.hoisted(() => ({ pinoLines: [] as string[] }));
+vi.mock("pino", () => {
+  const logger = () => ({
+    info: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    warn: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    error: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    debug: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    fatal: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    trace: (...args: unknown[]) => pinoLines.push(JSON.stringify(args)),
+    child() {
+      return this;
+    },
+  });
+  return { default: logger };
+});
 
 const SETTINGS: JobSettings = {
   maxVideos: 10,
@@ -503,6 +521,128 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     await runJob(second, deps);
     expect(calls).toBe(1);
     expect((await readJob(root, second.id)).status).toBe("completed");
+  });
+
+  it("keeps a tagged reason and never calls the web classifier for a video unit", async () => {
+    let webCalls = 0;
+    const deps = makeDeps({
+      async enumerate() {
+        return [
+          VIDEO_A,
+          { ...VIDEO_A, youtubeId: "def456", title: "Second Talk" },
+          { ...VIDEO_A, youtubeId: "ghi789", title: "Third Talk" },
+        ];
+      },
+      async fetchTranscript(candidate) {
+        if (candidate.youtubeId === "abc123") {
+          throw new SkipError("blocked", "sign in wall");
+        }
+        if (candidate.youtubeId === "def456") throw new Error("socket hang up");
+        return videoCapture(candidate);
+      },
+      classifyVideoError: () => "timeout",
+      classifyWebError: () => {
+        webCalls += 1;
+        return "capture_invalid";
+      },
+    });
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    await runJob(job, deps);
+
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("completed");
+    expect(onDisk.skipped.map((skipped) => skipped.reason)).toEqual([
+      "blocked",
+      "timeout",
+    ]);
+    expect(onDisk.skipped[0]?.detail).toBe("sign in wall");
+    expect(webCalls).toBe(0);
+    expect(await readdir(join(root, "raw"))).toEqual(["third-talk.md"]);
+  });
+
+  it("never writes the Supadata key to job state, events, raw captures or pino lines", async () => {
+    const KEY = "supadata-test-key-do-not-log";
+    const first: VideoCandidate = {
+      youtubeId: "aaa111bbb22",
+      title: "First Talk",
+      url: "https://youtu.be/aaa111bbb22",
+    };
+    const second: VideoCandidate = {
+      youtubeId: "ccc333ddd44",
+      title: "Second Talk",
+      url: "https://youtu.be/ccc333ddd44",
+    };
+
+    const runYtDlp = async (args: readonly string[]) => {
+      if (args[args.length - 1] === first.url) {
+        const template = args[args.indexOf("--output") + 1];
+        if (template !== undefined) {
+          await writeFile(
+            join(dirname(template), `${first.youtubeId}.json3`),
+            JSON.stringify({
+              events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: "hello" }] }],
+            }),
+          );
+        }
+      }
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false, isCanceled: false };
+    };
+    const runPython = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ERROR: no transcript",
+      timedOut: false,
+      isCanceled: false,
+    });
+    const fetch = async () => {
+      // A hostile upstream echoing the credential back must not reach disk.
+      throw new Error(`upstream rejected x-api-key=${KEY}`);
+    };
+
+    const deps: StageDeps = {
+      ...createIngestStageDeps({
+        runYtDlp,
+        runPython,
+        fetch: fetch as unknown as typeof globalThis.fetch,
+        supadataKey: KEY,
+      }),
+      async enumerate() {
+        return [first, second];
+      },
+      vaultDirFor: () => root,
+      now: () => FIXED_NOW,
+      cookiePath: () => undefined,
+    };
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.skipped).toHaveLength(1);
+    expect(finished.skipped[0]).toMatchObject({
+      youtubeId: second.youtubeId,
+      reason: "fetch_error",
+    });
+    expect(finished.skipped[0]?.detail).not.toContain(KEY);
+    expect(finished.skipped[0]?.detail).toContain("[redacted]");
+
+    const artifacts = new Map<string, string>();
+    const jobDir = join(root, ".okf", "jobs", job.id);
+    artifacts.set("job.json", await readFile(join(jobDir, "job.json"), "utf8"));
+    artifacts.set("events.ndjson", await readFile(join(jobDir, "events.ndjson"), "utf8"));
+    const rawFiles = await readdir(join(root, "raw"));
+    for (const name of rawFiles) {
+      artifacts.set(`raw/${name}`, await readFile(join(root, "raw", name), "utf8"));
+    }
+    artifacts.set("pino", pinoLines.join("\n"));
+
+    for (const [name, text] of artifacts) {
+      expect(text, name).not.toContain(KEY);
+    }
+    expect(rawFiles).toEqual(["first-talk.md"]);
   });
 });
 
