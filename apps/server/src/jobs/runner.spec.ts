@@ -1601,6 +1601,20 @@ describe("retry scope (PIPE-12)", () => {
     expect(job.status).toBe("completed");
   });
 
+  it("reuses retry units a failed run consumed before it threw", () => {
+    const job = makeVideoJob({
+      status: "failed",
+      stage: "S4",
+      skipped: [],
+      retry: { units: [{ slug: "gamma", stage: "S4" }] },
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S4" });
+    expect(job.status).toBe("queued");
+    expect(job.retry?.units).toEqual([{ slug: "gamma", stage: "S4" }]);
+    expect(job.skipped).toEqual([]);
+  });
+
   it("resets an S3 failure to the S3 barrier", () => {
     const job = makeVideoJob({
       status: "completed",

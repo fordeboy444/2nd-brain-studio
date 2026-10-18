@@ -177,6 +177,12 @@ export function retryJobRecord(job: JobRecord): RetryPlan {
   for (const stage of RETRYABLE_STAGES) {
     units.push(...retryUnitsFor(job, stage));
   }
+  // A retried stage can throw before it records new skips (WR-05). `runJob`
+  // keeps `job.retry` on failure, so reuse it instead of answering
+  // `no_failed_units` for a job that just failed.
+  if (units.length === 0 && job.status === "failed" && job.retry !== undefined) {
+    units.push(...job.retry.units);
+  }
   if (units.length === 0) return { error: "no_failed" };
 
   const first = units[0] as JobRetryUnit;
