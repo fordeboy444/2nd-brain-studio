@@ -1389,6 +1389,91 @@ describe("exit semantics", () => {
   });
 });
 
+/** Read the template contract the LLM follows. */
+function schemaText(): string {
+  return readFileSync(
+    fileURLToPath(
+      new URL("../../../templates/okf-bundle/SCHEMA.md", import.meta.url),
+    ),
+    "utf8",
+  );
+}
+
+/** The YAML block that follows `marker`, including its `---` fences. */
+function schemaExample(marker: string): string {
+  const schema = schemaText();
+  const at = schema.indexOf(marker);
+  expect(at, marker).toBeGreaterThanOrEqual(0);
+  const open = schema.indexOf("```yaml\n", at);
+  expect(open, marker).toBeGreaterThanOrEqual(0);
+  const start = open + "```yaml\n".length;
+  const close = schema.indexOf("```", start);
+  expect(close, marker).toBeGreaterThan(start);
+  return schema.slice(start, close);
+}
+
+/** A bundle whose source page is the documented example. */
+function documentedPages(
+  slug: string,
+  sourceBlock: string,
+  quote: string,
+  rawBody: string,
+): BundlePage[] {
+  const pages = conceptPair(
+    `---\ntype: concept\nsources: [${slug}]\n---\n\n[Partner](partner.md)\n\n` +
+      `## Sources\n\n- [Source](../sources/${slug}.md) - ${quote}\n`,
+  );
+  pages.push({
+    path: `sources/${slug}.md`,
+    text: `${sourceBlock}\n# Source\n`,
+  });
+  pages.push({
+    path: "sources/index.md",
+    text: `# Sources\n\n- [Source](${slug}.md)\n`,
+  });
+  pages.push({
+    path: `raw/${slug}.md`,
+    text: `---\ntype: raw-transcript\n---\n\n## Transcript\n\n${rawBody}\n`,
+  });
+  return pages;
+}
+
+describe("documented SCHEMA examples (WR-07)", () => {
+  it("lints a video bundle built from the documented Source example", () => {
+    const block = schemaExample("**Source** (");
+    expect(block).toContain("source_kind: video");
+    expect(block).toContain("youtube_id:");
+    expect(block).toContain("duration:");
+    const pages = documentedPages(
+      "why-ai-coding-abandoned-rag",
+      block,
+      '"[0:01:00] alpha beta gamma delta"',
+      "**[0:01:00]** alpha beta gamma delta epsilon zeta theta iota",
+    );
+    expect(lintBundle(pages, "doc").findings).toEqual([]);
+  });
+
+  it("lints a web bundle built from the documented Web source example", () => {
+    const block = schemaExample("**Web source** (");
+    expect(block).toContain("source_kind: web");
+    expect(block).not.toContain("youtube_id:");
+    const pages = documentedPages(
+      "attention-explained",
+      block,
+      '"a sentence about attention mechanisms"',
+      "**[#1]** a sentence about attention mechanisms and more context",
+    );
+    expect(lintBundle(pages, "doc").findings).toEqual([]);
+  });
+
+  it("documents the raw page types the reference writes", () => {
+    const schema = schemaText();
+    expect(schema).toContain("`type: raw-transcript`");
+    expect(schema).toContain("`type: raw-capture`");
+    expect(schema).not.toContain("`type: raw-source`");
+  });
+});
+
 describe("package surface", () => {
   it("exports the seven link and lint functions by name", () => {
     for (const name of [

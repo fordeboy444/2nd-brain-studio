@@ -88,7 +88,8 @@ updated: 2026-10-17
 ---
 ```
 
-**Source** (`sources/<slug>.md`) — one per source:
+**Source** (`sources/<slug>.md`) — one per video source. `source_kind` is
+`video` or `web`; `youtube_id` and `duration` are video-only:
 ```yaml
 ---
 type: source
@@ -96,6 +97,9 @@ title: "Why the Best AI Coding Tools Abandoned RAG (And What They Use Instead)"
 description: "One-sentence framing of the source's thesis."
 url: https://www.youtube.com/watch?v=60G93MXT4DI
 slug: why-ai-coding-abandoned-rag
+youtube_id: 60G93MXT4DI
+source_kind: video
+duration: "0:11:11"
 published: 2026-05-14
 raw: "../raw/why-ai-coding-abandoned-rag.md"
 tags: [rag, retrieval]
@@ -104,9 +108,29 @@ updated: 2026-10-17
 ---
 ```
 
+**Web source** (`sources/<slug>.md`) — one per captured web page. It carries
+`source_kind: web` and no `youtube_id` or `duration`:
+```yaml
+---
+type: source
+title: "The Attention Mechanism, Explained"
+description: "One-sentence framing of the captured page's thesis."
+url: https://example.com/attention
+slug: attention-explained
+source_kind: web
+published: 2026-05-20
+raw: "../raw/attention-explained.md"
+tags: [attention]
+created: 2026-10-17
+updated: 2026-10-17
+---
+```
+
 **Overview** (`SCHEMA.md`, `README.md`, `docs/*.md`): `type: overview`.
 
-**Raw source** (`raw/<slug>.md`): `type: raw-source`, `immutable: true` — machine-written from the source; never hand-edited.
+**Raw source** (`raw/<slug>.md`): `type: raw-transcript` for a video transcript,
+`type: raw-capture` for a web capture; `immutable: true` — machine-written from
+the source; never hand-edited.
 
 ## 5. Linking & typed edges (the load-bearing discipline)
 
