@@ -64,7 +64,8 @@ export const runPythonTranscript: PythonRun = async (argv, opts) => {
     reject: false,
     timeout: opts.timeoutMs,
     maxBuffer: opts.maxBufferBytes,
-    ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+    // execa 10 renamed the option; `signal` throws before the spawn starts.
+    ...(opts.signal !== undefined ? { cancelSignal: opts.signal } : {}),
   });
   return {
     exitCode: result.exitCode ?? null,

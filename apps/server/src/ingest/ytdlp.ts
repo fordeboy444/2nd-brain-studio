@@ -58,7 +58,9 @@ export async function runYtDlp(
       reject: false,
       timeout: opts.timeoutMs ?? 120_000,
       maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
-      ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+      // execa 10 renamed the option: `signal` throws "has been renamed to
+      // cancelSignal", so the old name made every tier-1 call fail instantly.
+      ...(opts.signal !== undefined ? { cancelSignal: opts.signal } : {}),
     });
     return {
       exitCode: result.exitCode ?? null,

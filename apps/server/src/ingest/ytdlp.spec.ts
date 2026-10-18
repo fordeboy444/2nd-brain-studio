@@ -19,6 +19,7 @@ import {
   runYtDlp,
   type YtDlpRun,
 } from "./ytdlp.js";
+import { runPythonTranscript } from "./transcript.js";
 
 const { execaMock } = vi.hoisted(() => ({ execaMock: vi.fn() }));
 vi.mock("execa", () => ({ execa: execaMock }));
@@ -119,6 +120,46 @@ describe("runYtDlp", () => {
       timedOut: false,
       isCanceled: false,
     });
+  });
+
+  it("passes the caller signal as cancelSignal, because execa 10 rejects a signal option", async () => {
+    execaMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      isCanceled: false,
+    });
+    const controller = new AbortController();
+
+    await runYtDlp(["--version"], { signal: controller.signal });
+
+    const options = execaMock.mock.calls[0]![2] as Record<string, unknown>;
+    expect(options.cancelSignal).toBe(controller.signal);
+    expect(options.signal).toBeUndefined();
+  });
+});
+
+describe("runPythonTranscript", () => {
+  it("passes the caller signal as cancelSignal too", async () => {
+    execaMock.mockResolvedValue({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      isCanceled: false,
+    });
+    const controller = new AbortController();
+
+    await runPythonTranscript(["-I", "-m", "youtube_transcript_api"], {
+      timeoutMs: 60_000,
+      maxBufferBytes: 1024,
+      signal: controller.signal,
+    });
+
+    const options = execaMock.mock.calls[0]![2] as Record<string, unknown>;
+    expect(options.cancelSignal).toBe(controller.signal);
+    expect(options.signal).toBeUndefined();
   });
 });
 
