@@ -139,18 +139,33 @@ export interface UnitFeedRow {
 /** The feed keeps the tail of a long job; the DOM never grows without bound. */
 export const UNIT_FEED_LIMIT = 500;
 
-/** The two implemented stages per job kind. S2-S6 are declared, not executable. */
-export const LIVE_STAGES: Record<"youtube" | "web", readonly JobStage[]> = {
-  youtube: ["S0", "S1"],
-  web: ["S0", "S1w"],
-};
+/**
+ * The stages this job can run, in order. S6 is the only opt-in stage: it costs
+ * LLM calls, so a job created with the sweep off never runs it and never shows
+ * it as work to come.
+ */
+export function liveStagesFor(
+  kind: JobSummary["kind"],
+  sweepEnabled: boolean,
+): readonly JobStage[] {
+  const table: readonly JobStage[] =
+    kind === "youtube"
+      ? ["S0", "S1", "S2", "S3", "S4", "S5"]
+      : ["S0", "S1w", "S2", "S3", "S4", "S5"];
+  return sweepEnabled ? [...table, "S6"] : table;
+}
+
+/** Did this job's own settings turn the deep quality sweep on? */
+function sweepOn(job: JobSummary): boolean {
+  return job.settings?.sweep?.enabled === true;
+}
 
 /** Where the pointer says the job is: earlier live stages are done, one is active. */
 export function seedStages(job: JobSummary): {
   stagesDone: JobStage[];
   activeStage: JobStage | null;
 } {
-  const table = LIVE_STAGES[job.kind];
+  const table = liveStagesFor(job.kind, sweepOn(job));
   if (job.stage === "done") return { stagesDone: [...table], activeStage: null };
   if (job.stage === undefined) return { stagesDone: [], activeStage: null };
   const index = table.indexOf(job.stage);
@@ -162,12 +177,15 @@ export function seedStages(job: JobSummary): {
 }
 
 /**
- * The stage named by an event payload, or null when the payload is not one of
- * the two live stages. A future stage name must not enter the stepper as an
- * unknown dot; it is ignored here and the stepper keeps its current truth.
+ * The stage named by an event payload, or null when the payload is not a live
+ * stage for THIS job. A stage the job will not run (S6 with the sweep off) must
+ * not enter the stepper as an unknown dot; it is ignored here and the stepper
+ * keeps its current truth.
  */
-function liveStageOf(value: unknown): JobStage | null {
-  return value === "S0" || value === "S1" || value === "S1w" ? value : null;
+function liveStageOf(value: unknown, live: readonly JobStage[]): JobStage | null {
+  return typeof value === "string" && (live as readonly string[]).includes(value)
+    ? (value as JobStage)
+    : null;
 }
 
 /** A terminal status is final; no later snapshot may move a job out of it. */
@@ -278,7 +296,8 @@ export interface AppState {
   /** The approved failure copy for a refused start, or null. */
   ingestError: string | null;
   loadSettings: () => Promise<void>;
-  saveSettings: (patch: SettingsPatch) => Promise<void>;
+  /** `true` when the server accepted the patch; `false` when it did not. */
+  saveSettings: (patch: SettingsPatch) => Promise<boolean>;
   uploadCookie: (text: string) => Promise<void>;
   /** A pasted Cookie header, sent as the raw `text/plain` body. */
   saveCookieHeader: (text: string) => Promise<void>;
@@ -755,8 +774,12 @@ export const useStore = create<AppState>((set, get) => {
       try {
         const settings = await apiPutSettings(patch);
         set({ settings, settingsLoading: false });
+        return true;
       } catch (e) {
+        // A failed save is a value, not a rejection: the caller needs to revert
+        // an optimistic control, and an unhandled rejection would not do that.
         set({ settingsError: (e as Error).message, settingsLoading: false });
+        return false;
       }
     },
 
@@ -982,7 +1005,12 @@ export const useStore = create<AppState>((set, get) => {
           activeStage = seeded.activeStage;
         }
       } else if (type === "stage") {
-        const stage = liveStageOf(data.stage);
+        // Gate the frame on THIS job's own live list: a stage the job will not
+        // run must not appear in its stepper.
+        const stage =
+          selectedJob === null
+            ? null
+            : liveStageOf(data.stage, liveStagesFor(selectedJob.kind, sweepOn(selectedJob)));
         if (stage !== null) {
           if (data.status === "started") {
             activeStage = stage;
@@ -1019,7 +1047,9 @@ export const useStore = create<AppState>((set, get) => {
           (status === "completed" || status === "failed" || status === "cancelled")
         ) {
           selectedJob = { ...selectedJob, status, stage: "done" };
-          if (status === "completed") stagesDone = [...LIVE_STAGES[selectedJob.kind]];
+          if (status === "completed") {
+            stagesDone = [...liveStagesFor(selectedJob.kind, sweepOn(selectedJob))];
+          }
         }
       }
 

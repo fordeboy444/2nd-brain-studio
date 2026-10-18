@@ -3,7 +3,9 @@ import { AsyncButton } from "../components/AsyncButton.js";
 import { Banner } from "../components/Banner.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { MenuSelect } from "../components/MenuSelect.js";
+import { Switch } from "../components/Switch.js";
 import { useNoticeSlot } from "../components/useNoticeSlot.js";
+import { toast } from "../lib/toast.js";
 import { useStore } from "../store.js";
 import type { JobKind, PreviewInput, SettingsPatch, StartJobInput } from "../lib/api.js";
 
@@ -77,6 +79,7 @@ export function Settings() {
   const [fetchDelayMs, setFetchDelayMs] = useState("");
   const [fetchConcurrency, setFetchConcurrency] = useState("");
   const [fetchLanguage, setFetchLanguage] = useState("");
+  const [sweepOn, setSweepOn] = useState(false);
 
   const [cookieNotice, setCookieNotice] = useState<string | null>(null);
   // The pasted header lives here and nowhere else: a store copy would be one
@@ -119,6 +122,7 @@ export function Settings() {
       server?.fetch?.concurrency === undefined ? "" : String(server.fetch.concurrency),
     );
     setFetchLanguage(server?.fetch?.language ?? "");
+    setSweepOn(server?.sweep?.enabled === true);
   }, [server]);
 
   useEffect(() => {
@@ -249,6 +253,19 @@ export function Settings() {
     const lang = fetchLanguage.trim();
     if (lang !== "" && lang !== (server?.fetch?.language ?? "")) patch.language = lang;
     if (Object.keys(patch).length > 0) void saveSettings({ fetch: patch });
+  };
+
+  /**
+   * The sweep is a switch, so it moves before the request lands. A refused save
+   * puts it back: the screen must never show a setting the server did not keep.
+   */
+  const onToggleSweep = async (next: boolean) => {
+    setSweepOn(next);
+    const saved = await saveSettings({ sweep: { enabled: next } });
+    if (!saved) {
+      setSweepOn(!next);
+      toast("Couldn't save the sweep setting. Try again in a moment.", "error");
+    }
   };
 
   // The server decides whether a key exists. An unconfigured server says so
@@ -505,6 +522,26 @@ export function Settings() {
             <Banner show={testMessage !== null} role={testFailed ? "alert" : "status"}>
               {testMessage}
             </Banner>
+          </div>
+        </section>
+
+        <section className="settings-section" aria-label="Deep quality sweep">
+          <span className="subhead">Deep quality sweep</span>
+          <div className="settings-field" style={{ marginTop: "var(--sp-2)" }}>
+            <div className="settings-row" style={{ alignItems: "center" }}>
+              <Switch
+                checked={sweepOn}
+                onChange={(next) => void onToggleSweep(next)}
+                ariaLabel="Deep quality sweep"
+              />
+              <span className="field-label">Deep quality sweep</span>
+            </div>
+            <p className="muted" style={{ margin: 0 }}>
+              Fills gaps and triages notability. Adds LLM calls. Off by default.
+            </p>
+            <p className="muted" style={{ margin: 0 }}>
+              Off by default.
+            </p>
           </div>
         </section>
 

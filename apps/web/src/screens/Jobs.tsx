@@ -4,7 +4,7 @@ import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { Spinner } from "../components/Spinner.js";
 import { jobEventsUrl, type JobStage, type JobSummary } from "../lib/api.js";
 import { useAsyncAction } from "../lib/useAsyncAction.js";
-import { LIVE_STAGES, useStore, type UnitFeedRow } from "../store.js";
+import { liveStagesFor, useStore, type UnitFeedRow } from "../store.js";
 
 /**
  * Jobs: a polling list beside one live detail stream.
@@ -44,28 +44,27 @@ function isTerminal(status: JobSummary["status"]): boolean {
 }
 
 /**
- * The stepper is a table of declared stages, not a projection of the job's
- * own stages: S2-S6 must be visible as pending so the user can see how much of
- * the pipeline exists yet. A stage that does not apply to this source (S1w for
- * a channel, S1 for a page) says so instead of looking like work to come.
+ * The stepper is the job's own live stage table, not a projection of the
+ * events that happened to arrive: every stage the job will run is visible from
+ * the first frame. A stage that does not apply to this source (S1w for a
+ * channel, S1 for a page) says so, and S6 says it is switched off rather than
+ * looking like work to come.
  */
 function stageCells(
   kind: JobSummary["kind"],
   stagesDone: JobStage[],
   activeStage: JobStage | null,
+  sweepEnabled: boolean,
 ): StageCell[] {
-  const live = new Set<JobStage>(LIVE_STAGES[kind]);
+  const live = new Set<JobStage>(liveStagesFor(kind, sweepEnabled));
   const unused: StepperStage = kind === "youtube" ? "S1w" : "S1";
   return STAGES.map((stage) => {
     if (!live.has(stage as JobStage)) {
       if (stage === unused) {
         return { stage, visual: "unused", reason: "Not used for this source" };
       }
-      return {
-        stage,
-        visual: "pending",
-        reason: stage === "S5" || stage === "S6" ? "Pending Phase 5" : "Pending Phase 4",
-      };
+      // The only other stage a job can skip is S6, and its switch is the reason.
+      return { stage, visual: "unused", reason: "Deep quality sweep is off." };
     }
     if (stagesDone.includes(stage as JobStage)) {
       return { stage, visual: "done", reason: null };
@@ -222,8 +221,15 @@ export function Jobs() {
     };
   }, [selectedJobId, hasSelection, terminal, applyJobEvent]);
 
-  const cells = selectedJob !== null ? stageCells(selectedJob.kind, stagesDone, activeStage) : [];
-  const liveStages = selectedJob !== null ? LIVE_STAGES[selectedJob.kind] : [];
+  // The sweep flag is the job's own: it was fixed when the job was created, so
+  // the stepper shows S6 only for a job that will run it.
+  const sweepEnabled = selectedJob?.settings?.sweep?.enabled === true;
+  const cells =
+    selectedJob !== null
+      ? stageCells(selectedJob.kind, stagesDone, activeStage, sweepEnabled)
+      : [];
+  const liveStages =
+    selectedJob !== null ? liveStagesFor(selectedJob.kind, sweepEnabled) : [];
   const doneCount = liveStages.filter((stage) => stagesDone.includes(stage)).length;
 
   const failedRows = useMemo(() => {
