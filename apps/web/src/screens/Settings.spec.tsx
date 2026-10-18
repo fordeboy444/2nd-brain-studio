@@ -688,6 +688,19 @@ it("saves the sweep toggle and leaves the new value in place on success", async 
   expect(getToasts()).toEqual([]);
 });
 
+it("keeps typed fields when a settings save refreshes the server copy", async () => {
+  const { host, render } = await mountSettings();
+  await typeInto(render, host, "llm-model", "typed-model");
+  await typeInto(render, host, "fetch-language", "fr");
+
+  // The sweep save replaces the store's settings object with the server copy.
+  await toggleSweep(host, render);
+
+  expect(field(host, "llm-model").value).toBe("typed-model");
+  expect(field(host, "fetch-language").value).toBe("fr");
+  expect(sweepSwitch(host).checked).toBe(true);
+});
+
 it("reverts the sweep switch and shows the exact toast when the save fails", async () => {
   stub.settingsPutStatus = 500;
   const { host, render } = await mountSettings();

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { AsyncButton } from "../components/AsyncButton.js";
 import { Banner } from "../components/Banner.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
@@ -75,6 +75,7 @@ export function Settings() {
 
   // Settings fields, seeded from the server copy. Kept separately so a refresh
   // of `settings` (a cookie upload, a save) does not fight the field in use.
+  const seeded = useRef(false);
   const [llmModel, setLlmModel] = useState("");
   const [fetchDelayMs, setFetchDelayMs] = useState("");
   const [fetchConcurrency, setFetchConcurrency] = useState("");
@@ -114,14 +115,20 @@ export function Settings() {
   const server = settings?.settings;
   useEffect(() => {
     if (server === undefined) return;
-    setLlmModel(server?.llm?.model ?? "");
-    setFetchDelayMs(
-      server?.fetch?.delayMs === undefined ? "" : String(server.fetch.delayMs),
-    );
-    setFetchConcurrency(
-      server?.fetch?.concurrency === undefined ? "" : String(server.fetch.concurrency),
-    );
-    setFetchLanguage(server?.fetch?.language ?? "");
+    // Seed once. A later refresh (a save, a cookie upload) must not overwrite
+    // text the user typed while it was in flight (WR-08).
+    if (!seeded.current) {
+      seeded.current = true;
+      setLlmModel(server?.llm?.model ?? "");
+      setFetchDelayMs(
+        server?.fetch?.delayMs === undefined ? "" : String(server.fetch.delayMs),
+      );
+      setFetchConcurrency(
+        server?.fetch?.concurrency === undefined ? "" : String(server.fetch.concurrency),
+      );
+      setFetchLanguage(server?.fetch?.language ?? "");
+    }
+    // The sweep switch saves on click, so its server value is always current.
     setSweepOn(server?.sweep?.enabled === true);
   }, [server]);
 
