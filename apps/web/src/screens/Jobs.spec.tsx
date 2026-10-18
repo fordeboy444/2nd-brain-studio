@@ -481,3 +481,127 @@ it("cancels once after the exact confirmation, and not at all when dismissed", a
   // The completed units stay on screen: cancel is not a clear of the feed.
   expect(host.querySelector(".job-feed-scroll")).toBeTruthy();
 });
+
+/* ---- Task 3: reconnect, replay, poll resilience and inert text ---- */
+
+it("replays without duplicating a row and keeps the same source URL", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  await act(async () => {
+    for (let seq = 1; seq <= 30; seq += 1) {
+      source.emit("unit", { slug: `u${seq}`, stage: "S1", status: "written" }, seq);
+    }
+  });
+  expect(useStore.getState().unitFeed.length).toBe(30);
+
+  // A reconnect delivers the tail again from the server's replay buffer.
+  await render(() => source.fail());
+  expect(lastSource().url).toBe("/api/jobs/j1/events");
+  await render(() => source.open());
+
+  await act(async () => {
+    for (let seq = 31; seq <= 50; seq += 1) {
+      source.emit("unit", { slug: `u${seq}`, stage: "S1", status: "written" }, seq);
+    }
+    for (let seq = 31; seq <= 50; seq += 1) {
+      source.emit("unit", { slug: `u${seq}`, stage: "S1", status: "written" }, seq);
+    }
+  });
+
+  const feed = useStore.getState().unitFeed;
+  expect(feed.length).toBe(50);
+  expect(new Set(feed.map((row) => row.seq)).size).toBe(50);
+  expect(feed.at(-1)?.slug).toBe("u50");
+  expect(host.querySelectorAll(".job-feed-row").length).toBe(50);
+  expect(FakeEventSource.instances.length).toBe(1);
+});
+
+it("shows the pause copy, then the resumed copy for 3 s after reopening", async () => {
+  vi.useFakeTimers();
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  await render(() => source.fail());
+  expect(host.textContent).toContain("Live updates paused. Reconnecting…");
+  expect(host.textContent).not.toContain("Live updates resumed.");
+
+  await render(() => source.open());
+  expect(useStore.getState().sseState).toBe("open");
+  expect(host.textContent).toContain("Live updates resumed.");
+  expect(host.textContent).not.toContain("Live updates paused. Reconnecting…");
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  expect(host.textContent).not.toContain("Live updates resumed.");
+  expect(host.querySelector(".job-live")).toBeTruthy();
+});
+
+it("keeps the last list visible through a failed poll and says Checking while it runs", async () => {
+  vi.useFakeTimers();
+  serverJobs = [makeJob()];
+  const { host } = await mountJobs();
+  expect(host.querySelectorAll(".job-row").length).toBe(1);
+
+  failList = true;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(host.textContent).toContain("Couldn't load jobs. Try again in a moment.");
+  expect(host.querySelectorAll(".job-row").length).toBe(1);
+  expect(host.textContent).toContain("https://www.youtube.com/@studio");
+
+  await act(async () => {
+    useStore.setState({ jobsLoading: true });
+  });
+  expect(host.textContent).toContain("Checking…");
+  expect(host.querySelectorAll(".job-row").length).toBe(1);
+});
+
+it("renders markup in event text as literal text and creates no element", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  const markup = '<img src=x onerror=alert(1)>';
+  await render(() =>
+    source.emit("unit", { slug: markup, stage: "S1", status: "skipped", detail: markup }, 1),
+  );
+
+  const slug = host.querySelector(".job-feed-slug");
+  expect(slug?.textContent).toBe(markup);
+  expect(host.querySelector(".job-feed-row img")).toBeNull();
+  expect(host.querySelector("[onerror]")).toBeNull();
+  expect(host.querySelector(".job-feed-detail")?.textContent).toBe(`Skipped: ${markup}`);
+});
+
+it("caps the feed at the last 500 units and shows the cap line", async () => {
+  serverJobs = [makeJob()];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  await act(async () => {
+    for (let seq = 1; seq <= 501; seq += 1) {
+      source.emit("unit", { slug: `u${seq}`, stage: "S1", status: "written" }, seq);
+    }
+  });
+
+  const feed = useStore.getState().unitFeed;
+  expect(feed.length).toBe(500);
+  expect(feed[0]?.seq).toBe(2);
+  expect(feed.at(-1)?.seq).toBe(501);
+  expect(useStore.getState().feedCapped).toBe(true);
+  expect(host.querySelectorAll(".job-feed-row").length).toBe(500);
+  expect(host.textContent).toContain("Showing the last 500 units.");
+});
