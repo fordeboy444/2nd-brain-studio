@@ -28,13 +28,32 @@ vi.mock("pino", () => {
 
 const ORIGINAL_VAULT_ROOT = process.env.VAULT_ROOT;
 const ORIGINAL_COOKIE_PATH = process.env.YOUTUBE_COOKIE_PATH;
+const ORIGINAL_OLLAMA_KEY = process.env.OLLAMA_API_KEY;
+const ORIGINAL_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL;
+const ORIGINAL_SUPADATA_KEY = process.env.SUPADATA_API_KEY;
 
 let root = "";
 let cookiePath = "";
 
-async function reload(): Promise<typeof import("./settings.js")> {
+interface ReloadOptions {
+  ollamaKey?: string;
+  ollamaBaseUrl?: string;
+  supadataKey?: string;
+}
+
+async function reload(
+  options: ReloadOptions = {},
+): Promise<typeof import("./settings.js") & { config: typeof import("../config.js").config }> {
+  if (options.ollamaKey === undefined) delete process.env.OLLAMA_API_KEY;
+  else process.env.OLLAMA_API_KEY = options.ollamaKey;
+  process.env.OLLAMA_BASE_URL = options.ollamaBaseUrl ?? "https://ollama.test";
+  if (options.supadataKey === undefined) delete process.env.SUPADATA_API_KEY;
+  else process.env.SUPADATA_API_KEY = options.supadataKey;
+
   vi.resetModules();
-  return import("./settings.js");
+  const routes = await import("./settings.js");
+  const { config } = await import("../config.js");
+  return { ...routes, config };
 }
 
 type Routes = Awaited<ReturnType<typeof reload>>;
@@ -72,6 +91,14 @@ afterEach(async () => {
   else process.env.VAULT_ROOT = ORIGINAL_VAULT_ROOT;
   if (ORIGINAL_COOKIE_PATH === undefined) delete process.env.YOUTUBE_COOKIE_PATH;
   else process.env.YOUTUBE_COOKIE_PATH = ORIGINAL_COOKIE_PATH;
+  if (ORIGINAL_OLLAMA_KEY === undefined) delete process.env.OLLAMA_API_KEY;
+  else process.env.OLLAMA_API_KEY = ORIGINAL_OLLAMA_KEY;
+  if (ORIGINAL_OLLAMA_BASE_URL === undefined) delete process.env.OLLAMA_BASE_URL;
+  else process.env.OLLAMA_BASE_URL = ORIGINAL_OLLAMA_BASE_URL;
+  if (ORIGINAL_SUPADATA_KEY === undefined) delete process.env.SUPADATA_API_KEY;
+  else process.env.SUPADATA_API_KEY = ORIGINAL_SUPADATA_KEY;
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -173,7 +200,7 @@ describe("POST /api/settings/youtube-cookie", () => {
 });
 
 describe("GET /api/settings", () => {
-  it("returns only the cookie existence and timestamp, never the body", async () => {
+  it("returns the non-secret settings and status flags, never a cookie body or key", async () => {
     const routes = await reload();
     await upload(routes, VALID_BODY);
 
@@ -183,13 +210,203 @@ describe("GET /api/settings", () => {
     expect(text).not.toContain("youtube.com");
     expect(text).not.toContain("Netscape");
     expect(text).not.toContain("abc123");
+    expect(text).not.toMatch(/"(key|apiKey|token|password)"/);
 
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual([
+      "hasSupadataKey",
       "hasYoutubeCookie",
+      "llmConfigured",
+      "settings",
       "youtubeCookieUpdatedAt",
     ]);
     expect(body.hasYoutubeCookie).toBe(true);
+    expect(body.hasSupadataKey).toBe(false);
+    expect(body.llmConfigured).toBe(false);
+    expect(body.settings).toEqual({
+      llm: {
+        model: routes.config.ollamaModel,
+        concurrency: 1,
+        requestTimeoutMs: 120_000,
+        maxRetries: 3,
+      },
+      fetch: { delayMs: 1_000, concurrency: 2, language: "en" },
+      sweep: { enabled: true },
+      ui: { theme: "system" },
+    });
+  });
+
+  it("reports a configured Supadata key and Ollama key without their values", async () => {
+    const routes = await reload({
+      ollamaKey: "ollama-secret-value",
+      supadataKey: "supadata-secret-value",
+    });
+
+    const res = await routes.settings.request("/");
+    const text = await res.text();
+    expect(text).not.toContain("ollama-secret-value");
+    expect(text).not.toContain("supadata-secret-value");
+
+    const body = JSON.parse(text) as { hasSupadataKey: boolean; llmConfigured: boolean };
+    expect(body.hasSupadataKey).toBe(true);
+    expect(body.llmConfigured).toBe(true);
+  });
+});
+
+describe("PUT /api/settings", () => {
+  function put(
+    routes: Routes,
+    patch: unknown,
+    headers: Record<string, string> = {},
+  ): Promise<Response> {
+    return routes.settings.request("/", {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(patch),
+    });
+  }
+
+  it("merges a valid patch, writes settings.json and returns the status object", async () => {
+    const routes = await reload();
+
+    const res = await put(routes, { ui: { theme: "dark" }, fetch: { delayMs: 250 } });
+    expect(res.status).toBe(200);
+
+    const body = (await res.json()) as {
+      settings: { ui: { theme: string }; fetch: { delayMs: number; language: string } };
+    };
+    expect(body.settings.ui.theme).toBe("dark");
+    expect(body.settings.fetch.delayMs).toBe(250);
+    expect(body.settings.fetch.language).toBe("en");
+
+    const stored = JSON.parse(
+      await readFile(join(root, "settings.json"), "utf8"),
+    ) as { ui: { theme: string } };
+    expect(stored.ui.theme).toBe("dark");
+  });
+
+  it("rejects concurrency 5 with 400 invalid_body and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await put(routes, { llm: { concurrency: 5 } });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_body");
+    await expect(stat(join(root, "settings.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("strips an unknown llm.apiKey instead of persisting it", async () => {
+    const routes = await reload();
+
+    const res = await put(routes, { llm: { model: "safe-model", apiKey: "SECRET-VALUE" } });
+    expect(res.status).toBe(200);
+
+    const stored = await readFile(join(root, "settings.json"), "utf8");
+    expect(stored).not.toContain("SECRET-VALUE");
+    expect(stored).not.toMatch(/"(key|apiKey|token|password)"/);
+    expect((JSON.parse(stored) as { llm: { model: string } }).llm.model).toBe("safe-model");
+  });
+
+  it("refuses a cross-origin PUT and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await put(routes, { ui: { theme: "dark" } }, { origin: "https://evil.example" });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("origin_mismatch");
+    await expect(stat(join(root, "settings.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("POST /api/settings/test-llm", () => {
+  it("returns 400 llm_not_configured with no key and makes no request", async () => {
+    const routes = await reload();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("llm_not_configured");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends exactly one bounded request and never echoes the key or upstream body", async () => {
+    const routes = await reload({
+      ollamaKey: "test-key",
+      ollamaBaseUrl: "https://ollama.example",
+    });
+    // The probe reads the persisted model at call time.
+    await routes.settings.request("/", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ llm: { model: "probe-model" } }),
+    });
+    const fetchMock = vi.fn(async () => new Response("UPSTREAM-SECRET-BODY", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+
+    const text = await res.text();
+    expect(text).not.toContain("test-key");
+    expect(text).not.toContain("UPSTREAM-SECRET-BODY");
+    const body = JSON.parse(text) as { ok: boolean; latencyMs: number };
+    expect(body.ok).toBe(true);
+    expect(typeof body.latencyMs).toBe("number");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://ollama.example/api/chat");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer test-key");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(15_000);
+
+    const payload = JSON.parse(init.body as string) as {
+      model: string;
+      stream: boolean;
+      options: { num_predict: number };
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(payload.model).toBe("probe-model");
+    expect(payload.stream).toBe(false);
+    expect(payload.options.num_predict).toBe(1);
+    expect(payload.messages).toEqual([{ role: "user", content: "Reply with OK." }]);
+
+    // Nothing logged may carry the key either.
+    expect(JSON.stringify(logHarness.entries)).not.toContain("test-key");
+  });
+
+  it("maps an HTTP failure to {ok:false, reason:http_<status>} without the body", async () => {
+    const routes = await reload({ ollamaKey: "test-key" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("UPSTREAM-SECRET-BODY", { status: 500 })),
+    );
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ ok: false, reason: "http_500" });
+    expect(text).not.toContain("UPSTREAM-SECRET-BODY");
+  });
+
+  it("maps a timeout to {ok:false, reason:timeout}", async () => {
+    const routes = await reload({ ollamaKey: "test-key" });
+    const error = new Error("timed out");
+    error.name = "TimeoutError";
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(error)));
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, reason: "timeout" });
+  });
+
+  it("maps a network failure to {ok:false, reason:network}", async () => {
+    const routes = await reload({ ollamaKey: "test-key" });
+    vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("bad connection"))));
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: false, reason: "network" });
   });
 });
 

@@ -11,6 +11,8 @@
  */
 import { Hono } from "hono";
 import pino from "pino";
+import { z } from "zod";
+import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import {
   MAX_COOKIE_BYTES,
@@ -19,10 +21,33 @@ import {
   validateNetscapeCookie,
   writeYoutubeCookie,
 } from "../ingest/cookie.js";
+import { readSettings, writeSettings } from "../settings/store.js";
 
 const log = pino({ name: "settings" });
 
 export const settings = new Hono();
+
+/**
+ * The one redacted response shape. It is an explicit allowlist: non-secret
+ * settings plus three flags and a timestamp. No key, token or cookie body is a
+ * field, so no serializer change can expose one (T-03-24).
+ */
+async function statusPayload(): Promise<{
+  settings: Awaited<ReturnType<typeof readSettings>>;
+  hasYoutubeCookie: boolean;
+  youtubeCookieUpdatedAt: string | null;
+  hasSupadataKey: boolean;
+  llmConfigured: boolean;
+}> {
+  const [current, status] = await Promise.all([readSettings(), cookieStatus()]);
+  return {
+    settings: current,
+    hasYoutubeCookie: status.hasYoutubeCookie,
+    youtubeCookieUpdatedAt: status.youtubeCookieUpdatedAt,
+    hasSupadataKey: config.supadataApiKey !== undefined,
+    llmConfigured: config.llmConfigured,
+  };
+}
 
 settings.use("*", async (c, next) => {
   const method = c.req.method.toUpperCase();
@@ -40,8 +65,40 @@ settings.use("*", async (c, next) => {
  * `cookieStatus` calls `stat` only.
  */
 settings.get("/", async (c) => {
-  const status = await cookieStatus();
-  return c.json(status, 200);
+  return c.json(await statusPayload(), 200);
+});
+
+/**
+ * `PUT /api/settings` — the non-secret patch.
+ *
+ * `writeSettings` validates with zod, strips unknown keys (including a
+ * secret-shaped one) and merges over the current file. A rejected patch writes
+ * nothing.
+ */
+settings.put("/", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      { error: "invalid_body", message: "Request body must be a JSON settings patch." },
+      400,
+    );
+  }
+
+  try {
+    await writeSettings(body);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return c.json(
+        { error: "invalid_body", message: "One or more settings values are out of range." },
+        400,
+      );
+    }
+    throw error;
+  }
+
+  return c.json(await statusPayload(), 200);
 });
 
 /**
@@ -105,6 +162,53 @@ settings.post("/youtube-cookie", async (c) => {
     },
     200,
   );
+});
+
+/**
+ * `POST /api/settings/test-llm` — one manual, bounded Ollama probe.
+ *
+ * The key is read from `config` at call time and used only in the Authorization
+ * header (T-03-26). It is never placed in the body, the URL or the response, and
+ * the upstream body is never read back. This is a manual probe only: the job
+ * pipeline never calls it, so the zero-LLM Phase 3 proof still holds.
+ */
+settings.post("/test-llm", async (c) => {
+  const key = config.ollamaApiKey;
+  if (!config.llmConfigured || key === undefined) {
+    return c.json(
+      { error: "llm_not_configured", message: "Set OLLAMA_API_KEY to test the connection." },
+      400,
+    );
+  }
+
+  const started = Date.now();
+  try {
+    const current = await readSettings();
+    const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: current.llm.model,
+        messages: [{ role: "user", content: "Reply with OK." }],
+        stream: false,
+        options: { num_predict: 1 },
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+      // The status is fixed data; the upstream body is deliberately not read.
+      return c.json({ ok: false, reason: `http_${response.status}` }, 200);
+    }
+    return c.json({ ok: true, latencyMs: Date.now() - started }, 200);
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    const reason = name === "TimeoutError" || name === "AbortError" ? "timeout" : "network";
+    return c.json({ ok: false, reason }, 200);
+  }
 });
 
 /** `DELETE /api/settings/youtube-cookie` — idempotent; absent is a success. */

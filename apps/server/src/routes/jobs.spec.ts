@@ -191,6 +191,33 @@ describe("POST /api/jobs", () => {
     expect(harness.enqueued.map((job) => job.id)).toEqual([body.id]);
   });
 
+  it("snapshots the effective settings, unchanged by a later settings PUT", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+    ).json()) as { id: string };
+    const before = await routes.readJob(vaultDir, created.id);
+
+    // The per-job input and the global defaults are both in the record.
+    expect(before.settings.maxVideos).toBe(5);
+    expect(before.settings.fetch.concurrency).toBe(2);
+    expect(before.settings.sweep).toEqual({ enabled: true });
+
+    const settingsRoutes = await import("./settings.js");
+    const put = await settingsRoutes.settings.request("/", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ llm: { model: "changed-model" }, fetch: { delayMs: 7 } }),
+    });
+    expect(put.status).toBe(200);
+
+    const stored = await routes.readJob(vaultDir, created.id);
+    expect(stored.settings).toEqual(before.settings);
+    expect(stored.settings.llm.model).not.toBe("changed-model");
+  });
+
   it("returns 404 for an unknown vault and writes no job", async () => {
     const routes = await reload();
     const { vaultDir } = await seeded(routes);

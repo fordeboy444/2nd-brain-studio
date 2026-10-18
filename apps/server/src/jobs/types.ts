@@ -43,7 +43,14 @@ export interface SkippedUnit {
   detail?: string;
 }
 
-/** What the ingest form resolves to, snapshotted into `job.json` at creation. */
+/**
+ * What the ingest form resolves to, snapshotted into `job.json` at creation.
+ *
+ * The global non-secret settings (`settings/store.ts`) are spread into this
+ * record, so a later `PUT /api/settings` cannot change a queued or running job.
+ * The runner reads only `filters` and `maxVideos`; the remaining fields are
+ * carried verbatim for Phase 4.
+ */
 export interface JobSettings {
   maxVideos: number;
   filters: {
@@ -53,8 +60,15 @@ export interface JobSettings {
     language?: string;
   };
   /** Stored and rendered in Phase 3; consumed in Phase 4. Not an active limit yet. */
-  fetch: { concurrency: number };
-  llm: { model: string };
+  fetch: { concurrency: number; delayMs?: number; language?: string };
+  llm: {
+    model: string;
+    concurrency?: number;
+    requestTimeoutMs?: number;
+    maxRetries?: number;
+  };
+  sweep?: { enabled: boolean };
+  ui?: { theme: "system" | "light" | "dark" };
 }
 
 export interface JobInput {

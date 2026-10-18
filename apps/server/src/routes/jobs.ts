@@ -15,7 +15,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
-import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import { EnumerateError } from "../ingest/enumerate.js";
 import {
@@ -38,6 +37,7 @@ import {
 } from "../jobs/store.js";
 import type { JobRecord, JobSettings, JobStatus } from "../jobs/types.js";
 import { PathJailError, resolveInVault } from "../paths/jail.js";
+import { readSettings } from "../settings/store.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 
 export const jobs = new Hono();
@@ -288,12 +288,13 @@ jobs.post("/", async (c) => {
   if (parsed.minDurationSec !== undefined) filters.minDurationSec = parsed.minDurationSec;
   if (parsed.language !== undefined) filters.language = parsed.language;
 
+  // CONTEXT snapshot: the effective global settings are copied into the record
+  // before it is written, so a later PUT /api/settings cannot change this job.
+  const globalSettings = await readSettings();
   const settings: JobSettings = {
+    ...globalSettings,
     maxVideos: parsed.maxVideos,
     filters,
-    // Stored and rendered in Phase 3; the one-job FIFO is the active limit.
-    fetch: { concurrency: 1 },
-    llm: { model: config.ollamaModel },
   };
 
   const vaultDir = vaultDirPath(vault.id);
