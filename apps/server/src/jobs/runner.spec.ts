@@ -1109,8 +1109,9 @@ const PIPELINE_BODY =
   "First paragraph about the label.\n\nSecond paragraph about the label.";
 
 interface PipelineCall {
-  stage: "S2" | "S3" | "S4" | "unknown";
+  stage: "S2" | "S3" | "S4" | "S6" | "unknown";
   system: string;
+  user: string;
   model: string;
   baseUrl: string | undefined;
   timeoutMs: number | undefined;
@@ -1121,6 +1122,7 @@ function stageOf(system: string): PipelineCall["stage"] {
   if (system.includes("Prompt version: s2-v1.")) return "S2";
   if (system.includes("Prompt version: s3-v1.")) return "S3";
   if (system.includes("Prompt version: s4-v1.")) return "S4";
+  if (system.includes("Prompt version: s6-v1.")) return "S6";
   return "unknown";
 }
 
@@ -1136,21 +1138,31 @@ function requestLines(content: string): { slug: string; name?: string }[] {
  * for and records the cache-facing options, so a run can prove which stage
  * called and which model/timeout values it used.
  */
-function pipelineLlm(): { calls: PipelineCall[]; client: LlmClient } {
+function pipelineLlm(
+  options: {
+    quotes?: boolean;
+    extraConcept?: boolean;
+    omitS4?: string;
+  } = {},
+): {
+  calls: PipelineCall[];
+  client: LlmClient;
+} {
   const calls: PipelineCall[] = [];
   const client: LlmClient = {
-    async chat(messages: LlmMessage[], options: LlmChatOptions) {
+    async chat(messages: LlmMessage[], chatOptions: LlmChatOptions) {
       const system = messages[0]?.content ?? "";
       const stage = stageOf(system);
+      const user = messages[1]?.content ?? "";
       calls.push({
         stage,
         system,
-        model: options.model,
-        baseUrl: options.baseUrl,
-        timeoutMs: options.timeoutMs,
-        maxRetries: options.maxRetries,
+        user,
+        model: chatOptions.model,
+        baseUrl: chatOptions.baseUrl,
+        timeoutMs: chatOptions.timeoutMs,
+        maxRetries: chatOptions.maxRetries,
       });
-      const user = messages[1]?.content ?? "";
 
       if (stage === "S2") {
         const title = /^Title: (.*)$/m.exec(user)?.[1] ?? "Untitled";
@@ -1163,9 +1175,15 @@ function pipelineLlm(): { calls: PipelineCall[]; client: LlmClient } {
             tags: [],
             concepts: [
               { name: "Agentic Workflow", slug: "agentic-workflow", weight: 1 },
+              ...(options.extraConcept === true
+                ? [{ name: "Beta Topic", slug: "beta", weight: 0.5 }]
+                : []),
             ],
             entities: [{ name: "n8n", slug: "n8n", type: "tool", weight: 1 }],
-            quotes: [],
+            quotes:
+              options.quotes === true
+                ? [{ text: "hello", startSec: 0 }]
+                : [],
             relations: [],
           }),
           tokensIn: 1,
@@ -1204,11 +1222,27 @@ function pipelineLlm(): { calls: PipelineCall[]; client: LlmClient } {
       if (stage === "S4") {
         return {
           text: JSON.stringify(
-            requestLines(user).map((request) => ({
+            requestLines(user)
+              .filter((request) => request.slug !== options.omitS4)
+              .map((request) => ({
+                slug: request.slug,
+                body: PIPELINE_BODY,
+              })),
+          ),
+          tokensIn: 1,
+          tokensOut: 1,
+        };
+      }
+
+      if (stage === "S6") {
+        return {
+          text: JSON.stringify({
+            pages: requestLines(user).map((request) => ({
               slug: request.slug,
               body: PIPELINE_BODY,
+              notable: 0.4,
             })),
-          ),
+          }),
           tokensIn: 1,
           tokensOut: 1,
         };
@@ -1618,11 +1652,14 @@ describe("retry scope (PIPE-12)", () => {
   });
 
   /** A pipeline client that rejects every S2 call for one source title. */
-  function failingS2Client(failTitle: string): {
+  function failingS2Client(
+    failTitle: string,
+    options: { quotes?: boolean; omitS4?: string } = {},
+  ): {
     calls: PipelineCall[];
     client: LlmClient;
   } {
-    const inner = pipelineLlm();
+    const inner = pipelineLlm(options);
     const client: LlmClient = {
       async chat(messages, options) {
         const system = messages[0]?.content ?? "";
@@ -1656,12 +1693,29 @@ describe("retry scope (PIPE-12)", () => {
     expect(job.skipped).toEqual([]);
     await writeJob(root, job);
 
+    const before = await readEvents(join(root, ".okf", "jobs", job.id), 0);
+    const lastSeq = before.at(-1)?.seq ?? 0;
     const retry = pipelineLlm();
     await runJob(job, makeDeps({ llm: retry.client }));
 
     // The retried unit is a cache hit: no S2 call, and the partial page is gone.
     expect(retry.calls.filter((call) => call.stage === "S2")).toEqual([]);
     expect(job.skipped).toEqual([]);
+    expect(job.retry).toBeUndefined();
+
+    // A good S2 unit makes no call and no event, so only the failed slug runs.
+    const s2Events = (await readEvents(join(root, ".okf", "jobs", job.id), lastSeq))
+      .filter(
+        (event) =>
+          event.type === "unit" &&
+          (event.data as { stage?: string }).stage === "S2",
+      );
+    expect(
+      s2Events.map((event) => [
+        (event.data as { slug?: string }).slug,
+        (event.data as { status?: string }).status,
+      ]),
+    ).toEqual([["agent-talk", "written"]]);
     const extraction = JSON.parse(
       await readFile(
         join(root, ".okf", "jobs", job.id, "extractions", "agent-talk.json"),
@@ -1690,5 +1744,192 @@ describe("retry scope (PIPE-12)", () => {
     expect(job.skipped.map(({ slug, stage }) => ({ slug, stage }))).toEqual([
       { slug: "agent-talk", stage: "S2" },
     ]);
+    // A finished retry never keeps its scope: the next run is not narrowed.
+    expect(job.retry).toBeUndefined();
+  });
+
+  /** A label page with a one-paragraph overview, so S6 selects it. */
+  function shortPage(): string {
+    return [
+      "---",
+      "type: concept",
+      "title: Short",
+      "slug: short",
+      "sources: []",
+      "tags: []",
+      "created: 2026-10-18T10:00:00.000Z",
+      "updated: 2026-10-18T10:00:00.000Z",
+      "---",
+      "# Short",
+      "",
+      "## Overview",
+      "",
+      "One paragraph only.",
+      "",
+    ].join("\n");
+  }
+
+  it("retries an S2 failure and an S4 failure in one pass from S2", async () => {
+    const job = makeVideoJob();
+    await runPipeline(
+      job,
+      failingS2Client("Agent talk", { omitS4: "n8n" }).client,
+      { fetchTranscript: 0, fetchWeb: 0 },
+    );
+    expect(job.skipped.map(({ slug, stage }) => ({ slug, stage }))).toEqual([
+      { slug: "agent-talk", stage: "S2" },
+      { slug: "n8n", stage: "S4" },
+    ]);
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S2" });
+    expect(job.retry?.units).toEqual([
+      { slug: "agent-talk", stage: "S2" },
+      { slug: "n8n", stage: "S4" },
+    ]);
+    expect(job.skipped).toEqual([]);
+    await writeJob(root, job);
+
+    const retry = pipelineLlm();
+    await runJob(job, makeDeps({ llm: retry.client }));
+
+    // Both failed units completed in the same pass, and neither skip survives.
+    expect(job.skipped).toEqual([]);
+    expect(job.retry).toBeUndefined();
+    expect(job.status).toBe("completed");
+    expect(
+      Object.keys(await vaultPages()).filter((path) => path.startsWith("sources/")),
+    ).toHaveLength(4);
+  });
+
+  it("rewrites only the recorded S4 label when no earlier stage re-runs", async () => {
+    const job = makeVideoJob();
+    await runPipeline(job, pipelineLlm().client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    // The first run is complete; inject the failure an earlier run recorded.
+    job.skipped.push({ slug: "agentic-workflow", stage: "S4", reason: "model_error" });
+    // A deleted page proves the good unit was not re-rendered.
+    await rm(join(root, "entities", "tools", "n8n.md"));
+    expect(retryJobRecord(job)).toEqual({ stage: "S4" });
+    await writeJob(root, job);
+
+    const before = await readEvents(join(root, ".okf", "jobs", job.id), 0);
+    const lastSeq = before.at(-1)?.seq ?? 0;
+    const retry = pipelineLlm();
+    await runJob(job, makeDeps({ llm: retry.client }));
+
+    // One S4 call, one request, one written unit: only the failed label.
+    expect(retry.calls.map((call) => call.stage)).toEqual(["S4"]);
+    expect(requestLines(retry.calls[0]!.user).map((request) => request.slug)).toEqual([
+      "agentic-workflow",
+    ]);
+    const s4Events = (await readEvents(join(root, ".okf", "jobs", job.id), lastSeq))
+      .filter(
+        (event) =>
+          event.type === "unit" &&
+          (event.data as { stage?: string }).stage === "S4",
+      );
+    expect(
+      s4Events.map((event) => [
+        (event.data as { slug?: string }).slug,
+        (event.data as { status?: string }).status,
+      ]),
+    ).toEqual([["agentic-workflow", "written"]]);
+    await expect(
+      readFile(join(root, "entities", "tools", "n8n.md"), "utf8"),
+    ).rejects.toThrow();
+    expect(job.retry).toBeUndefined();
+  });
+
+  it("sweeps only the recorded S6 label", async () => {
+    const settings: JobSettings = {
+      ...SETTINGS,
+      sweep: { enabled: true },
+    };
+    const job = makeVideoJob({ settings });
+    await runPipeline(job, pipelineLlm().client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    // Two pages are short enough for S6, but only one failure was recorded.
+    const short = shortPage();
+    await writeFile(join(root, "concepts", "agentic-workflow.md"), short);
+    await writeFile(join(root, "entities", "tools", "n8n.md"), short);
+    job.skipped.push({ slug: "agentic-workflow", stage: "S6", reason: "model_error" });
+    expect(retryJobRecord(job)).toEqual({ stage: "S6" });
+    await writeJob(root, job);
+
+    const before = await readEvents(join(root, ".okf", "jobs", job.id), 0);
+    const lastSeq = before.at(-1)?.seq ?? 0;
+    const retry = pipelineLlm();
+    await runJob(job, makeDeps({ llm: retry.client }));
+
+    expect(retry.calls.map((call) => call.stage)).toEqual(["S6"]);
+    expect(requestLines(retry.calls[0]!.user).map((request) => request.slug)).toEqual([
+      "agentic-workflow",
+    ]);
+    const s6Events = (await readEvents(join(root, ".okf", "jobs", job.id), lastSeq))
+      .filter(
+        (event) =>
+          event.type === "unit" &&
+          (event.data as { stage?: string }).stage === "S6",
+      );
+    expect(
+      s6Events.map((event) => [
+        (event.data as { slug?: string }).slug,
+        (event.data as { status?: string }).status,
+      ]),
+    ).toEqual([["agentic-workflow", "written"]]);
+    // The label outside the retry scope keeps its short page untouched.
+    expect(await readFile(join(root, "entities", "tools", "n8n.md"), "utf8")).toBe(
+      short,
+    );
+    expect(job.retry).toBeUndefined();
+  });
+
+  it("writes a label the retried extraction adds and links it from the new source", async () => {
+    const job = makeVideoJob();
+    await runPipeline(job, failingS2Client("Agent talk", { quotes: true }).client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+    const pagesA = await vaultPages();
+    expect(pagesA["concepts/beta.md"]).toBeUndefined();
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S2" });
+    await writeJob(root, job);
+
+    // The retried extraction adds concept beta, which the first manifest never had.
+    const retry = pipelineLlm({ quotes: true, extraConcept: true });
+    await runJob(job, makeDeps({ llm: retry.client }));
+
+    const beta = parseFrontmatter(
+      await readFile(join(root, "concepts", "beta.md"), "utf8"),
+    );
+    expect(beta).not.toBeNull();
+    expect(beta!.data.type).toBe("concept");
+    expect(beta!.data.slug).toBe("beta");
+    expect(beta!.data.sources).toEqual(["agent-talk"]);
+    expect(beta!.body).toContain("## Sources");
+    expect(beta!.body).toContain("../sources/agent-talk.md");
+
+    const alpha = parseFrontmatter(
+      await readFile(join(root, "concepts", "agentic-workflow.md"), "utf8"),
+    );
+    expect(alpha).not.toBeNull();
+    expect(alpha!.body).toContain("../sources/agent-talk.md");
+
+    const manifest = JSON.parse(
+      await readFile(join(root, ".okf", "jobs", job.id, "manifest.json"), "utf8"),
+    ) as { concepts: Array<{ slug: string }> };
+    expect(manifest.concepts.map((concept) => concept.slug).sort()).toEqual([
+      "agentic-workflow",
+      "beta",
+    ]);
+    expect(job.skipped).toEqual([]);
+    expect(job.retry).toBeUndefined();
   });
 });
