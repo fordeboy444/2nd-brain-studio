@@ -671,7 +671,7 @@ it("shows the exact S2 copy and keeps the server detail as the title", async () 
         {
           slug: "video-a",
           stage: "S2",
-          reason: "validator",
+          reason: "malformed_json",
           detail: "Missing summary field.",
         },
       ],
@@ -684,6 +684,22 @@ it("shows the exact S2 copy and keeps the server detail as the title", async () 
   expect(row?.textContent).toContain("Extraction failed. Source page saved as partial.");
   // The validator's own words stay reachable without replacing the approved copy.
   expect(row?.querySelector('[title="Missing summary field."]')).toBeTruthy();
+});
+
+it("shows the plain reason for an S2 capture that wrote no partial page", async () => {
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [{ slug: "video-a", stage: "S2", reason: "capture_invalid" }],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const row = host.querySelector(".job-failed-table tbody tr");
+  expect(row?.textContent).toContain("capture_invalid");
+  expect(row?.textContent).not.toContain("saved as partial");
 });
 
 it("shows the approved toast and re-enables Retry when the request is refused", async () => {

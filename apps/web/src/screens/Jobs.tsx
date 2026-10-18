@@ -562,6 +562,22 @@ function UnitFeed({
 /** The approved copy for a unit that failed extraction and left a partial page. */
 const S2_FAILURE_COPY = "Extraction failed. Source page saved as partial.";
 
+/**
+ * The S2 reasons whose path writes a partial source page. `capture_invalid`
+ * stops before that write, so it shows its plain reason instead (WR-10).
+ */
+const S2_PARTIAL_REASONS: ReadonlySet<string> = new Set([
+  "malformed_json",
+  "model_error",
+  "model_timeout",
+  "llm_not_configured",
+]);
+
+function reasonCopy(row: { stage: string; reason: string }): string {
+  if (row.stage !== "S2") return row.reason;
+  return S2_PARTIAL_REASONS.has(row.reason) ? S2_FAILURE_COPY : row.reason;
+}
+
 function FailedUnitTable({
   rows,
   retryBlockedReason,
@@ -598,9 +614,7 @@ function FailedUnitTable({
                 <td>{row.stage}</td>
                 {/* The detail stays reachable as the title; the visible copy is
                     the approved sentence whenever the run wrote a partial page. */}
-                <td title={row.detail}>
-                  {row.stage === "S2" ? S2_FAILURE_COPY : row.reason}
-                </td>
+                <td title={row.detail}>{reasonCopy(row)}</td>
                 <td>
                   <button
                     type="button"
