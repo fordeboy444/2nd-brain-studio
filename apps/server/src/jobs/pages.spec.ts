@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseFrontmatter } from "@2nd-brain/okf";
 import type { ExtractionSource } from "./extraction.js";
 import {
+  pagePathFor,
   renderSourcePage,
   renderSourcesSection,
   sourceFrontmatter,
@@ -145,6 +146,24 @@ describe("sourceFrontmatter", () => {
   });
 });
 
+describe("pagePathFor", () => {
+  it("maps each kind to its bundle path", () => {
+    expect(pagePathFor("source", "first-talk")).toBe("sources/first-talk.md");
+    expect(pagePathFor("concept", "agentic-workflow")).toBe(
+      "concepts/agentic-workflow.md",
+    );
+    expect(pagePathFor("entity", "n8n", "tool")).toBe("entities/tool/n8n.md");
+  });
+
+  it("rejects an entity with no type and a slug that could leave the bundle", () => {
+    expect(() => pagePathFor("entity", "n8n")).toThrow("invalid entity type");
+    expect(() => pagePathFor("source", "../escape")).toThrow("invalid page slug");
+    expect(() => pagePathFor("entity", "n8n", "../tool")).toThrow(
+      "invalid entity type",
+    );
+  });
+});
+
 describe("sourcesBullet", () => {
   it("renders the video grammar with a formatted timestamp", () => {
     expect(
@@ -177,7 +196,10 @@ describe("renderSourcePage", () => {
 
     const body = parsed!.body;
     expect(body.startsWith("\n# First Talk\n")).toBe(true);
+    const summaryHeadingAt = body.indexOf("## Summary");
     const summaryAt = body.indexOf("A summary of the talk.");
+    expect(summaryHeadingAt).toBeGreaterThan(-1);
+    expect(summaryAt).toBeGreaterThan(summaryHeadingAt);
     const conceptsAt = body.indexOf("## Concepts covered");
     const entitiesAt = body.indexOf("## Entities");
     const momentsAt = body.indexOf("## Key moments");

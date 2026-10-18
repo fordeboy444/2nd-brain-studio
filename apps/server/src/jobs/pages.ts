@@ -130,14 +130,52 @@ export function renderSourcesSection(bullets: readonly string[]): string {
   return `## Sources\n\n${bullets.join("\n")}\n`;
 }
 
-/** `concepts/<slug>.md` as a link from inside `sources/`. */
-function conceptLink(concept: SourcePageConcept): string {
-  return `- [${concept.name}](../concepts/${concept.slug}.md)`;
+/** A page slug and an entity subtype name a path, so both are closed shapes. */
+const PAGE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/** The three page kinds a bundle contains below its root. */
+export type PageKind = "source" | "concept" | "entity";
+
+/**
+ * The one namer for a bundle page path (T-P4-15).
+ *
+ * Every writer and every link renderer calls this function, so a link and its
+ * target cannot disagree. A slug or an entity subtype that could name a
+ * directory or an escape is rejected before any path is built.
+ */
+export function pagePathFor(
+  kind: PageKind,
+  slug: string,
+  entityType?: string,
+): string {
+  if (!PAGE_SLUG_RE.test(slug)) throw new Error("invalid page slug");
+  if (kind === "source") return `sources/${slug}.md`;
+  if (kind === "concept") return `concepts/${slug}.md`;
+  if (kind === "entity") {
+    if (entityType === undefined || !PAGE_SLUG_RE.test(entityType)) {
+      throw new Error("invalid entity type");
+    }
+    return `entities/${entityType}/${slug}.md`;
+  }
+  throw new Error(`unknown page kind: ${String(kind)}`);
 }
 
-/** `entities/<type>/<slug>.md` as a link from inside `sources/`, matching 04-04. */
+/** One `- [label](path)` bullet. */
+function linkLine(label: string, path: string): string {
+  return `- [${label}](${path})`;
+}
+
+/** `concepts/<slug>.md` as a link from inside `sources/`. */
+function conceptLink(concept: SourcePageConcept): string {
+  return linkLine(concept.name, `../${pagePathFor("concept", concept.slug)}`);
+}
+
+/** `entities/<type>/<slug>.md` as a link from inside `sources/`. */
 function entityLink(entity: SourcePageEntity): string {
-  return `- [${entity.name}](../entities/${entity.type}/${entity.slug}.md)`;
+  return linkLine(
+    entity.name,
+    `../${pagePathFor("entity", entity.slug, entity.type)}`,
+  );
 }
 
 /** One key moment: `- **[H:MM:SS]** text`. Video only. */
@@ -168,7 +206,7 @@ export function renderSourcePage(input: SourcePageInput): string {
     );
   } else {
     const summary = input.summary.trim();
-    if (summary !== "") parts.push(`${summary}\n`);
+    if (summary !== "") parts.push(section("## Summary", [summary]));
   }
 
   const concepts = input.concepts.map(conceptLink);
