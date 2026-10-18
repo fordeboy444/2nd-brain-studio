@@ -34,7 +34,7 @@ export function TabBar() {
             aria-selected={active}
             title={tab.path}
             onAuxClick={(e) => {
-              if (e.button === 1) useStore.getState().closeTab(tab.path);
+              if (e.button === 1) useStore.getState().closeTab(tab.vaultId, tab.path);
             }}
           >
             {active && <span className="tab-active-bg" aria-hidden="true" />}
@@ -53,7 +53,7 @@ export function TabBar() {
               aria-label={`Close ${label}`}
               onClick={(e) => {
                 e.stopPropagation();
-                useStore.getState().closeTab(tab.path);
+                useStore.getState().closeTab(tab.vaultId, tab.path);
               }}
             >
               <svg

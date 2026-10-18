@@ -203,7 +203,7 @@ export interface AppState {
   tabs: Tab[];
   activeTabPath: string | null;
   openFile: (vaultId: string, path: string) => void;
-  closeTab: (path: string) => void;
+  closeTab: (vaultId: string, path: string) => void;
   setBuffer: (text: string) => void;
   saveActive: () => Promise<void>;
   /** A refused save, held until the user chooses one of the two actions. */
@@ -317,9 +317,18 @@ export function isDirty(tab: Tab): boolean {
   return tab.serverContent !== null && tab.buffer !== tab.serverContent;
 }
 
+/**
+ * A tab is identified by the PAIR `(vaultId, path)`, never by the path alone.
+ * Every scaffolded vault has an `index.md`, so a path-only match can select a
+ * tab that belongs to another vault.
+ */
+function sameTab(tab: Tab, vaultId: string, path: string): boolean {
+  return tab.vaultId === vaultId && tab.path === path;
+}
+
 /** Replace one tab immutably; every other tab keeps its identity. */
-function patchTabs(tabs: Tab[], path: string, patch: Partial<Tab>): Tab[] {
-  return tabs.map((t) => (t.path === path ? { ...t, ...patch } : t));
+function patchTabs(tabs: Tab[], vaultId: string, path: string, patch: Partial<Tab>): Tab[] {
+  return tabs.map((t) => (sameTab(t, vaultId, path) ? { ...t, ...patch } : t));
 }
 
 /** A fresh tab for a path nobody has read yet. */
@@ -337,19 +346,27 @@ function freshTab(vaultId: string, path: string): Tab {
 }
 
 export const useStore = create<AppState>((set, get) => {
-  /** Patch one tab by path, wherever it is. */
-  const setTab = (path: string, patch: Partial<Tab>) =>
-    set((s) => ({ tabs: patchTabs(s.tabs, path, patch) }));
+  /** Patch one tab inside one vault, wherever it is. */
+  const setTab = (vaultId: string, path: string, patch: Partial<Tab>) =>
+    set((s) => ({ tabs: patchTabs(s.tabs, vaultId, path, patch) }));
 
   /**
    * Read a file into its tab. A failure records the message on the tab and
    * leaves the tab in place, so the editor region can say what happened while
    * the tree stays usable.
+   *
+   * The read is async, so it can outlive the vault that asked for it. Before
+   * either branch writes, it must prove the open vault is still the one that
+   * requested the read AND that the requesting tab still exists. Without both
+   * checks, a late read from vault A patches vault B's same-path tab and
+   * silently replaces unsaved text.
    */
   const loadDocument = async (vaultId: string, path: string) => {
     try {
       const file = await readFile(vaultId, path);
-      setTab(path, {
+      if (get().currentVault?.id !== vaultId) return;
+      if (!get().tabs.some((t) => sameTab(t, vaultId, path))) return;
+      setTab(vaultId, path, {
         baseHash: file.baseHash,
         serverContent: file.content,
         buffer: file.content,
@@ -357,7 +374,9 @@ export const useStore = create<AppState>((set, get) => {
         error: null,
       });
     } catch (e) {
-      setTab(path, { loading: false, error: (e as Error).message });
+      if (get().currentVault?.id !== vaultId) return;
+      if (!get().tabs.some((t) => sameTab(t, vaultId, path))) return;
+      setTab(vaultId, path, { loading: false, error: (e as Error).message });
     }
   };
 
@@ -426,14 +445,14 @@ export const useStore = create<AppState>((set, get) => {
     tabs: [],
     activeTabPath: null,
     openFile: (vaultId, path) => {
-      const existing = get().tabs.find((t) => t.path === path);
+      const existing = get().tabs.find((t) => sameTab(t, vaultId, path));
       if (existing) {
         // Focusing beats duplicating. A tab whose read failed gets one more try
         // from the same gesture — clicking the file again is the obvious retry,
         // and it is the only way back without reloading the vault.
         set({ activeTabPath: path });
         if (existing.error !== null && !existing.loading) {
-          setTab(path, { loading: true, error: null });
+          setTab(vaultId, path, { loading: true, error: null });
           void loadDocument(vaultId, path);
         }
         return;
@@ -441,11 +460,11 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => ({ tabs: [...s.tabs, freshTab(vaultId, path)], activeTabPath: path }));
       void loadDocument(vaultId, path);
     },
-    closeTab: (path) => {
+    closeTab: (vaultId, path) => {
       const { tabs, activeTabPath } = get();
-      const index = tabs.findIndex((t) => t.path === path);
+      const index = tabs.findIndex((t) => sameTab(t, vaultId, path));
       if (index === -1) return;
-      const next = tabs.filter((t) => t.path !== path);
+      const next = tabs.filter((t) => !sameTab(t, vaultId, path));
       // Closing the active tab hands the editor to its left neighbour (the
       // browser's rule), or to whatever slid into its place, or to nothing.
       const nextActive =
@@ -460,11 +479,11 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     setBuffer: (text) => {
-      const { activeTabPath, tabs } = get();
-      if (!activeTabPath) return;
-      const tab = tabs.find((t) => t.path === activeTabPath);
+      const { activeTabPath, tabs, currentVault } = get();
+      if (!activeTabPath || currentVault === null) return;
+      const tab = tabs.find((t) => sameTab(t, currentVault.id, activeTabPath));
       if (!tab || tab.buffer === text) return;
-      setTab(activeTabPath, { buffer: text });
+      setTab(currentVault.id, activeTabPath, { buffer: text });
       // Editing is the answer to a save failure: what the banner was reporting
       // ("your edit is still here") is still true, but the user has moved on.
       const failed = get().saveError;
@@ -472,9 +491,9 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     saveActive: async () => {
-      const { activeTabPath, tabs, conflict } = get();
-      if (!activeTabPath) return;
-      const tab = tabs.find((t) => t.path === activeTabPath);
+      const { activeTabPath, tabs, conflict, currentVault } = get();
+      if (!activeTabPath || currentVault === null) return;
+      const tab = tabs.find((t) => sameTab(t, currentVault.id, activeTabPath));
       if (!tab) return;
       // A conflict is resolved by the user's choice, never by another save: a
       // second banner stacked on an unanswered one answers nothing (D-07).
@@ -487,11 +506,11 @@ export const useStore = create<AppState>((set, get) => {
       // clear over text the server never received.
       const sending = tab.buffer;
       const wasCreate = tab.baseHash === null;
-      setTab(tab.path, { saving: true });
+      setTab(tab.vaultId, tab.path, { saving: true });
       try {
         const res = await writeFile(tab.vaultId, tab.path, sending, tab.baseHash);
         set((s) => ({
-          tabs: patchTabs(s.tabs, tab.path, {
+          tabs: patchTabs(s.tabs, tab.vaultId, tab.path, {
             saving: false,
             baseHash: res.baseHash,
             serverContent: sending,
@@ -508,7 +527,7 @@ export const useStore = create<AppState>((set, get) => {
         // not on a failure: the user's text is still on screen and still in the
         // store, and only an explicit choice replaces it.
         set((s) => {
-          const tabsNow = patchTabs(s.tabs, tab.path, { saving: false });
+          const tabsNow = patchTabs(s.tabs, tab.vaultId, tab.path, { saving: false });
           if (e instanceof ConflictError) {
             // One banner at a time: an unresolved conflict keeps the first one.
             if (s.conflict && s.conflict.path === tab.path) return { tabs: tabsNow };
@@ -533,8 +552,8 @@ export const useStore = create<AppState>((set, get) => {
     // The two answers to a 409 (D-07). Nothing else in the store replaces the
     // buffer, and nothing else writes without a base hash the server produced.
     reloadFromDisk: () => {
-      const { conflict } = get();
-      if (!conflict) return;
+      const { conflict, currentVault } = get();
+      if (!conflict || currentVault === null) return;
       // A create conflict carries no server-side bytes — the file was deleted,
       // so there is nothing to reload. Letting this run would assign `null` to
       // both the buffer and the base hash, blanking the editor and marking the
@@ -545,12 +564,15 @@ export const useStore = create<AppState>((set, get) => {
       // callback can run long after the guard. The locals keep the narrowing.
       const { path, currentContent, currentHash } = conflict;
       if (currentContent === null || currentHash === null) return;
+      // The conflict belongs to a tab in the open vault. If that tab is gone,
+      // nothing here may match a same-path tab from another vault.
+      if (!get().tabs.some((t) => sameTab(t, currentVault.id, path))) return;
       // The server's bytes become both the reference content and what is on
       // screen, and the hash that came with them becomes the base — so after
       // this the tab is clean, and the next save is guarded by the hash that
       // actually matches the disk rather than the one that just lost.
       set((s) => ({
-        tabs: patchTabs(s.tabs, path, {
+        tabs: patchTabs(s.tabs, currentVault.id, path, {
           buffer: currentContent,
           serverContent: currentContent,
           baseHash: currentHash,
@@ -562,12 +584,12 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     keepMine: async () => {
-      const { conflict, tabs } = get();
-      if (!conflict) return;
-      const tab = tabs.find((t) => t.path === conflict.path);
+      const { conflict, tabs, currentVault } = get();
+      if (!conflict || currentVault === null) return;
+      const tab = tabs.find((t) => sameTab(t, currentVault.id, conflict.path));
       if (!tab || tab.saving) return;
       const sending = tab.buffer;
-      setTab(conflict.path, { saving: true });
+      setTab(currentVault.id, conflict.path, { saving: true });
       try {
         // `conflict.currentHash`, never `tab.baseHash`: the tab's base is the
         // hash that just lost, and sending it again is the same 409 twice.
@@ -575,7 +597,7 @@ export const useStore = create<AppState>((set, get) => {
         // is the hash that recreates it.
         const res = await writeFile(tab.vaultId, conflict.path, sending, conflict.currentHash);
         set((s) => ({
-          tabs: patchTabs(s.tabs, conflict.path, {
+          tabs: patchTabs(s.tabs, currentVault.id, conflict.path, {
             saving: false,
             baseHash: res.baseHash,
             serverContent: sending,
@@ -584,7 +606,7 @@ export const useStore = create<AppState>((set, get) => {
         }));
       } catch (e) {
         set((s) => {
-          const tabsNow = patchTabs(s.tabs, conflict.path, { saving: false });
+          const tabsNow = patchTabs(s.tabs, currentVault.id, conflict.path, { saving: false });
           if (e instanceof ConflictError) {
             // It moved again while the user was deciding. One banner carrying
             // the fresher server state — not a second banner stacked on it.

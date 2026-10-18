@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { seedStages, useStore, type AppState } from "./store.js";
-import type { JobSummary } from "./lib/api.js";
+import type { JobSummary, Vault } from "./lib/api.js";
 
 /**
  * The jobs slice's invariants, asserted without a DOM.
@@ -233,6 +233,51 @@ it("keeps the approved start-failure copy and releases the guard", async () => {
     "Couldn't start the job. Check the source URL and try again.",
   );
   expect(useStore.getState().ingestStarting).toBe(false);
+});
+
+it("drops a read from the previous vault when it lands after a vault switch", async () => {
+  const vaultA: Vault = {
+    id: "a",
+    name: "Vault A",
+    path: "a",
+    sourceKind: "manual",
+    createdAt: "2026-10-18T12:00:00Z",
+    lastOpenedAt: "2026-10-18T12:00:00Z",
+  };
+  const vaultB: Vault = { ...vaultA, id: "b", name: "Vault B", path: "b" };
+
+  let releaseRead = () => {};
+  const heldRead = new Promise<Response>((resolve) => {
+    releaseRead = () =>
+      resolve(json({ path: "index.md", content: "A content", baseHash: "hash-a" }));
+  });
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    return url.includes("vault=a")
+      ? heldRead
+      : json({ path: "index.md", content: "B content", baseHash: "hash-b" });
+  }) as unknown as typeof fetch;
+
+  useStore.setState({ ...INITIAL, currentVault: null, tabs: [], activeTabPath: null });
+  useStore.getState().openVault(vaultA);
+  useStore.getState().openFile("a", "index.md");
+  // Switch while A's read is still in flight, then open the same path in B.
+  useStore.getState().openVault(vaultB);
+  useStore.getState().openFile("b", "index.md");
+  await vi.waitFor(() => {
+    expect(useStore.getState().tabs[0]?.serverContent).toBe("B content");
+  });
+  // Unsaved text typed into B's tab must survive A's late read.
+  useStore.getState().setBuffer("B unsaved text");
+
+  releaseRead();
+  await heldRead;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const tab = useStore.getState().tabs[0]!;
+  expect(tab.vaultId).toBe("b");
+  expect(tab.serverContent).toBe("B content");
+  expect(tab.buffer).toBe("B unsaved text");
 });
 
 it("keeps the last list on a failed load and records the error", async () => {
