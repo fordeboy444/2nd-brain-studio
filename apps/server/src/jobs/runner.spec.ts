@@ -431,6 +431,41 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(onDisk.skipped).toEqual([]);
   });
 
+  it("completes the job when S2 cannot recover a reply, with the partial page on disk", async () => {
+    const deps = makeDeps({
+      llm: {
+        async chat() {
+          return { text: "not json at all", tokensIn: 0, tokensOut: 0 };
+        },
+      },
+      async enumerate() {
+        return [VIDEO_A];
+      },
+      async fetchTranscript() {
+        return videoCapture(VIDEO_A);
+      },
+    });
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    expect(finished.stage).toBe("done");
+
+    const page = await readFile(join(root, "sources", "first-talk.md"), "utf8");
+    expect(page).toContain("partial: true");
+
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("completed");
+    expect(onDisk.skipped).toHaveLength(1);
+    expect(onDisk.skipped[0]).toMatchObject({
+      slug: "first-talk",
+      stage: "S2",
+      reason: "malformed_json",
+    });
+  });
+
   it("fails the job with preflight_failed before any unit adapter runs", async () => {
     let fetches = 0;
     const llm = workingLlm();

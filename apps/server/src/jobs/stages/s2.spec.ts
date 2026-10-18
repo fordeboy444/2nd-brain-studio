@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -362,5 +369,142 @@ describe("S2 extraction contract", () => {
     expect(raw).not.toMatch(/"transcript"\s*:/);
     expect(raw).not.toMatch(/"body"\s*:/);
     expect(raw).not.toMatch(/"tier"\s*:/);
+  });
+});
+
+describe("S2 failure containment", () => {
+  it("writes a partial page and a typed skip for an unrecoverable reply", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const badReply = "not json at all — this is the exact model reply";
+    const job = makeJob(0.5);
+    await runS2(job, fakeLlm(badReply).client);
+    const dir = jobDir(root, job.id);
+
+    const page = await readFile(join(root, "sources", "first-talk.md"), "utf8");
+    expect(page).toContain("partial: true");
+    expect(page).not.toContain("## Key moments");
+    expect(page).not.toContain("## Concepts covered");
+
+    const skipped = job.skipped.filter((unit) => unit.stage === "S2");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0]).toMatchObject({
+      slug: "first-talk",
+      stage: "S2",
+      reason: "malformed_json",
+    });
+    expect(skipped[0]?.detail?.length).toBeLessThanOrEqual(200);
+
+    // The raw reply is on disk before the skip can be recorded.
+    expect(
+      await readFile(join(dir, "llm", "S2-first-talk-1.txt"), "utf8"),
+    ).toBe(badReply);
+
+    const record = await readExtraction(dir, "first-talk");
+    expect(record?.partial).toBe(true);
+    expect(record?.source).toMatchObject({
+      sourceKind: "video",
+      rawPath: "raw/first-talk.md",
+      fetchedAt: FIXED_ISO,
+    });
+
+    const onDisk = JSON.parse(
+      await readFile(join(dir, "job.json"), "utf8"),
+    ) as { skipped: unknown[] };
+    expect(onDisk.skipped).toHaveLength(1);
+  });
+
+  it("maps a timeout to model_timeout and caps any other failure detail", async () => {
+    await writeVideo("first-talk", "First Talk");
+    const timeoutJob = makeJob(0.5);
+    await runS2(
+      timeoutJob,
+      {
+        async chat() {
+          const error = new Error("The LLM call timed out after 180000 ms.");
+          error.name = "TimeoutError";
+          throw error;
+        },
+      },
+    );
+    expect(timeoutJob.skipped[0]).toMatchObject({
+      slug: "first-talk",
+      stage: "S2",
+      reason: "model_timeout",
+    });
+
+    const otherJob = makeJob(0.75);
+    await runS2(
+      otherJob,
+      {
+        async chat() {
+          throw new Error(`connection refused: ${"x".repeat(500)}`);
+        },
+      },
+    );
+    expect(otherJob.skipped[0]).toMatchObject({
+      stage: "S2",
+      reason: "model_error",
+    });
+    expect(otherJob.skipped[0]?.detail?.length).toBe(200);
+  });
+
+  it("retries a partial record on a later job and clears the partial marker", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const firstJob = makeJob(0.5);
+    await runS2(firstJob, fakeLlm("not json").client);
+    expect(
+      await readFile(join(root, "sources", "first-talk.md"), "utf8"),
+    ).toContain("partial: true");
+
+    const secondJob = makeJob(0.75);
+    const secondDir = jobDir(root, secondJob.id);
+    await mkdir(join(secondDir, "extractions"), { recursive: true });
+    await writeFile(
+      join(secondDir, "extractions", "first-talk.json"),
+      await readFile(
+        join(jobDir(root, firstJob.id), "extractions", "first-talk.json"),
+        "utf8",
+      ),
+      "utf8",
+    );
+
+    const good = fakeLlm(VALID_REPLY);
+    await runS2(secondJob, good.client);
+
+    expect(good.calls).toBe(1);
+    expect(
+      await readFile(join(root, "sources", "first-talk.md"), "utf8"),
+    ).not.toContain("partial: true");
+    const record = await readExtraction(secondDir, "first-talk");
+    expect(record?.partial).toBeUndefined();
+    expect(secondJob.skipped).toEqual([]);
+  });
+
+  it("skips a unit whose extraction is already complete", async () => {
+    await writeVideo("first-talk", "First Talk");
+
+    const firstJob = makeJob(0.5);
+    await runS2(firstJob, fakeLlm(VALID_REPLY).client);
+
+    const secondJob = makeJob(0.75);
+    const secondDir = jobDir(root, secondJob.id);
+    await mkdir(join(secondDir, "extractions"), { recursive: true });
+    await writeFile(
+      join(secondDir, "extractions", "first-talk.json"),
+      await readFile(
+        join(jobDir(root, firstJob.id), "extractions", "first-talk.json"),
+        "utf8",
+      ),
+      "utf8",
+    );
+
+    const llm = fakeLlm(VALID_REPLY);
+    await runS2(secondJob, llm.client);
+
+    expect(llm.calls).toBe(0);
+    const events = await readFile(join(secondDir, "events.ndjson"), "utf8");
+    expect(events).toContain("extraction present");
   });
 });
