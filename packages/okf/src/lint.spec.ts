@@ -784,6 +784,331 @@ describe("warning order across added rules", () => {
   });
 });
 
+/** Long enough that a wrongly excluded boundary segment cannot fall back. */
+const E8_LONG_QUOTE_TEXT =
+  "alpha beta gamma delta epsilon zeta theta iota kappa lambda";
+
+/** Video source frontmatter pointing at the helper's raw page. */
+function videoSourceFrontmatter(slug: string): string {
+  return (
+    "source_kind: video\nyoutube_id: videoA00001\n" +
+    `title: "Source"\nslug: ${slug}\nraw: "../raw/${slug}.md"\n`
+  );
+}
+
+/** A web source frontmatter pointing at the helper's raw page. */
+function webSourceFrontmatter(slug: string): string {
+  return (
+    "source_kind: web\n" +
+    `title: "Source"\nslug: ${slug}\nraw: "../raw/${slug}.md"\n`
+  );
+}
+
+interface E8SetOptions {
+  /** Defaults to the strict `sources:` key. */
+  provenance?: string;
+  bullet: string;
+  sourceSlug?: string;
+  sourceFrontmatter?: string;
+  rawText?: string;
+  includeSource?: boolean;
+  includeRaw?: boolean;
+}
+
+/**
+ * A citing concept plus the source, raw and index companions its gate needs.
+ *
+ * The subject is a concept with an inbound partner link, so E1, E3 and W1 stay
+ * silent; the source page has a matching raw page, so E4 stays silent too.
+ */
+function e8Set(options: E8SetOptions): BundlePage[] {
+  const slug = options.sourceSlug ?? "video-a";
+  const provenance = options.provenance ?? "sources: [video-a]\n";
+  const pages = conceptPair(
+    `---\ntype: concept\n${provenance}---\n\n[Partner](partner.md)\n\n` +
+      `## Sources\n\n${options.bullet}\n`,
+  );
+  if (options.includeSource !== false) {
+    pages.push({
+      path: `sources/${slug}.md`,
+      text:
+        `---\ntype: source\n` +
+        `${options.sourceFrontmatter ?? videoSourceFrontmatter(slug)}` +
+        "---\n\n# Source\n",
+    });
+    pages.push({
+      path: "sources/index.md",
+      text: `# Sources\n\n- [Source](${slug}.md)\n`,
+    });
+  }
+  if (options.includeRaw !== false) {
+    pages.push({
+      path: `raw/${slug}.md`,
+      text:
+        "---\ntype: raw-transcript\n---\n\n## Transcript\n\n" +
+        `**[0:00:00]** ${options.rawText ?? E8_LONG_QUOTE_TEXT}\n`,
+    });
+  }
+  return pages;
+}
+
+/** The two-segment transcript that makes an out-of-window quote provable. */
+const E8_TWO_SEGMENTS =
+  `**[0:00:00]** ${E8_LONG_QUOTE_TEXT}\n\n` +
+  "**[0:10:00]** zebra quantum xylophone marmalade orchard";
+
+describe("E8 citation integrity on a strict sources: page", () => {
+  it("accepts a video quote inside the cited window", () => {
+    const pages = e8Set({
+      bullet: '- [Video A](../sources/video-a.md) - "[0:00:00] alpha beta gamma delta"',
+    });
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("reports a video quote outside the cited window as an error", () => {
+    const pages = e8Set({
+      bullet: '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"',
+      rawText: E8_TWO_SEGMENTS,
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("reports a video citation without a timestamp", () => {
+    const pages = e8Set({
+      bullet: '- [Video A](../sources/video-a.md) - "alpha beta gamma delta"',
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 video citation missing timestamp: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("reports a bullet with no quoted text", () => {
+    const pages = e8Set({
+      bullet: "- [Video A](../sources/video-a.md)",
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 citation has no quoted text: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("reports a bullet with no relative source link", () => {
+    const pages = e8Set({ bullet: "- a bullet without any link" });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 citation has no source link: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("reports a cited source that does not exist", () => {
+    const pages = e8Set({
+      bullet: '- [Gone](../sources/gone.md) - "[0:00:00] alpha beta gamma delta"',
+      includeSource: false,
+      includeRaw: false,
+    });
+    const messages = findingMessages(pages, { paths: ["sources/gone.md"] });
+    expect(messages).toEqual(["E8 cited source is missing: sources/gone.md"]);
+    expect(
+      lintBundle(pages, "edge", { paths: ["sources/gone.md"] }).findings[0]
+        ?.severity,
+    ).toBe("error");
+  });
+
+  it("reports a cited source whose raw page does not exist", () => {
+    const pages = e8Set({
+      bullet: '- [Video A](../sources/video-a.md) - "[0:00:00] alpha beta gamma delta"',
+      sourceFrontmatter:
+        "source_kind: video\nyoutube_id: videoA00001\n" +
+        'title: "Source"\nslug: video-a\nraw: "../raw/gone.md"\n',
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 cited source has no raw page: sources/video-a.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("accepts a web quote present anywhere in the raw page", () => {
+    const pages = e8Set({
+      provenance: "sources: [web-a]\n",
+      sourceSlug: "web-a",
+      sourceFrontmatter: webSourceFrontmatter("web-a"),
+      bullet:
+        '- [Web A](../sources/web-a.md) - "a sentence about attention mechanisms"',
+      rawText: "a sentence about attention mechanisms and more context",
+    });
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("reports a web quote absent from the raw page", () => {
+    const pages = e8Set({
+      provenance: "sources: [web-a]\n",
+      sourceSlug: "web-a",
+      sourceFrontmatter: webSourceFrontmatter("web-a"),
+      bullet:
+        '- [Web A](../sources/web-a.md) - "zebra quantum xylophone marmalade"',
+      rawText: "a sentence about attention mechanisms and more context",
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 quote not found in cited page: concepts/subject.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("error");
+  });
+
+  it("treats a source with no source_kind as a video source", () => {
+    const pages = e8Set({
+      bullet: '- [Source](../sources/video-a.md) - "alpha beta gamma delta"',
+      sourceFrontmatter:
+        'title: "Source"\nslug: video-a\nraw: "../raw/video-a.md"\n',
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E8 video citation missing timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("reports a 1 MiB quote with no closing double quote (T-02-05)", () => {
+    const pages = e8Set({
+      bullet: `- [Video A](../sources/video-a.md) - "${"x".repeat(1024 * 1024)}`,
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E8 citation has no quoted text: concepts/subject.md",
+    ]);
+  });
+});
+
+describe("E8 citation integrity on a legacy videos: page", () => {
+  it("reports a below-threshold quote as one warning and keeps exit 0", () => {
+    const pages = e8Set({
+      provenance: "videos: [video-a]\n",
+      bullet: '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"',
+      rawText: E8_TWO_SEGMENTS,
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.message).toBe(
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    );
+    expect(result.findings[0]?.severity).toBe("warning");
+    expect(result.errors).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("skips a link-only bullet", () => {
+    const pages = e8Set({
+      provenance: "videos: [video-a]\n",
+      bullet: "- [Video A](../sources/video-a.md)",
+    });
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("skips a quoted citation without a timestamp", () => {
+    const pages = e8Set({
+      provenance: "videos: [video-a]\n",
+      bullet: '- [Video A](../sources/video-a.md) - "alpha beta gamma delta"',
+    });
+    expect(findingMessages(pages)).toEqual([]);
+  });
+
+  it("reports a missing cited source as one warning", () => {
+    const pages = e8Set({
+      provenance: "videos: [video-a]\n",
+      bullet: '- [Gone](../sources/gone.md) - "[0:00:00] alpha beta gamma delta"',
+      includeSource: false,
+      includeRaw: false,
+    });
+    const result = lintBundle(pages, "edge", { paths: ["sources/gone.md"] });
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 cited source is missing: sources/gone.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("warning");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("reports a missing raw page as one warning", () => {
+    const pages = e8Set({
+      provenance: "videos: [video-a]\n",
+      bullet: '- [Video A](../sources/video-a.md) - "[0:00:00] alpha beta gamma delta"',
+      sourceFrontmatter:
+        "source_kind: video\nyoutube_id: videoA00001\n" +
+        'title: "Source"\nslug: video-a\nraw: "../raw/gone.md"\n',
+    });
+    const result = lintBundle(pages, "edge");
+    expect(result.findings.map((finding) => finding.message)).toEqual([
+      "E8 cited source has no raw page: sources/video-a.md",
+    ]);
+    expect(result.findings[0]?.severity).toBe("warning");
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+describe("E8 rule order", () => {
+  it("places E8 errors after E7 errors and before W1 warnings", () => {
+    const pages = e8Set({
+      bullet: '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"',
+      rawText: E8_TWO_SEGMENTS,
+    }).map((page) => {
+      if (page.path === "concepts/subject.md") {
+        return {
+          path: page.path,
+          text: page.text.replace(
+            "[Partner](partner.md)",
+            "[Partner](partner.md)\n\nSee [[Other]].",
+          ),
+        };
+      }
+      if (page.path === "concepts/index.md") {
+        return {
+          path: page.path,
+          text: `${page.text}- [Orphan](orphan.md)\n`,
+        };
+      }
+      return page;
+    });
+    pages.push({
+      path: "concepts/orphan.md",
+      text: "---\ntype: concept\n---\n\n",
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E7 wikilink `[[Other]]` in concepts/subject.md",
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+      "W1 orphan (no inbound link from a content page): concepts/orphan.md",
+    ]);
+  });
+
+  it("places E8 warnings after E6 warnings and before W1 warnings", () => {
+    const pages = e8Set({
+      provenance: "videos: [web-a]\n",
+      sourceSlug: "web-a",
+      sourceFrontmatter: webSourceFrontmatter("web-a"),
+      bullet:
+        '- [Web A](../sources/web-a.md) - "[0:01:00] zebra quantum xylophone marmalade"',
+      rawText: "a captured page about attention mechanisms",
+    }).map((page) =>
+      page.path === "concepts/index.md"
+        ? { path: page.path, text: `${page.text}- [Orphan](orphan.md)\n` }
+        : page,
+    );
+    pages.push({
+      path: "concepts/orphan.md",
+      text: "---\ntype: concept\n---\n\n",
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E6 web citation carries a video timestamp: concepts/subject.md",
+      "E8 quote not found in cited page: concepts/subject.md",
+      "W1 orphan (no inbound link from a content page): concepts/orphan.md",
+    ]);
+  });
+});
+
 describe("W1 orphan boundaries", () => {
   it("finds a concept linked only from an index page", () => {
     const pages: BundlePage[] = [
