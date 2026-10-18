@@ -34,16 +34,9 @@ import {
   type SkipReason,
   type SkippedUnit,
   type StageName,
-  type TranscriptSegment,
   type VideoCandidate,
+  type VideoRawCapture,
 } from "./types.js";
-
-/** A resolved video capture as an adapter returns it. Identity comes from the candidate. */
-export interface TranscriptResult {
-  tier: 1 | 2 | 3;
-  segments: TranscriptSegment[];
-  fetchedAt?: string;
-}
 
 /** A resolved web capture as an adapter returns it. Identity is the requested URL. */
 export interface WebFetchResult {
@@ -75,7 +68,14 @@ export interface UnitContext {
 }
 
 export interface StageDeps {
-  fetchTranscript(candidate: VideoCandidate, ctx: UnitContext): Promise<TranscriptResult>;
+  /**
+   * The S1 fetch stage returns the video arm of the one `RawCapture` union,
+   * already carrying the producing tier. The runner only writes it.
+   */
+  fetchTranscript(
+    candidate: VideoCandidate,
+    ctx: UnitContext,
+  ): Promise<VideoRawCapture>;
   fetchWeb(input: { url: string }, ctx: UnitContext): Promise<WebFetchResult>;
   enumerate(
     url: string,
@@ -416,26 +416,17 @@ async function runS1(
     }
 
     try {
-      const result = await deps.fetchTranscript(candidate, ctx);
-      await writeCapture(vaultDir, {
-        kind: "video",
-        slug,
-        url: candidate.url,
-        youtubeId: candidate.youtubeId,
-        title: candidate.title,
-        published: candidate.published,
-        durationSec: candidate.durationSec,
-        tier: result.tier,
-        fetchedAt: result.fetchedAt ?? iso(deps.now),
-        segments: result.segments,
-      });
+      const capture = await deps.fetchTranscript(candidate, ctx);
+      // The runner owns the slug key it deduped on, so the capture cannot be
+      // written under a slug the loop is not tracking.
+      await writeCapture(vaultDir, { ...capture, slug });
       job.progress.done += 1;
       await persist();
       await appendEvent(dir, "unit", {
         slug,
         stage: "S1",
         status: "written",
-        tier: result.tier,
+        tier: capture.tier,
       });
     } catch (error) {
       const skipped = skippedFor(

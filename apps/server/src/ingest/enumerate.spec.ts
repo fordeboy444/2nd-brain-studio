@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobRecord, newJobId, writeJob } from "../jobs/store.js";
-import { runJob, type StageDeps } from "../jobs/runner.js";
+import { runJob, slugForCandidate, type StageDeps } from "../jobs/runner.js";
 import { readJob } from "../jobs/store.js";
 import type { JobSettings, VideoCandidate } from "../jobs/types.js";
 import {
@@ -218,8 +218,17 @@ describe("S0 through the real runner", () => {
         candidates.push(...result.candidates);
         return result.candidates;
       },
-      async fetchTranscript() {
-        return { tier: 1 as const, segments: [{ startSec: 0, text: "hello" }] };
+      async fetchTranscript(candidate) {
+        return {
+          kind: "video",
+          slug: slugForCandidate(candidate),
+          url: candidate.url,
+          youtubeId: candidate.youtubeId,
+          title: candidate.title,
+          tier: 1 as const,
+          fetchedAt: new Date(Date.parse("2026-10-18T10:00:00.000Z")).toISOString(),
+          segments: [{ startSec: 0, text: "hello" }],
+        };
       },
       async fetchWeb() {
         throw new Error("not a web job");

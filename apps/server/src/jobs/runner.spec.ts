@@ -10,7 +10,12 @@ import {
   readCapture,
   writeCapture,
 } from "./capture.js";
-import { createJobQueue, runJob, type StageDeps } from "./runner.js";
+import {
+  createJobQueue,
+  runJob,
+  slugForCandidate,
+  type StageDeps,
+} from "./runner.js";
 import { readEvents, readJob, requestCancel, writeJob } from "./store.js";
 import {
   createJobRecord,
@@ -21,6 +26,7 @@ import {
   type JobRecord,
   type JobSettings,
   type VideoCandidate,
+  type VideoRawCapture,
 } from "./types.js";
 
 const SETTINGS: JobSettings = {
@@ -79,6 +85,26 @@ function segments(): { startSec: number; text: string }[] {
     { startSec: 0, text: "hello" },
     { startSec: 65, text: "world" },
   ];
+}
+
+/** The video arm the S1 fetch stage now returns; the runner only writes it. */
+function videoCapture(
+  candidate: VideoCandidate,
+  tier: 1 | 2 | 3 = 1,
+  segs: { startSec: number; text: string }[] = segments(),
+): VideoRawCapture {
+  return {
+    kind: "video",
+    slug: slugForCandidate(candidate),
+    url: candidate.url,
+    youtubeId: candidate.youtubeId,
+    title: candidate.title,
+    published: candidate.published,
+    durationSec: candidate.durationSec,
+    tier,
+    fetchedAt: FIXED_ISO,
+    segments: segs,
+  };
 }
 
 function makeDeps(overrides: Partial<StageDeps> = {}): StageDeps {
@@ -318,7 +344,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
         return [VIDEO_A];
       },
       async fetchTranscript() {
-        return { tier: 1 as const, segments: segments() };
+        return videoCapture(VIDEO_A);
       },
     });
 
@@ -340,13 +366,41 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(onDisk.skipped).toEqual([]);
   });
 
+  it("fails the job with preflight_failed before any unit adapter runs", async () => {
+    let fetches = 0;
+    const deps = makeDeps({
+      async enumerate() {
+        return [VIDEO_A];
+      },
+      async preflight() {
+        throw new Error("all transcript tiers failed: blocked");
+      },
+      async fetchTranscript() {
+        fetches += 1;
+        return videoCapture(VIDEO_A);
+      },
+    });
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const finished = await runJob(job, deps);
+
+    expect(fetches).toBe(0);
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toBe("preflight_failed");
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("failed");
+    expect(onDisk.error).toBe("preflight_failed");
+    expect(await readdir(join(root, "raw"))).toEqual([]);
+  });
+
   it("continues the job when one unit fails, recording the injected reason", async () => {
     const deps = makeDeps({
       async enumerate() {
         return [VIDEO_A, { ...VIDEO_A, youtubeId: "def456", title: "Second Talk" }];
       },
       async fetchTranscript(candidate) {
-        if (candidate.youtubeId === "abc123") return { tier: 1 as const, segments: segments() };
+        if (candidate.youtubeId === "abc123") return videoCapture(candidate);
         throw new Error("blocked by the host");
       },
       classifyVideoError: () => "blocked",
@@ -435,7 +489,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       },
       async fetchTranscript() {
         calls += 1;
-        return { tier: 1 as const, segments: segments() };
+        return videoCapture(VIDEO_A);
       },
     });
 
@@ -470,7 +524,7 @@ describe("one-job FIFO", () => {
       async fetchTranscript() {
         entered();
         await gate;
-        return { tier: 1 as const, segments: segments() };
+        return videoCapture(VIDEO_A);
       },
     });
 
@@ -512,12 +566,12 @@ describe("cancel", () => {
       async fetchTranscript(candidate) {
         if (candidate.youtubeId === "def456") {
           secondCalled = true;
-          return { tier: 1 as const, segments: segments() };
+          return videoCapture(candidate);
         }
         // The flag lands while unit 1 runs; the runner must read it from disk
         // before unit 2 rather than trusting its in-memory copy.
         await requestCancel(root, job.id);
-        return { tier: 1 as const, segments: segments() };
+        return videoCapture(candidate);
       },
     });
 

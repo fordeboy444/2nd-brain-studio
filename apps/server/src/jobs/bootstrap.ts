@@ -8,6 +8,11 @@
  */
 import pino from "pino";
 import { enumerateChannel } from "../ingest/enumerate.js";
+import {
+  fetchJson3Transcript,
+  runYtDlp,
+  type TierResult,
+} from "../ingest/ytdlp.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
   createDefaultStageDeps,
@@ -15,6 +20,10 @@ import {
   type JobQueue,
   type StageDeps,
 } from "./runner.js";
+import {
+  createTranscriptFetcher,
+  type TranscriptCascade,
+} from "./stages/fetch.js";
 import { listJobs } from "./store.js";
 import type { JobRecord } from "./types.js";
 
@@ -23,15 +32,44 @@ const log = pino({ name: "jobs" });
 let queue: JobQueue | null = null;
 
 /**
- * The Phase 3 dependency set: the real S0 enumerator, the inert later stages.
- * The runner reads flat fields, so the wiring is one flat `enumerate` function.
- * `signal` is passed inside the options object `enumerateChannel` destructures;
- * passing it as a third argument would drop S0 cancellation.
+ * The Phase 3 dependency set: the real S0 enumerator and the tier-1 S1
+ * transcript stage. The runner reads flat fields, so the wiring is one flat
+ * function per dependency.
+ *
+ * `signal` is passed inside the options object `enumerateChannel`
+ * destructures; passing it as a third argument would drop S0 cancellation.
+ *
+ * The probe cache is what makes the first video cost one fetch: S1's preflight
+ * stores its winning result and the first unit's `fetch` consumes it. Tier 2
+ * and tier 3 join this cascade in the next task.
  */
 export function createIngestStageDeps(): StageDeps {
   const base = createDefaultStageDeps();
+  const probed = new Map<string, TierResult>();
+
+  const tierOne: TranscriptCascade = {
+    async fetch(candidate, ctx) {
+      const cached = probed.get(candidate.youtubeId);
+      if (cached !== undefined) {
+        probed.delete(candidate.youtubeId);
+        return cached;
+      }
+      return fetchJson3Transcript(candidate, ctx, { run: runYtDlp });
+    },
+  };
+
   return {
     ...base,
+    fetchTranscript: createTranscriptFetcher(tierOne),
+    async preflight(candidates, ctx) {
+      const first = candidates[0];
+      if (first === undefined) return;
+      const result = await fetchJson3Transcript(first, ctx, { run: runYtDlp });
+      if (!result.ok) {
+        throw new Error(`all transcript tiers failed: ${result.reason}`);
+      }
+      probed.set(first.youtubeId, result);
+    },
     async enumerate(url, opts, signal) {
       const { candidates } = await enumerateChannel(url, { ...opts, signal });
       return candidates;

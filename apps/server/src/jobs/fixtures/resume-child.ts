@@ -17,7 +17,7 @@
  * misleading zero for the child that was killed.
  */
 import { writeSync } from "node:fs";
-import { runJob, type StageDeps } from "../runner.js";
+import { runJob, slugForCandidate, type StageDeps } from "../runner.js";
 import { readJob } from "../store.js";
 import type { VideoCandidate } from "../types.js";
 
@@ -75,7 +75,16 @@ const deps: StageDeps = {
         // Deliberately never resolves; the spec sends SIGKILL.
       });
     }
-    return { tier: 1 as const, segments };
+    return {
+      kind: "video",
+      slug: slugForCandidate(candidate),
+      url: candidate.url,
+      youtubeId: candidate.youtubeId,
+      title: candidate.title,
+      tier: 1 as const,
+      fetchedAt: new Date().toISOString(),
+      segments,
+    };
   },
   async fetchWeb() {
     throw new Error("web adapter is not used by the resume fixture");
