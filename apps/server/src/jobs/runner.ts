@@ -19,7 +19,11 @@ import { join } from "node:path";
 import { slugify } from "@2nd-brain/okf";
 import { config } from "../config.js";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
-import { applyFilters, filterInputForSettings } from "../ingest/filters.js";
+import {
+  applyFilters,
+  filterInputForSettings,
+  uniqueSlug,
+} from "../ingest/filters.js";
 import { vaultDirPath } from "../vaults/registry.js";
 import {
   CaptureMismatchError,
@@ -372,14 +376,18 @@ async function runS1(
 ): Promise<boolean> {
   const candidates = await readEnumerated(dir);
 
-  const bySlug = new Map<string, VideoCandidate>();
+  // Dedupe by video id, then allocate slugs with the same allocator the
+  // preview counts with. Deduping by title-slug would silently drop every
+  // same-title video ("Live", episodes, trailers) that the preview counted,
+  // and the missing unit never even lands in `skipped[]`.
+  const seen = new Set<string>();
+  const usedSlugs = new Set<string>();
+  const units: Array<[string, VideoCandidate]> = [];
   for (const candidate of candidates) {
-    const slug = slugForCandidate(candidate);
-    // Two candidates with the same slug are deduped before fan-out, so one
-    // capture has exactly one writer.
-    if (!bySlug.has(slug)) bySlug.set(slug, candidate);
+    if (seen.has(candidate.youtubeId)) continue;
+    seen.add(candidate.youtubeId);
+    units.push([uniqueSlug(candidate, usedSlugs), candidate]);
   }
-  const units = [...bySlug.entries()];
 
   // `progress` counts this run's units. On resume the units re-run (captures
   // are idempotent), so a carried-over count would double count them; the

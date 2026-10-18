@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { parseFrontmatter } from "@2nd-brain/okf";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../http/writeAtomic.js";
+import { previewJob } from "../ingest/preview.js";
 import {
   CaptureMismatchError,
   findCaptureByUrl,
@@ -534,6 +535,48 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(enumerated.count).toBe(3);
     expect(enumerated.candidates).toHaveLength(3);
     expect((await readJob(root, job.id)).progress.total).toBe(3);
+  });
+
+  it("keeps two same-title videos as distinct units the preview counted", async () => {
+    const candidates: VideoCandidate[] = [
+      { ...VIDEO_A, youtubeId: "abc123", title: "Live", url: "https://youtu.be/abc123" },
+      { ...VIDEO_A, youtubeId: "def456", title: "Live", url: "https://youtu.be/def456" },
+    ];
+    const fetched: string[] = [];
+    const deps = makeDeps({
+      async enumerate() {
+        return candidates;
+      },
+      async fetchTranscript(candidate) {
+        fetched.push(candidate.youtubeId);
+        return videoCapture(candidate);
+      },
+    });
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    await runJob(job, deps);
+
+    expect(fetched).toEqual(["abc123", "def456"]);
+    expect((await readdir(join(root, "raw"))).sort()).toEqual([
+      "live-def456.md",
+      "live.md",
+    ]);
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.progress.total).toBe(2);
+    expect(onDisk.skipped).toEqual([]);
+
+    // The preview counts both units, so the estimate and the committed work
+    // agree on the same allocator.
+    const preview = await previewJob(
+      { channelUrl: "https://www.youtube.com/@channel", maxVideos: 10 },
+      {
+        async enumerate() {
+          return { candidates, foundAtLeast: false };
+        },
+      },
+    );
+    expect(onDisk.progress.total).toBe(preview.selected);
   });
 
   it("advances a zero-unit stage and completes", async () => {

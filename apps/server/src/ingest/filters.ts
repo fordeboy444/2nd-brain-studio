@@ -107,8 +107,14 @@ function baseSlug(candidate: VideoCandidate): string {
   }
 }
 
-/** Return a slug not already used in this run, appending `-<id>` on collision. */
-function uniqueSlug(candidate: VideoCandidate, used: Set<string>): string {
+/**
+ * Return a slug not already used in this run, appending `-<id>` on collision.
+ *
+ * Exported so the runner allocates slugs with the same policy the preview
+ * counts with: two videos that share a title stay two units instead of one
+ * silently collapsing into the other.
+ */
+export function uniqueSlug(candidate: VideoCandidate, used: Set<string>): string {
   const base = baseSlug(candidate);
   if (!used.has(base)) {
     used.add(base);
