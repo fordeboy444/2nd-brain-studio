@@ -580,6 +580,9 @@ export const useStore = create<AppState>((set, get) => {
           loading: false,
         }),
         conflict: null,
+        // The file is clean now: a banner about a failed save for this path
+        // describes a state that no longer exists.
+        saveError: s.saveError?.path === path ? null : s.saveError,
       }));
     },
 
@@ -603,6 +606,9 @@ export const useStore = create<AppState>((set, get) => {
             serverContent: sending,
           }),
           conflict: null,
+          // The overwrite landed, so a previous failure banner for this path
+          // would now be false.
+          saveError: s.saveError?.path === conflict.path ? null : s.saveError,
         }));
       } catch (e) {
         set((s) => {

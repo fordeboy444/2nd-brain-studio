@@ -299,6 +299,56 @@ it("drops a read from the previous vault when it lands after a vault switch", as
   expect(tab.buffer).toBe("B unsaved text");
 });
 
+const VAULT_FOR_TABS: Vault = {
+  id: "v1",
+  name: "Studio",
+  path: "v1",
+  sourceKind: "manual",
+  createdAt: "2026-10-18T12:00:00Z",
+  lastOpenedAt: "2026-10-18T12:00:00Z",
+};
+
+function conflictedState() {
+  useStore.setState({
+    ...INITIAL,
+    currentVault: VAULT_FOR_TABS,
+    tabs: [
+      {
+        path: "a.md",
+        vaultId: VAULT_FOR_TABS.id,
+        baseHash: "old-hash",
+        serverContent: "old",
+        buffer: "new",
+        loading: false,
+        error: null,
+        saving: false,
+      },
+    ],
+    activeTabPath: "a.md",
+    conflict: { path: "a.md", currentContent: "disk", currentHash: "disk-hash" },
+    saveError: { path: "a.md", message: "save failed" },
+  });
+}
+
+it("clears the save-failure banner when reload from disk lands", () => {
+  conflictedState();
+  useStore.getState().reloadFromDisk();
+  expect(useStore.getState().conflict).toBeNull();
+  expect(useStore.getState().saveError).toBeNull();
+});
+
+it("clears the save-failure banner when keep mine lands", async () => {
+  conflictedState();
+  globalThis.fetch = vi.fn(async () =>
+    json({ path: "a.md", baseHash: "new-hash" }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().keepMine();
+
+  expect(useStore.getState().conflict).toBeNull();
+  expect(useStore.getState().saveError).toBeNull();
+});
+
 it("keeps the last list on a failed load and records the error", async () => {
   const job = makeJob();
   useStore.setState({ jobs: [job] });
