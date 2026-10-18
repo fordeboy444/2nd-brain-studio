@@ -5,16 +5,29 @@ import {
   ConflictError,
   createVault as apiCreateVault,
   deleteVault as apiDeleteVault,
+  deleteYoutubeCookie as apiDeleteYoutubeCookie,
   getHealth,
   getJob as apiGetJob,
+  getSettings as apiGetSettings,
   listJobs as apiListJobs,
   listVaults as apiListVaults,
+  previewJob as apiPreviewJob,
+  putSettings as apiPutSettings,
   readFile,
+  startJob as apiStartJob,
+  testLlm as apiTestLlm,
+  uploadYoutubeCookie as apiUploadYoutubeCookie,
   writeFile,
   type HealthPayload,
   type JobStage,
   type JobSummary,
+  type PreviewInput,
+  type PreviewResult,
+  type SettingsPatch,
+  type SettingsPayload,
   type SkippedUnit,
+  type StartJobInput,
+  type TestLlmResult,
 } from "./lib/api.js";
 import { readLastTab, writeLastTab, type RightPanelTab } from "./components/rightPanelTab.js";
 import { dirOf, EMPTY_TREE, type TreeState } from "./lib/tree/lazyTree.js";
@@ -241,6 +254,32 @@ export interface AppState {
   loadVaults: () => Promise<void>;
   createVault: (name: string) => Promise<Vault>;
   deleteVault: (vaultId: string, confirmName: string) => Promise<void>;
+
+  // Settings and ingest slice. The SERVER copies live here; the form's typed
+  // values stay in the screen, so a failed preview or start cannot lose them.
+  settings: SettingsPayload | null;
+  settingsLoading: boolean;
+  settingsError: string | null;
+  testLlmResult: TestLlmResult | null;
+  previewResult: PreviewResult | null;
+  previewLoading: boolean;
+  /** The approved failure copy, or null. Kept apart from `previewResult`, which
+   *  is only ever the server's numbers. */
+  previewError: string | null;
+  ingestStarting: boolean;
+  /** The approved failure copy for a refused start, or null. */
+  ingestError: string | null;
+  loadSettings: () => Promise<void>;
+  saveSettings: (patch: SettingsPatch) => Promise<void>;
+  uploadCookie: (text: string) => Promise<void>;
+  deleteCookie: () => Promise<void>;
+  runTestConnection: () => Promise<void>;
+  runPreview: (input: PreviewInput) => Promise<void>;
+  /**
+   * Single-flight: a second call while `ingestStarting` is true returns
+   * immediately, so one press can never create two jobs.
+   */
+  startIngest: (input: StartJobInput) => Promise<void>;
 
   // Jobs slice. The list polls; the detail owns one SSE source. Both write the
   // same `jobs` array keyed by id, so a job can never appear twice.
@@ -634,6 +673,120 @@ export const useStore = create<AppState>((set, get) => {
             }
           : {}),
       }));
+    },
+
+    /* ---- Settings and ingest slice ---- */
+
+    settings: null,
+    settingsLoading: false,
+    settingsError: null,
+    testLlmResult: null,
+    previewResult: null,
+    previewLoading: false,
+    previewError: null,
+    ingestStarting: false,
+    ingestError: null,
+
+    /**
+     * Read the redacted settings. A failure keeps the previous copy on screen
+     * and records the message; a screen that never had one says so through the
+     * same field rather than rendering an empty form as if it were the truth.
+     */
+    loadSettings: async () => {
+      set({ settingsLoading: true, settingsError: null });
+      try {
+        const settings = await apiGetSettings();
+        set({ settings, settingsLoading: false });
+      } catch (e) {
+        set({ settingsError: (e as Error).message, settingsLoading: false });
+      }
+    },
+
+    saveSettings: async (patch) => {
+      set({ settingsLoading: true, settingsError: null });
+      try {
+        const settings = await apiPutSettings(patch);
+        set({ settings, settingsLoading: false });
+      } catch (e) {
+        set({ settingsError: (e as Error).message, settingsLoading: false });
+      }
+    },
+
+    /**
+     * Upload one Netscape file and refresh the redacted status. The text is
+     * handed straight to the API boundary and is never stored here: a copy in
+     * the store would be a cookie body one render away from the screen (T-03-34).
+     */
+    uploadCookie: async (text) => {
+      await apiUploadYoutubeCookie(text);
+      // The upload succeeded; a failed refresh must not report it as a failed
+      // upload. The next load repairs the flags.
+      try {
+        set({ settings: await apiGetSettings(), settingsError: null });
+      } catch {
+        set({ settingsError: null });
+      }
+    },
+
+    deleteCookie: async () => {
+      await apiDeleteYoutubeCookie();
+      try {
+        set({ settings: await apiGetSettings(), settingsError: null });
+      } catch {
+        // The cookie is gone; the stale flag is a display problem, not a loss.
+        set((s) => ({
+          settings:
+            s.settings === null
+              ? s.settings
+              : { ...s.settings, hasYoutubeCookie: false, youtubeCookieUpdatedAt: null },
+          settingsError: null,
+        }));
+      }
+    },
+
+    runTestConnection: async () => {
+      set({ testLlmResult: null });
+      try {
+        set({ testLlmResult: await apiTestLlm() });
+      } catch (e) {
+        set({ testLlmResult: { ok: false, reason: (e as Error).message } });
+      }
+    },
+
+    /**
+     * The dry run. The estimate comes from the server's response verbatim — a
+     * number computed here could disagree with the job the same form starts.
+     * A failure clears the previous estimate and records the approved copy.
+     */
+    runPreview: async (input) => {
+      if (get().previewLoading) return;
+      set({ previewLoading: true, previewError: null, previewResult: null });
+      try {
+        set({ previewResult: await apiPreviewJob(input), previewLoading: false });
+      } catch {
+        set({
+          previewError: "Couldn't preview this source. Check the URL and try again.",
+          previewLoading: false,
+        });
+      }
+    },
+
+    /**
+     * Start one job. The flag is written BEFORE the await, so two clicks in one
+     * tick both observe it; the second returns without a request.
+     */
+    startIngest: async (input) => {
+      if (get().ingestStarting) return;
+      set({ ingestStarting: true, ingestError: null });
+      try {
+        await apiStartJob(input);
+        // A successful start opens the Jobs screen; the form is gone with it.
+        set({ activeOverlay: "jobs", overlayOpen: true });
+      } catch {
+        set({ ingestError: "Couldn't start the job. Check the source URL and try again." });
+      } finally {
+        set({ ingestStarting: false });
+      }
     },
 
     /* ---- Jobs slice ---- */

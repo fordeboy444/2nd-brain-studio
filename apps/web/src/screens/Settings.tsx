@@ -1,11 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { Banner } from "../components/Banner.js";
+import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { useNoticeSlot } from "../components/useNoticeSlot.js";
 import { useStore } from "../store.js";
 
 /**
- * Settings, as an overlay over whatever screen is behind it: the first and only
- * populated overlay this phase reserves a slot for.
+ * Settings, as an overlay over whatever screen is behind it: the ingest form,
+ * the LLM and fetch blocks, the YouTube cookie block and one manual Test
+ * connection.
  *
  * It reads the health slice — never the raw environment. One degraded condition
  * exists today: the server has no Ollama API key, so the LLM calls the whole
@@ -16,16 +18,34 @@ import { useStore } from "../store.js";
  * payload is a fixed set of non-secret fields (`apps/web/src/lib/api.ts`
  * `HealthPayload`), and the notice names the environment VARIABLE a deployment
  * sets. A reader of this screen learns that a key is missing and nothing else.
+ *
+ * The cookie is the same rule with a file: the picker reads the local `File`
+ * into a string, hands that string to the API boundary as a `text/plain` body,
+ * and keeps no copy. The status it renders back is `hasYoutubeCookie` and a
+ * timestamp; no route returns the body and nothing here could display it.
  */
 export function Settings() {
   const closeOverlay = useStore((s) => s.closeOverlay);
   const health = useStore((s) => s.health);
   const healthError = useStore((s) => s.healthError);
 
+  const settings = useStore((s) => s.settings);
+  const settingsError = useStore((s) => s.settingsError);
+  const loadSettings = useStore((s) => s.loadSettings);
+  const uploadCookie = useStore((s) => s.uploadCookie);
+  const deleteCookie = useStore((s) => s.deleteCookie);
+
+  const [cookieNotice, setCookieNotice] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
   // The one banner condition this phase has. No `onFade`: a misconfigured
   // server is a fact, not an acknowledgement, so the notice stays until the
   // condition clears (or the user closes the overlay with it).
   const notice = useNoticeSlot("config-degraded", health?.status === "degraded");
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -35,6 +55,39 @@ export function Settings() {
     return () => window.removeEventListener("keydown", onKey);
   }, [closeOverlay]);
 
+  /**
+   * Read the chosen file and send its text. The input is reset in `finally`, so
+   * choosing the same file twice after a failure raises `change` again.
+   */
+  const onCookieFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const input = e.currentTarget;
+    const file = input.files?.[0];
+    if (file === undefined) return;
+    setCookieNotice(null);
+    try {
+      const text = await file.text();
+      await uploadCookie(text);
+      setCookieNotice("YouTube cookie saved.");
+    } catch {
+      // One failure copy: the server's 400 `invalid_cookie` is by far the
+      // common case, and the body it rejected is never echoed back.
+      setCookieNotice("Cookie must be Netscape format.");
+    } finally {
+      input.value = "";
+    }
+  };
+
+  const onDeleteCookie = async () => {
+    try {
+      await deleteCookie();
+      setCookieNotice("YouTube cookie removed.");
+    } catch {
+      setCookieNotice("Couldn't remove the YouTube cookie. Try again in a moment.");
+    } finally {
+      setConfirmDelete(false);
+    }
+  };
+
   return (
     <div
       className="modal-backdrop"
@@ -43,7 +96,12 @@ export function Settings() {
         if (e.target === e.currentTarget) closeOverlay();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Settings">
+      <div
+        className="modal settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Settings"
+      >
         <div className="modal-header">
           <span>Settings</span>
           <button
@@ -79,7 +137,67 @@ export function Settings() {
             </p>
           )}
         </section>
+
+        <section className="settings-section" aria-label="YouTube cookie">
+          <span className="subhead">YouTube cookie</span>
+          {settings === null ? (
+            <p className="muted" aria-busy="true" style={{ margin: 0 }}>
+              Checking…
+            </p>
+          ) : settings.hasYoutubeCookie ? (
+            <p className="muted" style={{ margin: 0 }}>
+              Cookie saved{" "}
+              {settings.youtubeCookieUpdatedAt === null
+                ? "."
+                : `${formatWhen(settings.youtubeCookieUpdatedAt)}.`}
+            </p>
+          ) : (
+            <p className="muted" style={{ margin: 0 }}>
+              No YouTube cookie uploaded.
+            </p>
+          )}
+
+          <div className="settings-row" style={{ marginTop: "var(--sp-2)" }}>
+            <label className="field-label" htmlFor="youtube-cookie-file">
+              Cookie file
+            </label>
+            <input
+              id="youtube-cookie-file"
+              type="file"
+              accept=".txt,text/plain"
+              onChange={(e) => void onCookieFile(e)}
+            />
+            {settings?.hasYoutubeCookie === true && (
+              <button
+                type="button"
+                className="ghost-pill"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Remove cookie
+              </button>
+            )}
+          </div>
+          {settingsError !== null && (
+            <p className="muted" role="alert" style={{ margin: "var(--sp-2) 0 0" }}>
+              {settingsError}
+            </p>
+          )}
+          <Banner show={cookieNotice !== null} role="status">
+            {cookieNotice}
+          </Banner>
+        </section>
       </div>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Remove the saved YouTube cookie?"
+          confirmLabel="Remove cookie"
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={onDeleteCookie}
+        >
+          <p>The next transcript fetch runs without a signed-in session.</p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -102,4 +220,10 @@ function formatUptime(sec: number): string {
   if (min < 60) return `${min} min`;
   const h = Math.floor(min / 60);
   return `${h} h ${min % 60} min`;
+}
+
+/** An ISO timestamp at minute precision, without the locale's opinion. */
+function formatWhen(iso: string): string {
+  const at = iso.indexOf("T");
+  return at > 0 ? `${iso.slice(0, at)} ${iso.slice(at + 1, at + 6)}` : iso;
 }

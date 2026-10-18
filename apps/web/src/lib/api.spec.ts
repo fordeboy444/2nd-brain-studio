@@ -308,6 +308,158 @@ describe("writeFile", () => {
   });
 });
 
+describe("settings calls", () => {
+  it("reads the redacted settings from GET /api/settings", async () => {
+    const payload = {
+      settings: {
+        llm: { model: "m", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },
+        fetch: { delayMs: 1000, concurrency: 2, language: "en" },
+        sweep: { enabled: true },
+        ui: { theme: "system" },
+      },
+      hasYoutubeCookie: false,
+      youtubeCookieUpdatedAt: null,
+      hasSupadataKey: false,
+      llmConfigured: true,
+    };
+    let capturedUrl = "";
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      capturedUrl = String(input);
+      return jsonResponse(payload);
+    });
+    const { getSettings } = await load();
+    await expect(getSettings()).resolves.toEqual(payload);
+    expect(capturedUrl).toBe("/api/settings");
+  });
+
+  it("PUTs a partial settings patch as JSON", async () => {
+    let capturedMethod = "";
+    let capturedBody = "";
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedMethod = init?.method ?? "GET";
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ settings: {}, hasYoutubeCookie: false });
+    });
+    const { putSettings } = await load();
+    await putSettings({ fetch: { delayMs: 500 } });
+    expect(capturedMethod).toBe("PUT");
+    expect(JSON.parse(capturedBody)).toEqual({ fetch: { delayMs: 500 } });
+  });
+
+  it("uploads the cookie as a raw text/plain body, never as JSON", async () => {
+    const raw = "www.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tSECRET-VALUE\n";
+    let capturedUrl = "";
+    let capturedMethod = "";
+    let capturedContentType = "";
+    let capturedBody: BodyInit | null | undefined;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      capturedUrl = String(input);
+      capturedMethod = init?.method ?? "GET";
+      capturedContentType = readHeader(init?.headers, "content-type") ?? "";
+      capturedBody = init?.body;
+      return jsonResponse({ hasYoutubeCookie: true, youtubeCookieUpdatedAt: "2026-10-18T12:00:00Z" });
+    });
+    const { uploadYoutubeCookie } = await load();
+    const out = await uploadYoutubeCookie(raw);
+
+    expect(capturedUrl).toBe("/api/settings/youtube-cookie");
+    expect(capturedMethod).toBe("POST");
+    expect(capturedContentType).toContain("text/plain");
+    // The body is the file itself, not a JSON envelope around it: the route
+    // validates the raw Netscape text and would 415 anything else.
+    expect(capturedBody).toBe(raw);
+    expect(out.hasYoutubeCookie).toBe(true);
+  });
+
+  it("deletes the cookie with DELETE and reads the test-llm answer as a 200", async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET" });
+      return jsonResponse({ ok: true, latencyMs: 42 });
+    });
+    const { deleteYoutubeCookie, testLlm } = await load();
+    await deleteYoutubeCookie();
+    await expect(testLlm()).resolves.toEqual({ ok: true, latencyMs: 42 });
+    expect(calls).toEqual([
+      { url: "/api/settings/youtube-cookie", method: "DELETE" },
+      { url: "/api/settings/test-llm", method: "POST" },
+    ]);
+  });
+});
+
+describe("ingest calls", () => {
+  it("posts the YouTube preview body and resolves the server's numbers", async () => {
+    let capturedBody = "";
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({
+        found: 12,
+        selected: 9,
+        skipped: [],
+        estimatedCalls: 9,
+        estimatedMinutes: 4,
+      });
+    });
+    const { previewJob } = await load();
+    const out = await previewJob({
+      kind: "youtube",
+      channelUrl: "https://www.youtube.com/@studio",
+      maxVideos: 10,
+      language: "en",
+    });
+    expect(JSON.parse(capturedBody)).toEqual({
+      kind: "youtube",
+      channelUrl: "https://www.youtube.com/@studio",
+      maxVideos: 10,
+      language: "en",
+    });
+    // No browser-side estimate: the numbers are the response's own.
+    expect(out.estimatedCalls).toBe(9);
+    expect(out.estimatedMinutes).toBe(4);
+  });
+
+  it("never attaches a video-only field to a strict web body", async () => {
+    let capturedBody = "";
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ found: 1, selected: 1, skipped: [], estimatedCalls: 8, estimatedMinutes: 4 });
+    });
+    const { previewJob } = await load();
+    await previewJob({
+      kind: "web",
+      url: "https://example.com/page",
+      // The route's web arm is `.strict()`; these must not be sent even if a
+      // caller hands them over.
+      maxVideos: 5,
+      dateFrom: "2026-01-01",
+      minDurationSec: 60,
+    });
+    expect(JSON.parse(capturedBody)).toEqual({ kind: "web", url: "https://example.com/page" });
+  });
+
+  it("starts a job through POST /api/jobs and resolves id and status", async () => {
+    let capturedBody = "";
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedBody = typeof init?.body === "string" ? init.body : "";
+      return jsonResponse({ id: "j_20261018_abcdef", status: "queued" }, 202);
+    });
+    const { startJob } = await load();
+    const out = await startJob({
+      vaultId: "v1",
+      kind: "youtube",
+      channelUrl: "https://www.youtube.com/@studio",
+      maxVideos: 10,
+    });
+    expect(JSON.parse(capturedBody)).toEqual({
+      vaultId: "v1",
+      kind: "youtube",
+      channelUrl: "https://www.youtube.com/@studio",
+      maxVideos: 10,
+    });
+    expect(out).toEqual({ id: "j_20261018_abcdef", status: "queued" });
+  });
+});
+
 describe("request helper (no real network)", () => {
   it("never performs a real network call (fetch is stubbed, URL is same-origin relative)", async () => {
     const calls: string[] = [];

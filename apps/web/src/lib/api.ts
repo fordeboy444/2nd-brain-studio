@@ -170,6 +170,175 @@ export function jobEventsUrl(id: string): string {
   return `/api/jobs/${encodeURIComponent(id)}/events`;
 }
 
+/* -------------------------------------------------------------------------
+   Settings and ingest (Phase 3)
+   ------------------------------------------------------------------------- */
+
+/**
+ * The non-secret settings surface, exactly as `GET /api/settings` names it
+ * (`apps/server/src/settings/store.ts`). There is deliberately no key field:
+ * secrets live in the environment and never enter this payload.
+ */
+export interface AppSettings {
+  llm: {
+    model: string;
+    concurrency: number;
+    requestTimeoutMs: number;
+    maxRetries: number;
+  };
+  fetch: {
+    delayMs: number;
+    /** Stored and rendered in Phase 3; the Phase 4 LLM pool is its consumer. */
+    concurrency: number;
+    language: string;
+  };
+  sweep: { enabled: boolean };
+  ui: { theme: "system" | "light" | "dark" };
+}
+
+/** The redacted status object: settings plus presence flags, never a secret. */
+export interface SettingsPayload {
+  settings: AppSettings;
+  hasYoutubeCookie: boolean;
+  youtubeCookieUpdatedAt: string | null;
+  hasSupadataKey: boolean;
+  llmConfigured: boolean;
+}
+
+/** A partial settings write. Every field is optional at both levels. */
+export interface SettingsPatch {
+  llm?: Partial<AppSettings["llm"]>;
+  fetch?: Partial<AppSettings["fetch"]>;
+  sweep?: Partial<AppSettings["sweep"]>;
+  ui?: Partial<AppSettings["ui"]>;
+}
+
+/** GET /api/settings — the merged non-secret settings and presence flags. */
+export function getSettings(): Promise<SettingsPayload> {
+  return request<SettingsPayload>("/settings");
+}
+
+/** PUT /api/settings — validate, merge and persist the non-secret patch. */
+export function putSettings(patch: SettingsPatch): Promise<SettingsPayload> {
+  return request<SettingsPayload>("/settings", {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+}
+
+/**
+ * POST /api/settings/youtube-cookie — the Netscape text as the raw body.
+ *
+ * `text/plain` is the contract: the route refuses anything else with 415, and a
+ * JSON-encoded body would be the one shape that cannot reach the validator.
+ * The response carries presence and mtime only; the body never comes back.
+ */
+export function uploadYoutubeCookie(
+  text: string,
+): Promise<{ hasYoutubeCookie: true; youtubeCookieUpdatedAt: string | null }> {
+  return request<{ hasYoutubeCookie: true; youtubeCookieUpdatedAt: string | null }>(
+    "/settings/youtube-cookie",
+    {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: text,
+    },
+  );
+}
+
+/** DELETE /api/settings/youtube-cookie — idempotent; absence is a success. */
+export function deleteYoutubeCookie(): Promise<{ hasYoutubeCookie: false }> {
+  return request<{ hasYoutubeCookie: false }>("/settings/youtube-cookie", {
+    method: "DELETE",
+  });
+}
+
+/** The manual Ollama probe's answer. A failure is a 200 with `ok: false`. */
+export interface TestLlmResult {
+  ok: boolean;
+  latencyMs?: number;
+  reason?: string;
+}
+
+/** POST /api/settings/test-llm — one bounded manual probe, never the pipeline. */
+export function testLlm(): Promise<TestLlmResult> {
+  return request<TestLlmResult>("/settings/test-llm", { method: "POST" });
+}
+
+/** The dry-run form: the create form minus `vaultId` (a preview writes nothing). */
+export interface PreviewInput {
+  kind: JobKind;
+  channelUrl?: string;
+  url?: string;
+  maxVideos?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  minDurationSec?: number;
+  language?: string;
+}
+
+/** The dry run's answer: the server's numbers, never a browser-side estimate. */
+export interface PreviewResult {
+  found: number;
+  foundAtLeast?: boolean;
+  selected: number;
+  skipped: SkippedUnit[];
+  estimatedCalls: number;
+  estimatedMinutes: number;
+}
+
+/** The create form. A web job carries no video-only field (the route is strict). */
+export interface StartJobInput {
+  vaultId: string;
+  kind: JobKind;
+  channelUrl?: string;
+  url?: string;
+  maxVideos?: number;
+  dateFrom?: string;
+  dateTo?: string;
+  minDurationSec?: number;
+  language?: string;
+}
+
+/**
+ * The body each kind may send. Kept as a function so the strict web arm cannot
+ * receive a video-only field that would turn a valid click into a 400.
+ */
+function ingestBody(input: PreviewInput | StartJobInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if ("vaultId" in input) body.vaultId = input.vaultId;
+  body.kind = input.kind;
+  if (input.kind === "web") {
+    // The web arm is `.strict()`: a video-only field here is a 400, not a value
+    // the server drops, so none is ever attached.
+    body.url = input.url;
+  } else {
+    body.channelUrl = input.channelUrl;
+    body.maxVideos = input.maxVideos;
+    if (input.dateFrom !== undefined && input.dateFrom !== "") body.dateFrom = input.dateFrom;
+    if (input.dateTo !== undefined && input.dateTo !== "") body.dateTo = input.dateTo;
+    if (input.minDurationSec !== undefined) body.minDurationSec = input.minDurationSec;
+  }
+  if (input.language !== undefined && input.language !== "") body.language = input.language;
+  return body;
+}
+
+/** POST /api/jobs/preview — enumerate, filter and estimate, writing nothing. */
+export function previewJob(input: PreviewInput): Promise<PreviewResult> {
+  return request<PreviewResult>("/jobs/preview", {
+    method: "POST",
+    body: JSON.stringify(ingestBody(input)),
+  });
+}
+
+/** POST /api/jobs — validate, persist and enqueue one job. */
+export function startJob(input: StartJobInput): Promise<{ id: string; status: JobStatus }> {
+  return request<{ id: string; status: JobStatus }>("/jobs", {
+    method: "POST",
+    body: JSON.stringify(ingestBody(input)),
+  });
+}
+
 /** POST /api/vaults — creates a vault; name is trimmed. Resolves to the record. */
 export function createVault(name: string): Promise<Vault> {
   return request<Vault>("/vaults", {

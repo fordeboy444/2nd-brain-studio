@@ -4503,3 +4503,63 @@ button.secondary:active:not(:disabled),
     padding-bottom: var(--sp-3);
   }
 }
+
+/* ============================================================
+   Settings — ingest form, blocks and the cookie row
+   ============================================================ */
+/* The settings card is the one modal that holds a form rather than a sentence:
+   it needs two columns before the fields start stacking, and a ceiling so the
+   overlay itself scrolls instead of running past the window. */
+.settings-modal {
+  width: min(760px, 94vw);
+  max-width: 94vw;
+  max-height: 86vh;
+  overflow-y: auto;
+}
+.settings-section {
+  margin-top: var(--sp-6);
+}
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+/* A file picker is a control, not a text well: `.modal input` would stretch it
+   across the row and leave the button beside it with nowhere to sit. */
+.settings-row input[type="file"] {
+  width: auto;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.settings-result {
+  margin: 0;
+  min-height: 1.5em;
+}
+@media (max-width: 640px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -22,6 +22,15 @@ const INITIAL: Partial<AppState> = {
   stagesDone: [],
   activeStage: null,
   feedCapped: false,
+  settings: null,
+  settingsLoading: false,
+  settingsError: null,
+  testLlmResult: null,
+  previewResult: null,
+  previewLoading: false,
+  previewError: null,
+  ingestStarting: false,
+  ingestError: null,
 };
 
 const originalFetch = globalThis.fetch;
@@ -120,6 +129,66 @@ it("merges poll results by job id, so a job never appears twice", async () => {
   expect(useStore.getState().jobs.length).toBe(1);
   expect(useStore.getState().jobs[0]?.id).toBe("j1");
   expect(useStore.getState().jobsLoading).toBe(false);
+});
+
+const SETTINGS_PAYLOAD = {
+  settings: {
+    llm: { model: "m", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },
+    fetch: { delayMs: 1000, concurrency: 2, language: "en" },
+    sweep: { enabled: true },
+    ui: { theme: "system" as const },
+  },
+  hasYoutubeCookie: false,
+  youtubeCookieUpdatedAt: null,
+  hasSupadataKey: false,
+  llmConfigured: true,
+};
+
+it("uploads the cookie text as text/plain and refreshes the redacted status", async () => {
+  const cookieText = "www.youtube.com\tTRUE\t/\tTRUE\t1999999999\tSID\tSECRET\n";
+  let sentContentType = "";
+  let sentBody = "";
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/settings/youtube-cookie" && init?.method === "POST") {
+      sentContentType = (init.headers as Headers).get("content-type") ?? "";
+      sentBody = typeof init.body === "string" ? init.body : "";
+      return json({ hasYoutubeCookie: true, youtubeCookieUpdatedAt: "2026-10-18T12:00:00Z" });
+    }
+    if (url === "/api/settings") {
+      return json({
+        ...SETTINGS_PAYLOAD,
+        hasYoutubeCookie: true,
+        youtubeCookieUpdatedAt: "2026-10-18T12:00:00Z",
+      });
+    }
+    return json({});
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().uploadCookie(cookieText);
+
+  expect(sentContentType).toContain("text/plain");
+  expect(sentBody).toBe(cookieText);
+  expect(useStore.getState().settings?.hasYoutubeCookie).toBe(true);
+  expect(useStore.getState().settingsError).toBeNull();
+  // The body itself is never stored: one screen render away is too close.
+  expect(JSON.stringify(useStore.getState().settings)).not.toContain("SECRET");
+});
+
+it("deletes the cookie and clears the presence flag", async () => {
+  useStore.setState({ settings: { ...SETTINGS_PAYLOAD, hasYoutubeCookie: true } });
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/settings/youtube-cookie" && init?.method === "DELETE") {
+      return json({ hasYoutubeCookie: false });
+    }
+    if (url === "/api/settings") return json(SETTINGS_PAYLOAD);
+    return json({});
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().deleteCookie();
+
+  expect(useStore.getState().settings?.hasYoutubeCookie).toBe(false);
 });
 
 it("keeps the last list on a failed load and records the error", async () => {
