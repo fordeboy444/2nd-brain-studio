@@ -40,6 +40,11 @@ vaults.post("/", async (c) => {
     if (code === "non_empty") {
       return c.json({ error: "non_empty", message: msg }, 409);
     }
+    if (code === "invalid_name") {
+      // The name is valid JSON and a non-empty string, but it cannot produce
+      // a slug. That is a request error, not a server fault.
+      return c.json({ error: "invalid_name", message: msg }, 400);
+    }
     // Never leak a host path; the message already names the vault.
     return c.json({ error: "create_failed", message: msg }, 500);
   }

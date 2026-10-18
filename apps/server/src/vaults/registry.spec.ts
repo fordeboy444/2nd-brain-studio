@@ -122,6 +122,20 @@ describe("registry", () => {
     expect(JSON.parse(raw).version).toBe(1);
   });
 
+  it("a non-Latin-only name fails with a name-specific code, not an empty slug", async () => {
+    const { createVault, listVaults } = await reload();
+    let caught: unknown = null;
+    try {
+      await createVault({ name: "日本語" });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { code?: string }).code).toBe("invalid_name");
+    expect((caught as Error).message).toContain("Latin");
+    // Nothing was scaffolded or registered.
+    expect(await listVaults()).toEqual([]);
+  });
+
   it("errors name the vault, never the host path", async () => {
     const { createVault } = await reload();
     await createVault({ name: "Dup Name" });

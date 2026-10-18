@@ -84,6 +84,21 @@ describe("POST /api/vaults", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects a non-Latin-only name with 400 and a name-specific message", async () => {
+    const { vaults } = await reload();
+    const res = await vaults.request("/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "日本語" }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("invalid_name");
+    expect(body.message).toContain("Latin");
+    // No directory was created for the refused name.
+    expect((await readdir(root)).filter((e) => e !== "vaults.json")).toEqual([]);
+  });
+
   it("rejects a non-JSON body with 400", async () => {
     const { vaults } = await reload();
     const res = await vaults.request("/", {

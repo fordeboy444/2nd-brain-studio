@@ -133,7 +133,20 @@ export async function createVault(input: CreateVaultInput): Promise<VaultEntry> 
   if (name === "") {
     throw new Error("vault name must not be empty");
   }
-  const slug = slugify(name);
+  let slug: string;
+  try {
+    slug = slugify(name);
+  } catch {
+    // A name made only of non-Latin characters or punctuation reduces to an
+    // empty slug. That is a user input error, not a server fault: name the
+    // requirement so the user knows what to change, and let the route answer
+    // 400 instead of forwarding the empty-slug exception as a 500.
+    const err = new Error(
+      "A vault name must contain at least one Latin letter or digit.",
+    );
+    (err as Error & { code?: string }).code = "invalid_name";
+    throw err;
+  }
 
   return withRegistryLock(async () => {
     const reg = await readRegistry();
