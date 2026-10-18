@@ -141,13 +141,16 @@ describe("stage-granular resume (PIPE-11)", () => {
     expect(second.stdout()).not.toContain("CAPTURE_WRITTEN");
     expect(second.stdout()).toContain("JOB_COMPLETE");
 
-    // No temp artifact survives in the job directory.
+    // No temp artifact survives in the job directory. S3 adds its two
+    // documents, and makes no call because these extractions carry no labels.
     const jobFiles = await readdir(join(vault, ".okf", "jobs", id));
     expect(jobFiles.sort()).toEqual([
       "01-enumerate.json",
       "events.ndjson",
       "extractions",
       "job.json",
+      "manifest.json",
+      "taxonomy.json",
     ]);
     expect(jobFiles.some((name) => name.includes(".tmp-"))).toBe(false);
   });

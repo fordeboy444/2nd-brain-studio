@@ -35,6 +35,7 @@ import {
 } from "./capture.js";
 import { appendEvent, jobDir, readJob, requestCancel, writeJob } from "./store.js";
 import { createS2Stage } from "./stages/s2.js";
+import { createS3Stage } from "./stages/s3.js";
 import {
   SkipError,
   type JobRecord,
@@ -112,7 +113,9 @@ export interface StageDeps {
  * S2 here, S3 in 04-03, S4 in 04-04 and S5/S6 in 04-05.
  */
 export function stagesFor(job: JobRecord): StageName[] {
-  return job.kind === "youtube" ? ["S0", "S1", "S2"] : ["S0", "S1w", "S2"];
+  return job.kind === "youtube"
+    ? ["S0", "S1", "S2", "S3"]
+    : ["S0", "S1w", "S2", "S3"];
 }
 
 const TERMINAL: ReadonlySet<JobRecord["status"]> = new Set([
@@ -310,6 +313,8 @@ export async function runJob(
           cancelled = await runS1(job, vaultDir, deps, ctx, dir, persist);
         } else if (stage === "S1w") {
           cancelled = await runS1w(job, vaultDir, deps, ctx, dir, persist);
+        } else if (stage === "S3") {
+          cancelled = await createS3Stage(deps)(job, ctx, dir, persist);
         } else {
           cancelled = await createS2Stage(deps)(job, ctx, dir, persist);
         }
