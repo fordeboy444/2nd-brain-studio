@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/slug.ts",
+  "main": "./src/index.ts",
+  "exports": "./src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "oracle": "vitest run tests/oracle.spec.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

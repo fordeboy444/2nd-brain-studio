@@ -1,0 +1,12 @@
+{
+  "concept_themes": [
+    ["Theme One", ["alpha", "beta"]],
+    ["Theme Two", ["alpha"]]
+  ],
+  "tool_themes": [
+    ["Tools", ["tool-a"]]
+  ],
+  "source_clusters": [
+    ["Cluster One", ["alpha", "beta"]]
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "concepts/alpha.md": {
+    "description": "First concept.",
+    "duration": "",
+    "title": "Alpha Concept"
+  },
+  "concepts/beta.md": {
+    "description": "Second concept, with: a colon.",
+    "duration": "",
+    "title": "Beta: The (Bracketed) Concept"
+  },
+  "concepts/gamma.md": {
+    "description": "",
+    "duration": "",
+    "title": "gamma"
+  },
+  "entities/organizations/org-a.md": {
+    "description": "An org.",
+    "duration": "",
+    "title": "Org A"
+  },
+  "entities/people/person-a.md": {
+    "description": "A person.",
+    "duration": "",
+    "title": "Person A"
+  },
+  "entities/tools/tool-a.md": {
+    "description": "A tool.",
+    "duration": "",
+    "title": "Tool A"
+  },
+  "entities/tools/tool-b.md": {
+    "description": "B tool.",
+    "duration": "",
+    "title": "Tool B"
+  },
+  "raw/alpha.md": {
+    "description": "",
+    "duration": "0:10:00",
+    "title": "Alpha Video"
+  },
+  "raw/beta.md": {
+    "description": "",
+    "duration": "0:05:00",
+    "title": "Beta Video"
+  },
+  "raw/epsilon.md": {
+    "description": "",
+    "duration": "0:01:00",
+    "title": "Epsilon Transcript"
+  },
+  "raw/gamma.md": {
+    "description": "",
+    "duration": "0:02:00",
+    "title": "Gamma Video"
+  },
+  "sources/alpha.md": {
+    "description": "First video summary.",
+    "duration": "0:10:00",
+    "title": "Alpha Video"
+  },
+  "sources/beta.md": {
+    "description": "Second video summary.",
+    "duration": "0:05:00",
+    "title": "Beta Video"
+  },
+  "sources/delta.md": {
+    "description": "Fourth video summary.",
+    "duration": "0:03:00",
+    "title": "Delta Video"
+  },
+  "sources/gamma.md": {
+    "description": "Third video summary.",
+    "duration": "0:02:00",
+    "title": "Gamma Video"
+  }
+}
