@@ -16,8 +16,10 @@ beforeEach(async () => {
   delete process.env.VAULT_ROOT;
   root = await mkdtemp(join(tmpdir(), "tree-"));
   process.env.VAULT_ROOT = root;
-  webDist = join(process.cwd(), "apps/web/dist");
-  await mkdir(webDist, { recursive: true });
+  // A directory this spec owns: a shared apps/web/dist fixture would be
+  // deleted by parallel specs mid-test.
+  webDist = await mkdtemp(join(tmpdir(), "tree-web-"));
+  process.env.WEB_DIST_DIR = webDist;
   await writeFile(
     join(webDist, "index.html"),
     "<!doctype html><html><body><div id=root></div></body></html>",

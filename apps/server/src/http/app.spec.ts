@@ -1,17 +1,23 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_SRC = resolve(HERE, "app.ts");
 
-const WEB_DIST = resolve(process.cwd(), "apps/web/dist");
-const INDEX_HTML = resolve(WEB_DIST, "index.html");
+// A directory this spec owns. A cwd-relative `apps/web/dist` would make the
+// suite delete a real build it did not create, and would race the other specs
+// that used the same path.
+let WEB_DIST = "";
+let INDEX_HTML = "";
 
 beforeEach(() => {
   // Create a minimal built SPA so the app mounts the static + SPA fallback.
-  mkdirSync(WEB_DIST, { recursive: true });
+  WEB_DIST = mkdtempSync(join(tmpdir(), "web-dist-app-"));
+  INDEX_HTML = join(WEB_DIST, "index.html");
+  process.env.WEB_DIST_DIR = WEB_DIST;
   writeFileSync(
     INDEX_HTML,
     "<!doctype html><html><body><div id=root></div></body></html>",
@@ -20,6 +26,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(WEB_DIST, { recursive: true, force: true });
+  delete process.env.WEB_DIST_DIR;
 });
 
 async function reload() {

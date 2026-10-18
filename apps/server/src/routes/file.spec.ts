@@ -37,10 +37,11 @@ beforeEach(async () => {
   delete process.env.VAULT_ROOT;
   root = await mkdtemp(join(tmpdir(), "fileroutes-"));
   process.env.VAULT_ROOT = root;
-  // The app spec requires apps/web/dist/index.html to exist for the SPA
-  // fallback; create a minimal one so app.request works end-to-end.
-  webDist = join(process.cwd(), "apps/web/dist");
-  await mkdir(webDist, { recursive: true });
+  // The app needs an index.html for the SPA fallback; create a minimal one in
+  // a directory this spec owns, so parallel specs never share or delete a
+  // real build under apps/web/dist.
+  webDist = await mkdtemp(join(tmpdir(), "fileroutes-web-"));
+  process.env.WEB_DIST_DIR = webDist;
   await writeFile(
     join(webDist, "index.html"),
     "<!doctype html><html><body><div id=root></div></body></html>",

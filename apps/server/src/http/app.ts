@@ -43,7 +43,9 @@ app.route("/api/settings", settings);
 app.route("/api/vaults", tree);
 
 // SPA static assets + SPA fallback. Only mounted when the build exists.
-const webDist = resolve(process.cwd(), "apps/web/dist");
+// `WEB_DIST_DIR` lets a spec point at its own temporary directory, so tests
+// never create or delete the shared build output under `apps/web/dist`.
+const webDist = process.env.WEB_DIST_DIR ?? resolve(process.cwd(), "apps/web/dist");
 const indexHtmlPath = resolve(webDist, "index.html");
 let cachedIndex: string | null = null;
 
@@ -54,8 +56,8 @@ function getIndex(): string {
 }
 
 if (existsSync(indexHtmlPath)) {
-  app.use("/assets/*", serveStatic({ root: "apps/web/dist", rewriteRequestPath: (p) => p }));
-  app.get("/favicon.ico", serveStatic({ root: "apps/web/dist", path: "favicon.ico" }));
+  app.use("/assets/*", serveStatic({ root: webDist, rewriteRequestPath: (p) => p }));
+  app.get("/favicon.ico", serveStatic({ root: webDist, path: "favicon.ico" }));
   // SPA fallback: any non-API GET returns index.html.
   app.get("*", (c) => {
     if (c.req.path.startsWith("/api/")) {
