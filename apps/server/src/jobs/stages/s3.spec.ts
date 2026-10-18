@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,12 +9,7 @@ import {
   type ExtractionRecord,
   type ExtractionSource,
 } from "../extraction.js";
-import {
-  readManifest,
-  readTaxonomy,
-  type ManifestRecord,
-  type TaxonomyRecord,
-} from "../manifest.js";
+import { readManifest, readTaxonomy } from "../manifest.js";
 import { runJob, type StageDeps } from "../runner.js";
 import { createJobRecord, jobDir, newJobId, writeJob } from "../store.js";
 import type { JobRecord, JobSettings } from "../types.js";
@@ -433,6 +428,164 @@ describe("S3 manifest", () => {
       { from: "alpha", to: "beta", kind: "builds_on" },
       { from: "beta", to: "alpha", kind: "contrasts_with" },
     ]);
+  });
+});
+
+describe("S3 candidate filter", () => {
+  it("keeps a label named by two ordinary videos", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("first-talk", {
+        source: { duration: 600 },
+        concepts: [{ name: "Alpha", slug: "alpha", weight: 0.5 }],
+      }),
+      record("second-talk", {
+        source: { duration: 600 },
+        concepts: [{ name: "Alpha", slug: "alpha", weight: 0.7 }],
+      }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.concepts.map((concept) => concept.slug)).toEqual(["alpha"]);
+    expect(manifest?.concepts[0]?.sources).toEqual([
+      "first-talk",
+      "second-talk",
+    ]);
+    expect(manifest?.filtered).toEqual([]);
+    expect(job.skipped).toEqual([]);
+
+    const canonical = llm.calls.filter((call) => call.canonical);
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]?.labels.map((label) => label.slug)).toEqual(["alpha"]);
+  });
+
+  it("filters a tool named once in a 300-second video", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("first-talk", {
+        source: { duration: 300 },
+        entities: [
+          { name: "One Off Tool", slug: "one-off-tool", type: "tool", weight: 0.5 },
+        ],
+      }),
+      // A source with no surviving label still belongs in the manifest.
+      record("empty-talk", { source: { duration: 600 } }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.entities).toEqual([]);
+    expect(manifest?.filtered).toEqual([
+      { slug: "one-off-tool", kind: "entity", reason: "single_source" },
+    ]);
+    expect(manifest?.sources.map((source) => source.slug)).toEqual([
+      "empty-talk",
+      "first-talk",
+    ]);
+    // A dropped label never reaches the model.
+    expect(llm.calls).toEqual([]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("keeps a concept named once in a 1500-second video", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("deep-talk", {
+        source: { duration: 1500 },
+        concepts: [{ name: "Deep Idea", slug: "deep-idea", weight: 0.5 }],
+      }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.concepts.map((concept) => concept.slug)).toEqual([
+      "deep-idea",
+    ]);
+    expect(manifest?.filtered).toEqual([]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("filters a label named by one video and one ordinary web page", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("short-talk", {
+        source: { duration: 600 },
+        concepts: [{ name: "Mixed Label", slug: "mixed-label", weight: 0.5 }],
+      }),
+      record("ordinary-post", {
+        source: {
+          sourceKind: "web",
+          youtubeId: undefined,
+          url: "https://example.com/ordinary",
+          duration: undefined,
+          wordCount: 400,
+        },
+        concepts: [{ name: "Mixed Label", slug: "mixed-label", weight: 0.5 }],
+      }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.concepts).toEqual([]);
+    expect(manifest?.filtered).toEqual([
+      { slug: "mixed-label", kind: "concept", reason: "single_source" },
+    ]);
+    // The web page never counts toward the two-video branch.
+    expect(llm.calls).toEqual([]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("filters two ordinary web pages and keeps a deep-dive page", async () => {
+    const job = makeJob();
+    const web = (slug: string, wordCount: number): ExtractionSource => ({
+      ...source(slug),
+      sourceKind: "web",
+      youtubeId: undefined,
+      url: `https://example.com/${slug}`,
+      duration: undefined,
+      wordCount,
+    });
+    await seed(job, [
+      record("post-one", {
+        source: { ...web("post-one", 400) },
+        concepts: [{ name: "Web Only", slug: "web-only", weight: 0.5 }],
+      }),
+      record("post-two", {
+        source: { ...web("post-two", 400) },
+        concepts: [{ name: "Web Only", slug: "web-only", weight: 0.5 }],
+      }),
+      record("deep-post", {
+        source: { ...web("deep-post", 3200) },
+        concepts: [{ name: "Deep Page", slug: "deep-page", weight: 0.5 }],
+      }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.concepts.map((concept) => concept.slug)).toEqual([
+      "deep-page",
+    ]);
+    expect(manifest?.filtered).toEqual([
+      { slug: "web-only", kind: "concept", reason: "single_source" },
+    ]);
+    // Only the deep-dive label is paid for.
+    const canonical = llm.calls.filter((call) => call.canonical);
+    expect(canonical).toHaveLength(1);
+    expect(canonical[0]?.labels.map((label) => label.slug)).toEqual([
+      "deep-page",
+    ]);
+    expect(job.skipped).toEqual([]);
   });
 });
 
