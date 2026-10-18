@@ -322,6 +322,13 @@ export function Settings() {
           Ollama API key is not configured. Set OLLAMA_API_KEY and restart.
         </Banner>
 
+        {/* One error slot for every settings save. It lives at the top of the
+            page rather than in the cookie section, so a failed sweep toggle is
+            not reported far below the switch that failed. */}
+        <Banner show={settingsError !== null} role="alert">
+          {settingsError}
+        </Banner>
+
         <section aria-label="Ingest">
           <span className="subhead">Ingest</span>
           <div className="settings-form" style={{ marginTop: "var(--sp-2)" }}>
@@ -534,7 +541,7 @@ export function Settings() {
 
         <section className="settings-section" aria-label="Deep quality sweep">
           <span className="subhead">Deep quality sweep</span>
-          <div className="settings-field" style={{ marginTop: "var(--sp-2)" }}>
+          <div className="settings-form" style={{ marginTop: "var(--sp-2)" }}>
             <div className="settings-row" style={{ alignItems: "center" }}>
               <Switch
                 checked={sweepOn}
@@ -546,6 +553,8 @@ export function Settings() {
             <p className="muted" style={{ margin: 0 }}>
               Fills gaps and triages notability. Adds LLM calls. Off by default.
             </p>
+            {/* The UI-SPEC declares this as a separate line, so it repeats the
+                sentence above by contract, not by accident. */}
             <p className="muted" style={{ margin: 0 }}>
               Off by default.
             </p>
@@ -655,11 +664,6 @@ export function Settings() {
             </div>
           </div>
 
-          {settingsError !== null && (
-            <p className="muted" role="alert" style={{ margin: "var(--sp-2) 0 0" }}>
-              {settingsError}
-            </p>
-          )}
           <Banner show={cookieNotice !== null} role="status">
             {cookieNotice}
           </Banner>
