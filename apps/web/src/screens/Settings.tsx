@@ -1,8 +1,11 @@
 import { useEffect, useState, type ChangeEvent } from "react";
+import { AsyncButton } from "../components/AsyncButton.js";
 import { Banner } from "../components/Banner.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
+import { MenuSelect } from "../components/MenuSelect.js";
 import { useNoticeSlot } from "../components/useNoticeSlot.js";
 import { useStore } from "../store.js";
+import type { JobKind, PreviewInput, SettingsPatch, StartJobInput } from "../lib/api.js";
 
 /**
  * Settings, as an overlay over whatever screen is behind it: the ingest form,
@@ -23,6 +26,10 @@ import { useStore } from "../store.js";
  * into a string, hands that string to the API boundary as a `text/plain` body,
  * and keeps no copy. The status it renders back is `hasYoutubeCookie` and a
  * timestamp; no route returns the body and nothing here could display it.
+ *
+ * The typed form values live HERE, not in the store. The store holds the
+ * SERVER's copy; that split is what makes "a failed preview keeps every value"
+ * true by construction — a rejected request cannot clear component state.
  */
 export function Settings() {
   const closeOverlay = useStore((s) => s.closeOverlay);
@@ -32,8 +39,43 @@ export function Settings() {
   const settings = useStore((s) => s.settings);
   const settingsError = useStore((s) => s.settingsError);
   const loadSettings = useStore((s) => s.loadSettings);
+  const saveSettings = useStore((s) => s.saveSettings);
   const uploadCookie = useStore((s) => s.uploadCookie);
   const deleteCookie = useStore((s) => s.deleteCookie);
+
+  const testLlmResult = useStore((s) => s.testLlmResult);
+  const runTestConnection = useStore((s) => s.runTestConnection);
+  const previewResult = useStore((s) => s.previewResult);
+  const previewLoading = useStore((s) => s.previewLoading);
+  const previewError = useStore((s) => s.previewError);
+  const runPreview = useStore((s) => s.runPreview);
+  const ingestStarting = useStore((s) => s.ingestStarting);
+  const ingestError = useStore((s) => s.ingestError);
+  const startIngest = useStore((s) => s.startIngest);
+
+  const vaults = useStore((s) => s.vaults);
+  const loadVaults = useStore((s) => s.loadVaults);
+  const createVault = useStore((s) => s.createVault);
+
+  // Ingest form. Local by design: a failed preview or start must not lose a
+  // single typed character.
+  const [kind, setKind] = useState<JobKind>("youtube");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [maxVideos, setMaxVideos] = useState("50");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [minDurationSec, setMinDurationSec] = useState("");
+  const [language, setLanguage] = useState("");
+  const [vaultId, setVaultId] = useState("");
+  const [newVaultName, setNewVaultName] = useState("");
+  const [vaultError, setVaultError] = useState<string | null>(null);
+
+  // Settings fields, seeded from the server copy. Kept separately so a refresh
+  // of `settings` (a cookie upload, a save) does not fight the field in use.
+  const [llmModel, setLlmModel] = useState("");
+  const [fetchDelayMs, setFetchDelayMs] = useState("");
+  const [fetchConcurrency, setFetchConcurrency] = useState("");
+  const [fetchLanguage, setFetchLanguage] = useState("");
 
   const [cookieNotice, setCookieNotice] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -46,6 +88,34 @@ export function Settings() {
   useEffect(() => {
     void loadSettings();
   }, [loadSettings]);
+
+  useEffect(() => {
+    void loadVaults();
+  }, [loadVaults]);
+
+  // A first vault is selected as soon as the list lands, so Start ingest is
+  // reachable without a second decision. The user can still choose another.
+  const vaultList = Array.isArray(vaults) ? vaults : [];
+  useEffect(() => {
+    const list = Array.isArray(vaults) ? vaults : [];
+    if (vaultId === "" && list.length > 0) setVaultId(list[0]?.id ?? "");
+  }, [vaults, vaultId]);
+
+  // Seed the settings fields from the server's copy. Optional chaining because
+  // a stub or a future server shape may omit a block; an absent block renders
+  // as empty, never as a crash.
+  const server = settings?.settings;
+  useEffect(() => {
+    if (server === undefined) return;
+    setLlmModel(server?.llm?.model ?? "");
+    setFetchDelayMs(
+      server?.fetch?.delayMs === undefined ? "" : String(server.fetch.delayMs),
+    );
+    setFetchConcurrency(
+      server?.fetch?.concurrency === undefined ? "" : String(server.fetch.concurrency),
+    );
+    setFetchLanguage(server?.fetch?.language ?? "");
+  }, [server]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -88,6 +158,90 @@ export function Settings() {
     }
   };
 
+  /**
+   * The exact filter set both routes receive. A web job carries no video-only
+   * field: its server arm is `.strict()`, so a stray `maxVideos` would turn a
+   * valid click into a 400.
+   */
+  const filters = (): Omit<PreviewInput, "kind"> => {
+    const body: Omit<PreviewInput, "kind"> = {};
+    if (kind === "web") {
+      body.url = sourceUrl.trim();
+    } else {
+      body.channelUrl = sourceUrl.trim();
+      const max = Number(maxVideos);
+      if (maxVideos !== "" && Number.isFinite(max)) body.maxVideos = max;
+      if (dateFrom !== "") body.dateFrom = dateFrom;
+      if (dateTo !== "") body.dateTo = dateTo;
+      const minDuration = Number(minDurationSec);
+      if (minDurationSec !== "" && Number.isFinite(minDuration)) {
+        body.minDurationSec = minDuration;
+      }
+    }
+    if (language.trim() !== "") body.language = language.trim();
+    return body;
+  };
+
+  const onPreview = () => runPreview({ kind, ...filters() });
+
+  const onStart = () => {
+    const input: StartJobInput = { vaultId, kind, ...filters() };
+    return startIngest(input);
+  };
+
+  const onCreateVault = async () => {
+    const name = newVaultName.trim();
+    if (name === "") return;
+    setVaultError(null);
+    try {
+      const created = await createVault(name);
+      setVaultId(created.id);
+      setNewVaultName("");
+    } catch (e) {
+      setVaultError((e as Error).message);
+    }
+  };
+
+  /**
+   * Persist one settings field on blur. The server merges the patch; a failure
+   * is reported through `settingsError`, and the field keeps what the user
+   * typed rather than snapping back.
+   */
+  const saveLlm = () => {
+    const model = llmModel.trim();
+    if (model === "" || model === (server?.llm?.model ?? "")) return;
+    void saveSettings({ llm: { model } });
+  };
+
+  const saveFetch = () => {
+    const patch: NonNullable<SettingsPatch["fetch"]> = {};
+    const delayMs = Number(fetchDelayMs);
+    if (fetchDelayMs !== "" && Number.isFinite(delayMs)) patch.delayMs = delayMs;
+    const concurrency = Number(fetchConcurrency);
+    if (fetchConcurrency !== "" && Number.isFinite(concurrency)) {
+      patch.concurrency = concurrency;
+    }
+    const lang = fetchLanguage.trim();
+    if (lang !== "" && lang !== (server?.fetch?.language ?? "")) patch.language = lang;
+    if (Object.keys(patch).length > 0) void saveSettings({ fetch: patch });
+  };
+
+  // The server decides whether a key exists. An unconfigured server says so
+  // before the button is pressed: the probe cannot succeed, so inviting the
+  // press would only produce a worse version of the same sentence.
+  const testMessage =
+    settings === null || settings === undefined
+      ? null
+      : settings.llmConfigured === false
+        ? "Set OLLAMA_API_KEY and restart."
+        : testLlmResult === null
+          ? null
+          : testLlmResult.ok
+            ? `Ollama replied in ${testLlmResult.latencyMs ?? 0} ms.`
+            : `Test failed: ${testLlmResult.reason ?? "unknown error"}.`;
+  const testFailed =
+    settings?.llmConfigured === false || (testLlmResult !== null && !testLlmResult.ok);
+
   return (
     <div
       className="modal-backdrop"
@@ -119,35 +273,271 @@ export function Settings() {
           Ollama API key is not configured. Set OLLAMA_API_KEY and restart.
         </Banner>
 
-        <section aria-label="Server">
-          <span className="subhead">Server</span>
-          {healthError ? (
-            <p className="muted" role="alert" style={{ marginBottom: 0 }}>
-              Couldn't reach the server. Try again in a moment.
-            </p>
-          ) : health ? (
-            <dl style={{ margin: "var(--sp-2) 0 0" }}>
-              <HealthRow label="Status" value={health.status} />
-              <HealthRow label="Service" value={`${health.service} v${health.version}`} />
-              <HealthRow label="Uptime" value={formatUptime(health.uptimeSec)} />
-            </dl>
-          ) : (
-            <p className="muted" aria-busy="true" style={{ marginBottom: 0 }}>
-              Checking…
-            </p>
-          )}
+        <section aria-label="Ingest">
+          <span className="subhead">Ingest</span>
+          <div className="settings-form" style={{ marginTop: "var(--sp-2)" }}>
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="field-label">Source kind</span>
+                <MenuSelect<JobKind>
+                  value={kind}
+                  options={[
+                    { value: "youtube", label: "YouTube channel" },
+                    { value: "web", label: "Web page" },
+                  ]}
+                  onSelect={(next) => {
+                    setKind(next);
+                    setSourceUrl("");
+                  }}
+                  ariaLabel="Source kind"
+                  triggerClassName="ghost-pill"
+                  direction="down"
+                />
+              </div>
+              <div className="settings-field">
+                <label className="field-label" htmlFor="ingest-source-url">
+                  {kind === "youtube" ? "Channel URL" : "Page URL"}
+                </label>
+                <input
+                  id="ingest-source-url"
+                  type="url"
+                  value={sourceUrl}
+                  placeholder={
+                    kind === "youtube"
+                      ? "https://www.youtube.com/@studio"
+                      : "https://example.com/article"
+                  }
+                  onChange={(e) => setSourceUrl(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {kind === "youtube" && (
+              <div className="settings-grid">
+                <div className="settings-field">
+                  <label className="field-label" htmlFor="ingest-max-videos">
+                    Max videos
+                  </label>
+                  <input
+                    id="ingest-max-videos"
+                    type="number"
+                    min={1}
+                    value={maxVideos}
+                    onChange={(e) => setMaxVideos(e.target.value)}
+                  />
+                </div>
+                <div className="settings-field">
+                  <label className="field-label" htmlFor="ingest-date-from">
+                    Date from
+                  </label>
+                  <input
+                    id="ingest-date-from"
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                  />
+                </div>
+                <div className="settings-field">
+                  <label className="field-label" htmlFor="ingest-date-to">
+                    Date to
+                  </label>
+                  <input
+                    id="ingest-date-to"
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                  />
+                </div>
+                <div className="settings-field">
+                  <label className="field-label" htmlFor="ingest-min-duration">
+                    Min duration (sec)
+                  </label>
+                  <input
+                    id="ingest-min-duration"
+                    type="number"
+                    min={0}
+                    value={minDurationSec}
+                    onChange={(e) => setMinDurationSec(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="settings-field">
+              <label className="field-label" htmlFor="ingest-language">
+                Language
+              </label>
+              <input
+                id="ingest-language"
+                type="text"
+                value={language}
+                placeholder="en"
+                onChange={(e) => setLanguage(e.target.value)}
+              />
+            </div>
+
+            <div className="settings-actions">
+              <AsyncButton
+                onClick={onPreview}
+                disabled={previewLoading}
+                spinnerTone="neutral"
+              >
+                Preview selection
+              </AsyncButton>
+            </div>
+
+            {previewResult !== null && (
+              <p className="settings-result">
+                Estimated {previewResult.estimatedCalls} LLM calls, about{" "}
+                {previewResult.estimatedMinutes} min after commit.
+              </p>
+            )}
+            <Banner show={previewError !== null} role="alert">
+              {previewError}
+            </Banner>
+
+            <div className="settings-grid">
+              <div className="settings-field">
+                <span className="field-label">Vault</span>
+                {vaultList.length === 0 ? (
+                  <p className="muted" style={{ margin: 0 }}>
+                    No vaults yet.
+                  </p>
+                ) : (
+                  <MenuSelect<string>
+                    value={vaultId}
+                    options={vaultList.map((v) => ({ value: v.id, label: v.name }))}
+                    onSelect={setVaultId}
+                    ariaLabel="Vault"
+                    triggerClassName="ghost-pill"
+                    direction="down"
+                  />
+                )}
+              </div>
+              <div className="settings-field">
+                <label className="field-label" htmlFor="ingest-new-vault">
+                  New vault
+                </label>
+                <div className="settings-row">
+                  <input
+                    id="ingest-new-vault"
+                    type="text"
+                    value={newVaultName}
+                    placeholder="Studio notes"
+                    onChange={(e) => setNewVaultName(e.target.value)}
+                  />
+                  <AsyncButton
+                    onClick={onCreateVault}
+                    disabled={newVaultName.trim() === ""}
+                    spinnerTone="neutral"
+                  >
+                    Create vault
+                  </AsyncButton>
+                </div>
+              </div>
+            </div>
+            {vaultError !== null && (
+              <p className="muted" role="alert" style={{ margin: 0 }}>
+                {vaultError}
+              </p>
+            )}
+
+            <div className="settings-actions">
+              <AsyncButton
+                className="primary"
+                onClick={onStart}
+                disabled={vaultId === "" || ingestStarting}
+              >
+                Start ingest
+              </AsyncButton>
+            </div>
+            <Banner show={ingestError !== null} role="alert">
+              {ingestError}
+            </Banner>
+          </div>
+        </section>
+
+        <section className="settings-section" aria-label="LLM">
+          <span className="subhead">LLM</span>
+          <div className="settings-form" style={{ marginTop: "var(--sp-2)" }}>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="llm-model">
+                Model
+              </label>
+              <input
+                id="llm-model"
+                type="text"
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                onBlur={saveLlm}
+              />
+            </div>
+            <div className="settings-actions">
+              <AsyncButton onClick={runTestConnection} spinnerTone="neutral">
+                Test connection
+              </AsyncButton>
+            </div>
+            <Banner show={testMessage !== null} role={testFailed ? "alert" : "status"}>
+              {testMessage}
+            </Banner>
+          </div>
+        </section>
+
+        <section className="settings-section" aria-label="Fetch">
+          <span className="subhead">Fetch</span>
+          <div className="settings-grid" style={{ marginTop: "var(--sp-2)" }}>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="fetch-delay">
+                Delay (ms)
+              </label>
+              <input
+                id="fetch-delay"
+                type="number"
+                min={0}
+                value={fetchDelayMs}
+                onChange={(e) => setFetchDelayMs(e.target.value)}
+                onBlur={saveFetch}
+              />
+            </div>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="fetch-concurrency">
+                Concurrency
+              </label>
+              <input
+                id="fetch-concurrency"
+                type="number"
+                min={1}
+                value={fetchConcurrency}
+                onChange={(e) => setFetchConcurrency(e.target.value)}
+                onBlur={saveFetch}
+              />
+            </div>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="fetch-language">
+                Language
+              </label>
+              <input
+                id="fetch-language"
+                type="text"
+                value={fetchLanguage}
+                onChange={(e) => setFetchLanguage(e.target.value)}
+                onBlur={saveFetch}
+              />
+            </div>
+          </div>
         </section>
 
         <section className="settings-section" aria-label="YouTube cookie">
           <span className="subhead">YouTube cookie</span>
-          {settings === null ? (
+          {settings === null || settings === undefined ? (
             <p className="muted" aria-busy="true" style={{ margin: 0 }}>
               Checking…
             </p>
           ) : settings.hasYoutubeCookie ? (
             <p className="muted" style={{ margin: 0 }}>
               Cookie saved{" "}
-              {settings.youtubeCookieUpdatedAt === null
+              {settings.youtubeCookieUpdatedAt === null ||
+              settings.youtubeCookieUpdatedAt === undefined
                 ? "."
                 : `${formatWhen(settings.youtubeCookieUpdatedAt)}.`}
             </p>
@@ -185,6 +575,25 @@ export function Settings() {
           <Banner show={cookieNotice !== null} role="status">
             {cookieNotice}
           </Banner>
+        </section>
+
+        <section className="settings-section" aria-label="Server">
+          <span className="subhead">Server</span>
+          {healthError ? (
+            <p className="muted" role="alert" style={{ marginBottom: 0 }}>
+              Couldn't reach the server. Try again in a moment.
+            </p>
+          ) : health ? (
+            <dl style={{ margin: "var(--sp-2) 0 0" }}>
+              <HealthRow label="Status" value={health.status} />
+              <HealthRow label="Service" value={`${health.service} v${health.version}`} />
+              <HealthRow label="Uptime" value={formatUptime(health.uptimeSec)} />
+            </dl>
+          ) : (
+            <p className="muted" aria-busy="true" style={{ marginBottom: 0 }}>
+              Checking…
+            </p>
+          )}
         </section>
       </div>
 

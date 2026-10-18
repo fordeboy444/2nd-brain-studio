@@ -3,7 +3,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Settings } from "./Settings.js";
 import { useStore, type AppState } from "../store.js";
-import type { SettingsPayload } from "../lib/api.js";
+import type {
+  PreviewResult,
+  SettingsPayload,
+  TestLlmResult,
+  Vault,
+} from "../lib/api.js";
 
 /**
  * The Settings cookie block, driven through the real screen and the real store
@@ -58,6 +63,17 @@ const INITIAL: Partial<AppState> = {
     time: "2026-10-18T12:00:00Z",
   },
   healthError: null,
+  activeOverlay: "settings",
+  overlayOpen: true,
+};
+
+const VAULT: Vault = {
+  id: "v1",
+  name: "Studio",
+  path: "/data/vaults/studio",
+  sourceKind: "manual",
+  createdAt: "2026-10-18T12:00:00Z",
+  lastOpenedAt: "2026-10-18T12:00:00Z",
 };
 
 function json(payload: unknown, status = 200): Response {
@@ -73,6 +89,16 @@ interface Stub {
   current: SettingsPayload;
   uploads: Array<{ contentType: string; body: string }>;
   deletes: number;
+  settingsPuts: number;
+  vaults: Vault[];
+  tests: number;
+  testResult: TestLlmResult;
+  previewStatus: number;
+  previewResult: PreviewResult;
+  previews: Array<Record<string, unknown>>;
+  starts: Array<Record<string, unknown>>;
+  startStatus: number;
+  startHold: { promise: Promise<void>; release: () => void } | null;
 }
 
 let stub: Stub;
@@ -83,6 +109,47 @@ function stubServer(): void {
     const method = init?.method ?? "GET";
 
     if (url === "/api/settings" && method === "GET") return json(stub.current);
+    if (url === "/api/settings" && method === "PUT") {
+      stub.settingsPuts += 1;
+      return json(stub.current);
+    }
+
+    if (url === "/api/vaults" && method === "GET") return json(stub.vaults);
+    if (url === "/api/vaults" && method === "POST") {
+      const name = (JSON.parse(String(init?.body)) as { name: string }).name;
+      const created: Vault = {
+        id: "v-new",
+        name,
+        path: `/data/vaults/${name}`,
+        sourceKind: "manual",
+        createdAt: "2026-10-18T12:00:00Z",
+        lastOpenedAt: "2026-10-18T12:00:00Z",
+      };
+      stub.vaults = [...stub.vaults, created];
+      return json(created, 201);
+    }
+
+    if (url === "/api/settings/test-llm" && method === "POST") {
+      stub.tests += 1;
+      return json(stub.testResult);
+    }
+
+    if (url === "/api/jobs/preview" && method === "POST") {
+      stub.previews.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (stub.previewStatus !== 200) {
+        return json({ error: "bad_request", message: "nope" }, stub.previewStatus);
+      }
+      return json(stub.previewResult);
+    }
+
+    if (url === "/api/jobs" && method === "POST") {
+      stub.starts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      if (stub.startHold !== null) await stub.startHold.promise;
+      if (stub.startStatus !== 201) {
+        return json({ error: "bad_request", message: "nope" }, stub.startStatus);
+      }
+      return json({ id: "j1", status: "queued" }, 201);
+    }
 
     if (url === "/api/settings/youtube-cookie" && method === "POST") {
       const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
@@ -165,6 +232,48 @@ async function chooseCookie(
   });
 }
 
+function field(host: HTMLElement, id: string): HTMLInputElement {
+  const input = host.querySelector<HTMLInputElement>(`#${id}`);
+  if (input === null) throw new Error(`no field #${id}`);
+  return input;
+}
+
+/** Set a controlled input through React's own value setter, then raise `input`. */
+async function typeInto(
+  render: Mounted["render"],
+  host: HTMLElement,
+  id: string,
+  value: string,
+): Promise<HTMLInputElement> {
+  const input = field(host, id);
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  if (setter === undefined) throw new Error("no input value setter");
+  await render(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  return input;
+}
+
+function buttonByText(host: HTMLElement, text: string): HTMLButtonElement {
+  const found = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === text,
+  );
+  if (found === undefined) throw new Error(`no button "${text}"`);
+  return found;
+}
+
+function holdStart(): void {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  stub.startHold = { promise, release };
+}
+
 beforeEach(() => {
   useStore.setState(INITIAL);
   stub = {
@@ -173,6 +282,22 @@ beforeEach(() => {
     current: settingsPayload(),
     uploads: [],
     deletes: 0,
+    settingsPuts: 0,
+    vaults: [VAULT],
+    tests: 0,
+    testResult: { ok: true, latencyMs: 42 },
+    previewStatus: 200,
+    previewResult: {
+      found: 12,
+      selected: 5,
+      skipped: [],
+      estimatedCalls: 9,
+      estimatedMinutes: 4,
+    },
+    previews: [],
+    starts: [],
+    startStatus: 201,
+    startHold: null,
   };
   stubServer();
 });
@@ -258,4 +383,122 @@ it("renders the exact delete failure copy", async () => {
   await render(() => confirm!.click());
 
   expect(host.textContent).toContain("Couldn't remove the YouTube cookie. Try again in a moment.");
+});
+
+it("renders the ingest form, the LLM block, the fetch block and both CTAs", async () => {
+  const { host } = await mountSettings();
+
+  for (const id of [
+    "ingest-source-url",
+    "ingest-max-videos",
+    "ingest-date-from",
+    "ingest-date-to",
+    "ingest-min-duration",
+    "ingest-language",
+    "llm-model",
+    "fetch-delay",
+    "fetch-concurrency",
+    "fetch-language",
+  ]) {
+    expect(field(host, id)).toBeTruthy();
+  }
+  expect(host.textContent).toContain("Preview selection");
+  expect(host.textContent).toContain("Start ingest");
+  expect(host.textContent).toContain("Test connection");
+});
+
+it("renders the server's estimate verbatim after a preview", async () => {
+  const { host, render } = await mountSettings();
+  await typeInto(render, host, "ingest-source-url", "https://www.youtube.com/@studio");
+
+  await render(() => buttonByText(host, "Preview selection").click());
+
+  expect(stub.previews.length).toBe(1);
+  expect(stub.previews[0]?.kind).toBe("youtube");
+  expect(stub.previews[0]?.channelUrl).toBe("https://www.youtube.com/@studio");
+  expect(host.textContent).toContain("Estimated 9 LLM calls, about 4 min after commit.");
+});
+
+it("keeps every value and shows the exact copy when a preview fails", async () => {
+  stub.previewStatus = 500;
+  const { host, render } = await mountSettings();
+  await typeInto(render, host, "ingest-source-url", "https://www.youtube.com/@studio");
+  await typeInto(render, host, "ingest-max-videos", "10");
+  await typeInto(render, host, "ingest-date-from", "2026-01-01");
+
+  await render(() => buttonByText(host, "Preview selection").click());
+
+  expect(host.textContent).toContain(
+    "Couldn't preview this source. Check the URL and try again.",
+  );
+  expect(field(host, "ingest-source-url").value).toBe("https://www.youtube.com/@studio");
+  expect(field(host, "ingest-max-videos").value).toBe("10");
+  expect(field(host, "ingest-date-from").value).toBe("2026-01-01");
+  expect(host.textContent).not.toContain("Estimated");
+});
+
+it("disables Start ingest while a submit is in flight and starts one job", async () => {
+  holdStart();
+  const { host, render } = await mountSettings();
+  const start = buttonByText(host, "Start ingest");
+  expect(start.disabled).toBe(false);
+
+  await render(() => {
+    start.click();
+    // The second press is in the same tick: the guard must see the first.
+    start.click();
+  });
+
+  expect(start.disabled).toBe(true);
+  expect(start.getAttribute("aria-busy")).toBe("true");
+  expect(stub.starts.length).toBe(1);
+  expect(useStore.getState().ingestStarting).toBe(true);
+
+  await render(() => stub.startHold?.release());
+
+  expect(stub.starts.length).toBe(1);
+  expect(useStore.getState().ingestStarting).toBe(false);
+  expect(useStore.getState().activeOverlay).toBe("jobs");
+});
+
+it("shows the exact start-failure copy and keeps the typed values", async () => {
+  stub.startStatus = 400;
+  const { host, render } = await mountSettings();
+  await typeInto(render, host, "ingest-source-url", "https://www.youtube.com/@studio");
+  await typeInto(render, host, "ingest-min-duration", "300");
+
+  await render(() => buttonByText(host, "Start ingest").click());
+
+  expect(stub.starts.length).toBe(1);
+  expect(host.textContent).toContain(
+    "Couldn't start the job. Check the source URL and try again.",
+  );
+  expect(field(host, "ingest-source-url").value).toBe("https://www.youtube.com/@studio");
+  expect(field(host, "ingest-min-duration").value).toBe("300");
+});
+
+it("shows the exact Test connection success copy", async () => {
+  stub.testResult = { ok: true, latencyMs: 37 };
+  const { host, render } = await mountSettings();
+
+  await render(() => buttonByText(host, "Test connection").click());
+
+  expect(stub.tests).toBe(1);
+  expect(host.textContent).toContain("Ollama replied in 37 ms.");
+});
+
+it("shows the exact Test connection failure copy", async () => {
+  stub.testResult = { ok: false, reason: "timeout" };
+  const { host, render } = await mountSettings();
+
+  await render(() => buttonByText(host, "Test connection").click());
+
+  expect(host.textContent).toContain("Test failed: timeout.");
+});
+
+it("says the key is missing when the server is unconfigured", async () => {
+  stub.current = settingsPayload({ llmConfigured: false });
+  const { host } = await mountSettings();
+
+  expect(host.textContent).toContain("Set OLLAMA_API_KEY and restart.");
 });

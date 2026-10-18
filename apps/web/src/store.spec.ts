@@ -31,6 +31,8 @@ const INITIAL: Partial<AppState> = {
   previewError: null,
   ingestStarting: false,
   ingestError: null,
+  activeOverlay: "none",
+  overlayOpen: false,
 };
 
 const originalFetch = globalThis.fetch;
@@ -189,6 +191,48 @@ it("deletes the cookie and clears the presence flag", async () => {
   await useStore.getState().deleteCookie();
 
   expect(useStore.getState().settings?.hasYoutubeCookie).toBe(false);
+});
+
+it("starts one job when two calls race in the same tick", async () => {
+  let calls = 0;
+  let release = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  globalThis.fetch = vi.fn(async () => {
+    calls += 1;
+    await hold;
+    return json({ id: "j1", status: "queued" });
+  }) as unknown as typeof fetch;
+
+  const input = { vaultId: "v1", kind: "web" as const, url: "https://example.com" };
+  const first = useStore.getState().startIngest(input);
+  const second = useStore.getState().startIngest(input);
+
+  // The flag is set before the await, so the second call never reaches fetch.
+  expect(useStore.getState().ingestStarting).toBe(true);
+  release();
+  await Promise.all([first, second]);
+
+  expect(calls).toBe(1);
+  expect(useStore.getState().ingestStarting).toBe(false);
+  expect(useStore.getState().ingestError).toBeNull();
+  expect(useStore.getState().activeOverlay).toBe("jobs");
+});
+
+it("keeps the approved start-failure copy and releases the guard", async () => {
+  globalThis.fetch = vi.fn(async () =>
+    json({ error: "bad_request", message: "nope" }, 400),
+  ) as unknown as typeof fetch;
+
+  await useStore
+    .getState()
+    .startIngest({ vaultId: "v1", kind: "web", url: "https://example.com" });
+
+  expect(useStore.getState().ingestError).toBe(
+    "Couldn't start the job. Check the source URL and try again.",
+  );
+  expect(useStore.getState().ingestStarting).toBe(false);
 });
 
 it("keeps the last list on a failed load and records the error", async () => {
