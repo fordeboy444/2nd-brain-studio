@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { seedStages, useStore, type AppState } from "./store.js";
+import { liveStagesFor, seedStages, useStore, type AppState } from "./store.js";
 import type { JobSummary, Vault } from "./lib/api.js";
 import { clearToasts, getToasts } from "./lib/toast.js";
 
@@ -117,7 +117,33 @@ it("derives the stepper from the job's own stage pointer", () => {
     activeStage: "S1w",
   });
   expect(seedStages(makeJob({ stage: "done" }))).toEqual({
-    stagesDone: ["S0", "S1"],
+    stagesDone: ["S0", "S1", "S2", "S3", "S4", "S5"],
+    activeStage: null,
+  });
+});
+
+it("lists every live stage per kind, and S6 only when the sweep is on", () => {
+  expect(liveStagesFor("youtube", false)).toEqual(["S0", "S1", "S2", "S3", "S4", "S5"]);
+  expect(liveStagesFor("web", false)).toEqual(["S0", "S1w", "S2", "S3", "S4", "S5"]);
+  expect(liveStagesFor("youtube", true)).toEqual([
+    "S0",
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+  ]);
+  expect(liveStagesFor("web", true)).toEqual(["S0", "S1w", "S2", "S3", "S4", "S5", "S6"]);
+});
+
+it("seeds an S3 job from the widened live table, honoring its sweep flag", () => {
+  expect(seedStages(makeJob({ stage: "S3", settings: { sweep: { enabled: false } } }))).toEqual({
+    stagesDone: ["S0", "S1", "S2"],
+    activeStage: "S3",
+  });
+  expect(seedStages(makeJob({ stage: "done", settings: { sweep: { enabled: true } } }))).toEqual({
+    stagesDone: ["S0", "S1", "S2", "S3", "S4", "S5", "S6"],
     activeStage: null,
   });
 });
@@ -177,7 +203,7 @@ it("reseeds the stepper when a poll ends the selected job while the stream is do
 
   expect(useStore.getState().selectedJob?.status).toBe("completed");
   expect(useStore.getState().activeStage).toBeNull();
-  expect(useStore.getState().stagesDone).toEqual(["S0", "S1"]);
+  expect(useStore.getState().stagesDone).toEqual(["S0", "S1", "S2", "S3", "S4", "S5"]);
 });
 
 it("does not let a slow poll reopen a job the stream already finished", async () => {
@@ -281,6 +307,23 @@ it("deletes the cookie and clears the presence flag", async () => {
   await useStore.getState().deleteCookie();
 
   expect(useStore.getState().settings?.hasYoutubeCookie).toBe(false);
+});
+
+it("resolves true after a settings write and false instead of throwing", async () => {
+  globalThis.fetch = vi.fn(async () => json(SETTINGS_PAYLOAD)) as unknown as typeof fetch;
+  await expect(
+    useStore.getState().saveSettings({ sweep: { enabled: true } }),
+  ).resolves.toBe(true);
+  expect(useStore.getState().settingsError).toBeNull();
+
+  globalThis.fetch = vi.fn(async () =>
+    json({ error: "io", message: "down" }, 500),
+  ) as unknown as typeof fetch;
+  // The switch needs a value, not a rejection: false is the whole failure signal.
+  await expect(
+    useStore.getState().saveSettings({ sweep: { enabled: false } }),
+  ).resolves.toBe(false);
+  expect(useStore.getState().settingsError).toBe("down");
 });
 
 it("starts one job when two calls race in the same tick", async () => {

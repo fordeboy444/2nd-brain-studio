@@ -9,6 +9,7 @@ import type {
   TestLlmResult,
   Vault,
 } from "../lib/api.js";
+import { clearToasts, getToasts } from "../lib/toast.js";
 
 /**
  * The Settings cookie block, driven through the real screen and the real store
@@ -30,7 +31,8 @@ function settingsPayload(over: Partial<SettingsPayload> = {}): SettingsPayload {
     settings: {
       llm: { model: "llama", concurrency: 1, requestTimeoutMs: 1000, maxRetries: 3 },
       fetch: { delayMs: 1000, concurrency: 2, language: "en" },
-      sweep: { enabled: true },
+      // The server's default: the expensive sweep is opt-in.
+      sweep: { enabled: false },
       ui: { theme: "system" },
     },
     hasYoutubeCookie: false,
@@ -92,6 +94,8 @@ interface Stub {
   headerStatus: number;
   deletes: number;
   settingsPuts: number;
+  settingsPutStatus: number;
+  settingsPatches: Array<Record<string, unknown>>;
   vaults: Vault[];
   tests: number;
   testResult: TestLlmResult;
@@ -113,6 +117,18 @@ function stubServer(): void {
     if (url === "/api/settings" && method === "GET") return json(stub.current);
     if (url === "/api/settings" && method === "PUT") {
       stub.settingsPuts += 1;
+      const patch = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      stub.settingsPatches.push(patch);
+      if (stub.settingsPutStatus !== 200) {
+        return json({ error: "io", message: "nope" }, stub.settingsPutStatus);
+      }
+      const sweep = patch.sweep as { enabled?: boolean } | undefined;
+      if (sweep?.enabled !== undefined) {
+        stub.current = {
+          ...stub.current,
+          settings: { ...stub.current.settings, sweep: { enabled: sweep.enabled } },
+        };
+      }
       return json(stub.current);
     }
 
@@ -321,6 +337,7 @@ function holdStart(): void {
 
 beforeEach(() => {
   useStore.setState(INITIAL);
+  clearToasts();
   stub = {
     uploadStatus: 200,
     deleteStatus: 200,
@@ -330,6 +347,8 @@ beforeEach(() => {
     headerStatus: 200,
     deletes: 0,
     settingsPuts: 0,
+    settingsPutStatus: 200,
+    settingsPatches: [],
     vaults: [VAULT],
     tests: 0,
     testResult: { ok: true, latencyMs: 42 },
@@ -600,4 +619,87 @@ it("sends nothing and asks for a header when the textarea is empty", async () =>
   expect(stub.headerUploads.length).toBe(0);
   expect(host.textContent).toContain("Paste a Cookie header first.");
   expect(host.textContent).not.toContain("YouTube cookie saved.");
+});
+
+/* -------------------------------------------------------------------------
+   Deep quality sweep
+   ------------------------------------------------------------------------- */
+
+function payloadWithSweep(enabled: boolean): SettingsPayload {
+  const base = settingsPayload();
+  return { ...base, settings: { ...base.settings, sweep: { enabled } } };
+}
+
+function sweepSwitch(host: HTMLElement): HTMLInputElement {
+  const input = host.querySelector<HTMLInputElement>(
+    'input[aria-label="Deep quality sweep"]',
+  );
+  if (input === null) throw new Error("no sweep switch");
+  return input;
+}
+
+async function toggleSweep(
+  host: HTMLElement,
+  render: Mounted["render"],
+): Promise<HTMLInputElement> {
+  const input = sweepSwitch(host);
+  await render(() => input.click());
+  // The toggle starts an async save; let its continuation land before asserting.
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+  return input;
+}
+
+it("renders the sweep switch off by default with the exact label, help and off line", async () => {
+  const { host } = await mountSettings();
+
+  const section = host.querySelector('section[aria-label="Deep quality sweep"]');
+  expect(section).toBeTruthy();
+  expect(section?.textContent).toContain("Deep quality sweep");
+  expect(section?.textContent).toContain(
+    "Fills gaps and triages notability. Adds LLM calls. Off by default.",
+  );
+  expect(
+    [...(section?.querySelectorAll("p") ?? [])].some(
+      (p) => p.textContent === "Off by default.",
+    ),
+  ).toBe(true);
+  expect(sweepSwitch(host).checked).toBe(false);
+});
+
+it("shows the value the server persisted", async () => {
+  stub.current = payloadWithSweep(true);
+  const { host } = await mountSettings();
+
+  expect(sweepSwitch(host).checked).toBe(true);
+});
+
+it("saves the sweep toggle and leaves the new value in place on success", async () => {
+  const { host, render } = await mountSettings();
+
+  const input = await toggleSweep(host, render);
+
+  expect(stub.settingsPuts).toBe(1);
+  expect(stub.settingsPatches[0]).toEqual({ sweep: { enabled: true } });
+  expect(input.checked).toBe(true);
+  expect(getToasts()).toEqual([]);
+});
+
+it("reverts the sweep switch and shows the exact toast when the save fails", async () => {
+  stub.settingsPutStatus = 500;
+  const { host, render } = await mountSettings();
+
+  const input = await toggleSweep(host, render);
+
+  expect(stub.settingsPuts).toBe(1);
+  // The switch never shows a value the server did not accept.
+  expect(input.checked).toBe(false);
+  const toasts = getToasts();
+  expect(toasts.map((t) => t.text)).toEqual([
+    "Couldn't save the sweep setting. Try again in a moment.",
+  ]);
+  expect(toasts[0]?.tone).toBe("error");
 });

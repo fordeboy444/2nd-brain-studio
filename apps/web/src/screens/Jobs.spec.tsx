@@ -291,8 +291,16 @@ it("opens exactly one EventSource per selection and closes the previous one", as
   expect(lastSource().closed).toBe(true);
 });
 
-it("advances the stepper from stage events and keeps S2-S6 visibly pending", async () => {
-  serverJobs = [makeJob()];
+function stageCell(host: HTMLElement, name: string): HTMLElement {
+  const cell = [...host.querySelectorAll<HTMLElement>(".job-stage")].find(
+    (el) => el.querySelector(".job-stage-name")?.textContent === name,
+  );
+  if (cell === undefined) throw new Error(`no stage cell ${name}`);
+  return cell;
+}
+
+it("advances the stepper through S2-S5 and marks S6 unused when sweep is off", async () => {
+  serverJobs = [makeJob({ settings: { sweep: { enabled: false } } })];
   const { host, render } = await mountJobs();
   await selectRow(host, 0, render);
   const source = lastSource();
@@ -300,22 +308,59 @@ it("advances the stepper from stage events and keeps S2-S6 visibly pending", asy
 
   await render(() => source.emit("stage", { stage: "S0", status: "completed" }, 1));
   await render(() => source.emit("stage", { stage: "S1", status: "started" }, 2));
+  await render(() => source.emit("stage", { stage: "S1", status: "completed" }, 3));
+  await render(() => source.emit("stage", { stage: "S2", status: "started" }, 4));
 
-  const at = (name: string): HTMLElement => {
-    const cell = [...host.querySelectorAll<HTMLElement>(".job-stage")].find(
-      (el) => el.querySelector(".job-stage-name")?.textContent === name,
-    );
-    if (cell === undefined) throw new Error(`no stage cell ${name}`);
-    return cell;
-  };
+  expect(stageCell(host, "S0").dataset.state).toBe("done");
+  expect(stageCell(host, "S1").dataset.state).toBe("done");
+  expect(stageCell(host, "S1w").textContent).toContain("Not used for this source");
+  expect(stageCell(host, "S2").dataset.state).toBe("active");
+  expect(stageCell(host, "S3").dataset.state).toBe("pending");
+  expect(stageCell(host, "S4").dataset.state).toBe("pending");
+  expect(stageCell(host, "S5").dataset.state).toBe("pending");
+  // S6 is not pending: when the sweep is off, that stage will not run.
+  expect(stageCell(host, "S6").dataset.state).toBe("unused");
+  expect(stageCell(host, "S6").textContent).toContain("Deep quality sweep is off.");
+  expect(host.textContent).not.toContain("Pending Phase");
 
-  expect(at("S0").dataset.state).toBe("done");
-  expect(at("S1").dataset.state).toBe("active");
-  expect(at("S1w").textContent).toContain("Not used for this source");
-  expect(at("S2").dataset.state).toBe("pending");
-  expect(at("S2").textContent).toContain("Pending Phase 4");
-  expect(at("S5").dataset.state).toBe("pending");
-  expect(at("S5").textContent).toContain("Pending Phase 5");
+  // A stray S6 frame must not advance a stage this job will never run.
+  await render(() => source.emit("stage", { stage: "S6", status: "started" }, 5));
+  expect(stageCell(host, "S6").dataset.state).toBe("unused");
+  expect(stageCell(host, "S2").dataset.state).toBe("active");
+});
+
+it("shows S6 as a live stage when the job was created with sweep on", async () => {
+  serverJobs = [makeJob({ settings: { sweep: { enabled: true } } })];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  await render(() => source.emit("stage", { stage: "S6", status: "started" }, 1));
+
+  expect(stageCell(host, "S6").dataset.state).toBe("active");
+  // The progress denominator is the job's live list, S6 included.
+  expect(host.querySelector(".job-progress")?.getAttribute("aria-valuemax")).toBe("7");
+});
+
+it("keeps the last known stage and the keepalive indicator while a poll is in flight", async () => {
+  serverJobs = [makeJob({ stage: "S2" })];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  // The record's own pointer seeds the stepper before any frame arrives.
+  expect(stageCell(host, "S2").dataset.state).toBe("active");
+  expect(host.querySelector(".job-live")).toBeTruthy();
+
+  await act(async () => {
+    useStore.setState({ jobsLoading: true });
+  });
+  // A poll in flight is a list hint; it never blanks the stage on screen.
+  expect(host.textContent).toContain("Checking…");
+  expect(stageCell(host, "S2").dataset.state).toBe("active");
+  expect(host.querySelector(".job-live")).toBeTruthy();
 });
 
 it("closes the source once on done and leaves no replacement stream", async () => {
