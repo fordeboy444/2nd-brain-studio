@@ -100,6 +100,20 @@ export interface JobProgress {
   total: number;
 }
 
+/**
+ * One unit a retry re-runs, named by the stage that recorded it (PIPE-12).
+ * The pair is copied from `skipped[]`; no request value ever creates one.
+ */
+export interface JobRetryUnit {
+  slug: string;
+  stage: Exclude<StageName, "done">;
+}
+
+/** The narrow scope of one retry, persisted on the record until it finishes. */
+export interface JobRetry {
+  units: JobRetryUnit[];
+}
+
 export interface JobRecord {
   id: string;
   vaultId: string;
@@ -113,6 +127,11 @@ export interface JobRecord {
   updatedAt: string;
   progress: JobProgress;
   skipped: SkippedUnit[];
+  /**
+   * Present only while a retry run is pending or active. The stages read it to
+   * narrow their unit loops; `runJob` clears it before the final persist.
+   */
+  retry?: JobRetry;
   error: string | null;
   cancelRequested: boolean;
 }

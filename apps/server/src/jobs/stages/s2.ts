@@ -118,7 +118,13 @@ async function readCaptureOnce(
   return { slug, ...capture };
 }
 
-/** Every `.md` under `raw/`, as slugs, sorted. */
+/**
+ * S5 writes `raw/index.md` into the same folder. It is a generated index, not
+ * a capture, so S2 must never read it as one.
+ */
+const GENERATED_RAW_SLUGS: ReadonlySet<string> = new Set(["index"]);
+
+/** Every capture `.md` under `raw/`, as slugs, sorted. */
 async function captureSlugs(vaultDir: string): Promise<string[]> {
   const { absPath } = await resolveInVault(vaultDir, "raw");
   let names: string[];
@@ -131,7 +137,8 @@ async function captureSlugs(vaultDir: string): Promise<string[]> {
     .sort()
     .filter((name) => name.endsWith(".md"))
     .map((name) => name.slice(0, -".md".length))
-    .filter((slug) => EXTRACTION_SLUG_RE.test(slug));
+    .filter((slug) => EXTRACTION_SLUG_RE.test(slug))
+    .filter((slug) => !GENERATED_RAW_SLUGS.has(slug));
 }
 
 /** The record a failed unit still leaves behind, so the raw index keeps its row. */

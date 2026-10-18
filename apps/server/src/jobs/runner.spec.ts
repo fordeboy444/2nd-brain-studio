@@ -14,6 +14,8 @@ import {
 } from "./capture.js";
 import {
   createJobQueue,
+  retryJobRecord,
+  retryUnitsFor,
   runJob,
   slugForCandidate,
   type StageDeps,
@@ -1508,5 +1510,185 @@ describe("cancel", () => {
     const events = await readEvents(join(root, ".okf", "jobs", job.id), 0);
     const done = events.find((event) => event.type === "done");
     expect(done?.data.status).toBe("cancelled");
+  });
+});
+
+describe("retry scope (PIPE-12)", () => {
+  it("collects only S2, S3, S4 and S6 entries, deduped and sorted", () => {
+    const job = makeVideoJob({
+      skipped: [
+        { slug: "alpha", stage: "S2", reason: "malformed_json" },
+        { slug: "alpha", stage: "S2", reason: "model_error" },
+        { slug: "labels-0", stage: "S3", reason: "model_error" },
+        { slug: "gamma", stage: "S4", reason: "model_error" },
+        { slug: "some-label", stage: "S6", reason: "model_error" },
+        { slug: "beta", stage: "S1", reason: "no_captions" },
+      ],
+    });
+
+    expect(retryUnitsFor(job, "S2")).toEqual([
+      { slug: "alpha", stage: "S2" },
+    ]);
+    expect(retryUnitsFor(job, "S3")).toEqual([
+      { slug: "labels-0", stage: "S3" },
+    ]);
+    expect(retryUnitsFor(job, "S4")).toEqual([
+      { slug: "gamma", stage: "S4" },
+    ]);
+    expect(retryUnitsFor(job, "S6")).toEqual([
+      { slug: "some-label", stage: "S6" },
+    ]);
+    // S5 is code-only: a failure there fails the job, so it is not retryable.
+    expect(retryUnitsFor(job, "S5")).toEqual([]);
+  });
+
+  it("treats an S1-only failure as nothing to retry and keeps the entry", () => {
+    const job = makeVideoJob({
+      status: "completed",
+      stage: "done",
+      skipped: [{ slug: "beta", stage: "S1", reason: "no_captions" }],
+    });
+
+    expect(retryJobRecord(job)).toEqual({ error: "no_failed" });
+    expect(job.skipped).toEqual([
+      { slug: "beta", stage: "S1", reason: "no_captions" },
+    ]);
+    expect(job.retry).toBeUndefined();
+    expect(job.status).toBe("completed");
+  });
+
+  it("resets an S3 failure to the S3 barrier", () => {
+    const job = makeVideoJob({
+      status: "completed",
+      stage: "done",
+      skipped: [{ slug: "labels-0", stage: "S3", reason: "model_error" }],
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S3" });
+    expect(job.stage).toBe("S3");
+    expect(job.status).toBe("queued");
+    expect(job.retry?.units).toEqual([{ slug: "labels-0", stage: "S3" }]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("records an S6 unit", () => {
+    const job = makeVideoJob({
+      status: "completed",
+      stage: "done",
+      skipped: [{ slug: "some-label", stage: "S6", reason: "model_error" }],
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S6" });
+    expect(job.retry?.units).toEqual([{ slug: "some-label", stage: "S6" }]);
+  });
+
+  it("refuses a queued or running job", () => {
+    for (const status of ["queued", "running"] as const) {
+      const job = makeVideoJob({
+        status,
+        skipped: [{ slug: "alpha", stage: "S2", reason: "model_error" }],
+      });
+      expect(retryJobRecord(job)).toEqual({ error: "running" });
+      expect(job.retry).toBeUndefined();
+    }
+  });
+
+  it("starts at the earliest failed stage and keeps both removed entries out", () => {
+    const job = makeVideoJob({
+      status: "failed",
+      stage: "done",
+      error: "stage_failed",
+      cancelRequested: true,
+      progress: { done: 4, total: 4 },
+      skipped: [
+        { slug: "alpha", stage: "S2", reason: "malformed_json" },
+        { slug: "gamma", stage: "S4", reason: "model_error" },
+      ],
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S2" });
+    expect(job.retry?.units).toEqual([
+      { slug: "alpha", stage: "S2" },
+      { slug: "gamma", stage: "S4" },
+    ]);
+    expect(job.skipped).toEqual([]);
+    expect(job.error).toBeNull();
+    expect(job.cancelRequested).toBe(false);
+    expect(job.progress).toEqual({ done: 0, total: 0 });
+  });
+
+  /** A pipeline client that rejects every S2 call for one source title. */
+  function failingS2Client(failTitle: string): {
+    calls: PipelineCall[];
+    client: LlmClient;
+  } {
+    const inner = pipelineLlm();
+    const client: LlmClient = {
+      async chat(messages, options) {
+        const system = messages[0]?.content ?? "";
+        if (stageOf(system) === "S2") {
+          const user = messages[1]?.content ?? "";
+          const title = /^Title: (.*)$/m.exec(user)?.[1];
+          if (title === failTitle) throw new Error("model unavailable");
+        }
+        return inner.client.chat(messages, options);
+      },
+    };
+    return { calls: inner.calls, client };
+  }
+
+  it("retries only the failed S2 unit, and the cache makes the retry free", async () => {
+    const counters = { fetchTranscript: 0, fetchWeb: 0 };
+    const job = makeVideoJob();
+    await runPipeline(job, failingS2Client("Agent talk").client, counters);
+    expect(job.skipped.map(({ slug, stage }) => ({ slug, stage }))).toEqual([
+      { slug: "agent-talk", stage: "S2" },
+    ]);
+
+    // A second job over the same vault seeds the cache for that unit.
+    await runPipeline(makeVideoJob(), pipelineLlm().client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S2" });
+    expect(job.retry?.units).toEqual([{ slug: "agent-talk", stage: "S2" }]);
+    expect(job.skipped).toEqual([]);
+    await writeJob(root, job);
+
+    const retry = pipelineLlm();
+    await runJob(job, makeDeps({ llm: retry.client }));
+
+    // The retried unit is a cache hit: no S2 call, and the partial page is gone.
+    expect(retry.calls.filter((call) => call.stage === "S2")).toEqual([]);
+    expect(job.skipped).toEqual([]);
+    const extraction = JSON.parse(
+      await readFile(
+        join(root, ".okf", "jobs", job.id, "extractions", "agent-talk.json"),
+        "utf8",
+      ),
+    ) as { partial?: boolean; summary: string };
+    expect(extraction.partial).toBeUndefined();
+    expect(extraction.summary).toBe("Summary of Agent talk.");
+  });
+
+  it("returns the unit to skipped[] when the retry fails again", async () => {
+    const settings: JobSettings = {
+      ...SETTINGS,
+      llm: { ...SETTINGS.llm, model: "failing-model" },
+    };
+    const job = makeVideoJob({ settings });
+    await runPipeline(job, failingS2Client("Agent talk").client, {
+      fetchTranscript: 0,
+      fetchWeb: 0,
+    });
+
+    expect(retryJobRecord(job)).toEqual({ stage: "S2" });
+    await writeJob(root, job);
+    await runJob(job, makeDeps({ llm: failingS2Client("Agent talk").client }));
+
+    expect(job.skipped.map(({ slug, stage }) => ({ slug, stage }))).toEqual([
+      { slug: "agent-talk", stage: "S2" },
+    ]);
   });
 });

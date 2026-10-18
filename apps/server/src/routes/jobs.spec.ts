@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { JobRecord } from "../jobs/types.js";
 
 /**
  * The queue is mocked so a route test can assert the record the API persisted
@@ -102,9 +103,11 @@ async function reload() {
   const routes = await import("./jobs.js");
   const registry = await import("../vaults/registry.js");
   const store = await import("../jobs/store.js");
+  const cfg = await import("../config.js");
   return {
     jobs: routes.jobs,
     sseOptions: routes.sseOptions,
+    config: cfg.config,
     createVault: registry.createVault,
     vaultDirPath: registry.vaultDirPath,
     readJob: store.readJob,
@@ -272,6 +275,7 @@ describe("POST /api/jobs", () => {
     expect(onDisk.input.url).toBe("https://example.com/post");
     expect(onDisk.settings.maxVideos).toBe(1);
     expect(onDisk.settings.filters).toEqual({ language: "de" });
+    expect(onDisk.settings.llm.baseUrl).toBe(routes.config.ollamaBaseUrl);
     // A web job never enumerates a channel.
     expect(enumHarness.calls).toBe(0);
     expect(harness.enqueued.map((job) => job.id)).toEqual([body.id]);
@@ -785,5 +789,198 @@ describe("DELETE /api/jobs/:id", () => {
     });
     expect(res.status).toBe(403);
     expect(harness.cancelled).toHaveLength(0);
+  });
+});
+
+describe("POST /api/jobs/:id/retry", () => {
+  /** Create a job through the API, then put it in the state a run left behind. */
+  async function settled(
+    routes: Routes,
+    vaultId: string,
+    vaultDir: string,
+    skipped: JobRecord["skipped"],
+  ): Promise<string> {
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+    ).json()) as { id: string };
+
+    const job = await routes.readJob(vaultDir, created.id);
+    job.status = "completed";
+    job.stage = "done";
+    job.error = "model_error";
+    job.cancelRequested = true;
+    job.progress = { done: 3, total: 4 };
+    job.skipped = skipped;
+    await routes.writeJob(vaultDir, job);
+    return created.id;
+  }
+
+  it("answers 202, resets the record and re-enqueues it exactly once", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+      { slug: "beta", stage: "S1", reason: "no_captions" },
+    ]);
+
+    const res = await routes.jobs.request(`/${id}/retry`, jsonInit({}));
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ id, status: "queued" });
+
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.status).toBe("queued");
+    expect(stored.stage).toBe("S2");
+    expect(stored.error).toBeNull();
+    expect(stored.cancelRequested).toBe(false);
+    expect(stored.progress).toEqual({ done: 0, total: 0 });
+    expect(stored.retry).toEqual({ units: [{ slug: "alpha", stage: "S2" }] });
+    // The display-only S1 entry stays; only the retried unit is cleared.
+    expect(stored.skipped).toEqual([
+      { slug: "beta", stage: "S1", reason: "no_captions" },
+    ]);
+
+    expect(harness.enqueued.filter((job) => job.id === id)).toHaveLength(2);
+  });
+
+  it("treats an empty body as onlyFailed and records every failed stage", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+      { slug: "labels-0", stage: "S3", reason: "model_error" },
+      { slug: "gamma", stage: "S4", reason: "model_error" },
+      { slug: "some-label", stage: "S6", reason: "model_error" },
+    ]);
+
+    const res = await routes.jobs.request(`/${id}/retry`, { method: "POST" });
+    expect(res.status).toBe(202);
+
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.stage).toBe("S2");
+    expect(stored.retry?.units).toEqual([
+      { slug: "alpha", stage: "S2" },
+      { slug: "labels-0", stage: "S3" },
+      { slug: "gamma", stage: "S4" },
+      { slug: "some-label", stage: "S6" },
+    ]);
+    expect(stored.skipped).toEqual([]);
+  });
+
+  it("snapshots the configured endpoint into a new record", async () => {
+    const original = process.env.OLLAMA_BASE_URL;
+    process.env.OLLAMA_BASE_URL = "https://endpoint.example/v1";
+    try {
+      const routes = await reload();
+      const { vaultId, vaultDir } = await seeded(routes);
+
+      const created = (await (
+        await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+      ).json()) as { id: string };
+
+      const stored = await routes.readJob(vaultDir, created.id);
+      expect(stored.settings.llm.baseUrl).toBe("https://endpoint.example/v1");
+      expect(routes.config.ollamaBaseUrl).toBe("https://endpoint.example/v1");
+    } finally {
+      if (original === undefined) {
+        delete process.env.OLLAMA_BASE_URL;
+      } else {
+        process.env.OLLAMA_BASE_URL = original;
+      }
+    }
+  });
+
+  it("returns 404 for an unknown job and enqueues nothing", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const before = harness.enqueued.length;
+    const res = await routes.jobs.request("/j_20260101_abcdef/retry", jsonInit({}));
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: string }).error).toBe("job_not_found");
+    expect(harness.enqueued).toHaveLength(before);
+  });
+
+  it("refuses a running job with 409 retry_running and writes nothing", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+
+    const running = await routes.readJob(vaultDir, id);
+    running.status = "running";
+    await routes.writeJob(vaultDir, running);
+    const before = harness.enqueued.length;
+
+    const res = await routes.jobs.request(`/${id}/retry`, jsonInit({}));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "retry_running",
+      message: "Retry after the job finishes.",
+    });
+
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.status).toBe("running");
+    expect(stored.retry).toBeUndefined();
+    expect(harness.enqueued).toHaveLength(before);
+  });
+
+  it("refuses a job with no retryable failure with 409 no_failed_units", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "beta", stage: "S1", reason: "no_captions" },
+    ]);
+    const before = harness.enqueued.length;
+
+    const res = await routes.jobs.request(`/${id}/retry`, jsonInit({}));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "no_failed_units",
+      message: "No failed units to retry.",
+    });
+
+    // An S1 entry is display-only and stays exactly where it was.
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.skipped).toEqual([
+      { slug: "beta", stage: "S1", reason: "no_captions" },
+    ]);
+    expect(harness.enqueued).toHaveLength(before);
+  });
+
+  it("returns 403 origin_mismatch for a cross-origin retry", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+    const before = harness.enqueued.length;
+
+    const res = await routes.jobs.request(
+      `/${id}/retry`,
+      jsonInit({ onlyFailed: true }, { origin: "https://evil.example" }),
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("origin_mismatch");
+    expect(harness.enqueued).toHaveLength(before);
+  });
+
+  it("returns 400 for an unknown body key and changes nothing", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+
+    const res = await routes.jobs.request(
+      `/${id}/retry`,
+      jsonInit({ slugs: ["alpha"] }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_body");
+
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.status).toBe("completed");
+    expect(stored.retry).toBeUndefined();
   });
 });

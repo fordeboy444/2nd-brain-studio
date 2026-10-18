@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
+import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import { EnumerateError } from "../ingest/enumerate.js";
 import {
@@ -36,6 +37,7 @@ import {
   requestCancel,
   writeJob,
 } from "../jobs/store.js";
+import { retryJobRecord } from "../jobs/runner.js";
 import type { JobRecord, JobSettings, JobStatus } from "../jobs/types.js";
 import { PathJailError, resolveInVault } from "../paths/jail.js";
 import { readSettings } from "../settings/store.js";
@@ -85,6 +87,12 @@ const WebCreateBody = z
   .strict();
 
 const CreateJobBody = z.discriminatedUnion("kind", [YoutubeCreateBody, WebCreateBody]);
+
+/**
+ * POST /:id/retry body. Strict, so an unknown key is a 400 rather than a value
+ * that silently changes what the route does. An empty body means `onlyFailed`.
+ */
+const RetryBody = z.object({ onlyFailed: z.boolean().optional() }).strict();
 
 /**
  * POST /api/jobs/preview body: the create body without `vaultId`, because a
@@ -324,7 +332,14 @@ jobs.post("/", async (c) => {
       vaultId: vault.id,
       kind: "web",
       input: { url: webUrl },
-      settings: { ...globalSettings, maxVideos: 1, filters },
+      settings: {
+        ...globalSettings,
+        maxVideos: 1,
+        filters,
+        // The endpoint is part of the snapshot, so this job stays reproducible
+        // after a later environment change.
+        llm: { ...globalSettings.llm, baseUrl: config.ollamaBaseUrl },
+      },
     });
 
     await writeJob(vaultDir, record);
@@ -382,6 +397,7 @@ jobs.post("/", async (c) => {
     ...globalSettings,
     maxVideos: parsed.maxVideos,
     filters,
+    llm: { ...globalSettings.llm, baseUrl: config.ollamaBaseUrl },
   };
 
   const vaultDir = vaultDirPath(vault.id);
@@ -506,6 +522,57 @@ jobs.get("/:id/artifacts", async (c) => {
     }
     throw error;
   }
+});
+
+/**
+ * Retry the failed units of a terminal job (PIPE-12). The reset record comes
+ * from the stored `skipped[]`, never from the request; the body only chooses
+ * the retry mode, and PIPE-12 has one: failed units only. A running or queued
+ * job is refused before any write, so one job never gets a second runner.
+ */
+jobs.post("/:id/retry", async (c) => {
+  const id = c.req.param("id");
+
+  try {
+    const text = await c.req.text();
+    // An empty body is the ordinary case: retry every failed unit.
+    RetryBody.parse(text.trim() === "" ? {} : (JSON.parse(text) as unknown));
+  } catch {
+    return c.json(
+      {
+        error: "invalid_body",
+        message: "Request body must be JSON: {} or {\"onlyFailed\": true}.",
+      },
+      400,
+    );
+  }
+
+  const found = await findJob(id);
+  if (found === null) {
+    return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
+  }
+
+  const plan = retryJobRecord(found.job);
+  if ("error" in plan) {
+    if (plan.error === "running") {
+      return c.json(
+        { error: "retry_running", message: "Retry after the job finishes." },
+        409,
+      );
+    }
+    return c.json(
+      { error: "no_failed_units", message: "No failed units to retry." },
+      409,
+    );
+  }
+
+  // Persist first, exactly like create: boot resume can recover the reset job.
+  await writeJob(found.vaultDir, found.job);
+  void getJobQueue()
+    .enqueue(found.job)
+    .catch(() => undefined);
+
+  return c.json({ id, status: "queued" }, 202);
 });
 
 jobs.get("/:id", async (c) => {

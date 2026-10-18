@@ -16,7 +16,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { slugify } from "@2nd-brain/okf";
+import { compareCodepoint, slugify } from "@2nd-brain/okf";
 import { config } from "../config.js";
 import { writeJsonAtomic, writeTextAtomic } from "../http/writeAtomic.js";
 import type { LlmClient } from "../llm/ollama.js";
@@ -42,6 +42,7 @@ import { createS6Stage } from "./stages/s6.js";
 import {
   SkipError,
   type JobRecord,
+  type JobRetryUnit,
   type SkipReason,
   type SkippedUnit,
   type StageName,
@@ -124,6 +125,71 @@ export function stagesFor(job: JobRecord): StageName[] {
   // add or remove the paid sweep from a queued job.
   if (job.settings.sweep?.enabled === true) stages.push("S6");
   return stages;
+}
+
+/**
+ * The only stages PIPE-12 may retry. S0, S1 and S1w entries stay in
+ * `skipped[]` for display. S5 is code-only: a failure there fails the job.
+ */
+export const RETRYABLE_STAGES = ["S2", "S3", "S4", "S6"] as const;
+
+const RETRYABLE: ReadonlySet<string> = new Set(RETRYABLE_STAGES);
+
+/** True when a retry may re-run units recorded at this stage. */
+export function isRetryableStage(stage: StageName): boolean {
+  return RETRYABLE.has(stage);
+}
+
+/**
+ * The unique `{slug, stage}` pairs a retry would re-run at one stage, sorted by
+ * slug. A stage outside `RETRYABLE_STAGES` yields nothing.
+ */
+export function retryUnitsFor(job: JobRecord, stage: StageName): JobRetryUnit[] {
+  if (!RETRYABLE.has(stage)) return [];
+  const seen = new Set<string>();
+  const units: JobRetryUnit[] = [];
+  for (const entry of job.skipped) {
+    if (entry.stage !== stage) continue;
+    if (seen.has(entry.slug)) continue;
+    seen.add(entry.slug);
+    units.push({ slug: entry.slug, stage: entry.stage });
+  }
+  return units.sort((left, right) => compareCodepoint(left.slug, right.slug));
+}
+
+/** The route's view of a retry attempt. */
+export type RetryPlan =
+  | { stage: StageName }
+  | { error: "running" | "no_failed" };
+
+/**
+ * Reset a terminal record so the runner re-runs only its failed units
+ * (PIPE-12). Units come only from the stored `skipped[]`; no request value
+ * names a slug or a stage. S0, S1 and S1w entries stay in `skipped[]`.
+ */
+export function retryJobRecord(job: JobRecord): RetryPlan {
+  if (job.status === "queued" || job.status === "running") {
+    return { error: "running" };
+  }
+
+  // Stage order, then slug, so the reset point is the earliest failure.
+  const units: JobRetryUnit[] = [];
+  for (const stage of RETRYABLE_STAGES) {
+    units.push(...retryUnitsFor(job, stage));
+  }
+  if (units.length === 0) return { error: "no_failed" };
+
+  const first = units[0] as JobRetryUnit;
+  job.retry = { units };
+  // Exactly the entries that became units are cleared; display-only entries stay.
+  job.skipped = job.skipped.filter((entry) => !RETRYABLE.has(entry.stage));
+  job.status = "queued";
+  job.stage = first.stage;
+  job.error = null;
+  job.cancelRequested = false;
+  job.progress = { done: 0, total: 0 };
+  job.updatedAt = new Date().toISOString();
+  return { stage: first.stage };
 }
 
 const TERMINAL: ReadonlySet<JobRecord["status"]> = new Set([
