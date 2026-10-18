@@ -121,17 +121,47 @@ describe("oracle: reference metadata", () => {
   });
 });
 
+/** The reference `main()` order. Explicit, so an added golden cannot slip in. */
+const INDEX_PATHS = [
+  "concepts/index.md",
+  "entities/index.md",
+  "entities/tools/index.md",
+  "entities/people/index.md",
+  "entities/organizations/index.md",
+  "sources/index.md",
+  "raw/index.md",
+] as const;
+
 describe("oracle: generated index bytes", () => {
-  it("builds raw/index.md byte-identical to the Python golden", () => {
+  it("emits exactly the seven index paths, in reference order", () => {
     const result = buildIndexes(bundle.pages, taxonomy);
-    const generated = result.files.find(
-      (file) => file.path === "raw/index.md",
-    );
-    expect(generated, "buildIndexes did not emit raw/index.md").toBeDefined();
-    expectSameBytes(
-      "raw/index.md",
-      (generated as { text: string }).text,
-      readGolden("raw/index.md"),
-    );
+    expect(result.files.map((file) => file.path)).toEqual([...INDEX_PATHS]);
+  });
+
+  it("builds every index byte-identical to its Python golden", () => {
+    const result = buildIndexes(bundle.pages, taxonomy);
+    for (const path of INDEX_PATHS) {
+      const generated = result.files.find((file) => file.path === path);
+      expect(generated, `buildIndexes did not emit ${path}`).toBeDefined();
+      expectSameBytes(
+        path,
+        (generated as { text: string }).text,
+        readGolden(path),
+      );
+    }
+  });
+
+  it("reproduces the reference log line by line", () => {
+    expect(buildIndexes(bundle.pages, taxonomy).log).toEqual([
+      "Building indexes from scripts/taxonomy.json ...",
+      "  wrote concepts/index.md (3 pages)",
+      "  wrote entities/index.md",
+      "  wrote entities/tools/index.md (2 pages)",
+      "  wrote entities/people/index.md (1 pages)",
+      "  wrote entities/organizations/index.md (1 pages)",
+      "  wrote sources/index.md (4 pages)",
+      "  wrote raw/index.md (4 transcripts)",
+      "Done.",
+    ]);
   });
 });
