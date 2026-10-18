@@ -592,6 +592,131 @@ describe("S3 candidate filter", () => {
   });
 });
 
+describe("S3 batch bounds", () => {
+  function labels(count: number): Array<{ name: string; slug: string; weight: number }> {
+    return Array.from({ length: count }, (_, index) => ({
+      name: `Concept ${index}`,
+      slug: `concept-${String(index).padStart(3, "0")}`,
+      weight: 0.5,
+    }));
+  }
+
+  function batchSizes(llm: FakeLlm, canonical: boolean): number[] {
+    return llm.calls
+      .filter((call) => call.canonical === canonical)
+      .map((call) => call.labels.length);
+  }
+
+  async function runWith(count: number): Promise<{
+    job: JobRecord;
+    llm: FakeLlm;
+    concepts: number;
+  }> {
+    const job = makeJob();
+    await seed(job, [
+      record("deep-talk", {
+        source: { duration: 1500 },
+        concepts: labels(count),
+      }),
+    ]);
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+    const manifest = await readManifest(jobDir(root, job.id));
+    return { job, llm, concepts: manifest?.concepts.length ?? -1 };
+  }
+
+  it("makes one call per phase for 34 surviving labels", async () => {
+    const { llm, concepts, job } = await runWith(34);
+    expect(concepts).toBe(34);
+    expect(batchSizes(llm, true)).toEqual([34]);
+    expect(batchSizes(llm, false)).toEqual([34]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("makes two calls per phase for 36 surviving labels", async () => {
+    const { llm, concepts, job } = await runWith(36);
+    expect(concepts).toBe(36);
+    // A contiguous slice of the slug-sorted list: 35 then 1.
+    expect(batchSizes(llm, true)).toEqual([35, 1]);
+    expect(batchSizes(llm, false)).toEqual([35, 1]);
+    const canonical = llm.calls.filter((call) => call.canonical);
+    expect(canonical[0]?.labels[0]?.slug).toBe("concept-000");
+    expect(canonical[0]?.labels[34]?.slug).toBe("concept-034");
+    expect(canonical[1]?.labels.map((label) => label.slug)).toEqual([
+      "concept-035",
+    ]);
+    expect(job.skipped).toEqual([]);
+  });
+
+  it("makes exactly ceil(70/35) calls per phase", async () => {
+    const { llm, concepts, job } = await runWith(70);
+    expect(concepts).toBe(70);
+    expect(batchSizes(llm, true)).toEqual([35, 35]);
+    expect(batchSizes(llm, false)).toEqual([35, 35]);
+    expect(job.skipped).toEqual([]);
+  });
+});
+
+describe("S3 prompt hygiene", () => {
+  it("sends only short structured label rows and never opens a raw capture", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("deep-talk", {
+        source: { duration: 1500 },
+        tags: ["agents"],
+        concepts: [
+          { name: "Alpha", slug: "alpha", weight: 0.5 },
+          { name: "Beta", slug: "beta", weight: 0.7 },
+        ],
+      }),
+    ]);
+
+    const llm = fakeLlm();
+    await runS3(job, llm.client);
+
+    expect(spy.captureReads).toBe(0);
+    expect(llm.calls.length).toBeGreaterThan(0);
+
+    for (const call of llm.calls) {
+      const user = call.messages.find((message) => message.role === "user");
+      expect(user).toBeDefined();
+      for (const line of (user?.content ?? "").split("\n")) {
+        // A transcript paragraph cannot hide in a batch: every row is one
+        // short JSON object with exactly the five label fields.
+        expect(line.length).toBeLessThanOrEqual(200);
+        expect(Object.keys(JSON.parse(line)).sort()).toEqual([
+          "kind",
+          "name",
+          "slug",
+          "sourceCount",
+          "tags",
+        ]);
+      }
+    }
+  });
+
+  it("orders filtered entries by slug", async () => {
+    const job = makeJob();
+    await seed(job, [
+      record("short-talk", {
+        source: { duration: 300 },
+        concepts: [
+          { name: "Zeta", slug: "zeta", weight: 0.5 },
+          { name: "Alpha", slug: "alpha", weight: 0.5 },
+        ],
+      }),
+    ]);
+
+    await runS3(job, fakeLlm().client);
+
+    const manifest = await readManifest(jobDir(root, job.id));
+    expect(manifest?.filtered.map((entry) => entry.slug)).toEqual([
+      "alpha",
+      "zeta",
+    ]);
+  });
+});
+
 describe("S3 determinism", () => {
   it("writes byte-identical files on a second run and makes no call", async () => {
     const records = [
