@@ -49,7 +49,7 @@ import type { JobRecord, SkippedUnit } from "../types.js";
 import { redactDetail } from "./fetch.js";
 
 /** Bumping this invalidates every cached S4b reply. S4a makes no call. */
-export const PROMPT_VERSION_S4 = "s4-v1";
+export const PROMPT_VERSION_S4 = "s4-v2";
 
 /**
  * Label bodies per model call (T-P4-18). A large channel grows the call count
@@ -61,9 +61,9 @@ export const PAGES_PER_CALL = 5;
 const PAGE_BODY_RULES = `You write the body of knowledge pages.
 
 Return ONLY one JSON array with one entry per request:
-[{"slug": "<request slug>", "body": "<2 to 4 paragraphs>"}]
+[{"kind": "<request kind>", "slug": "<request slug>", "body": "<2 to 4 paragraphs>"}]
 
-- "slug" is copied exactly from its request.
+- "kind" and "slug" are copied exactly from the request.
 - "body" is 2 to 4 paragraphs of plain prose, separated by a blank line.
 - Do not add a heading, a markdown link, frontmatter or a "## Sources" section.
 - Do not invent an edge, a citation or a source.
@@ -317,7 +317,20 @@ export function buildPageRequests(
       edges: edgesOf(entity.slug),
     });
   }
-  return requests.sort((left, right) => compareCodepoint(left.slug, right.slug));
+  // Kind before slug, so the order is total even when both kinds use one slug.
+  return requests.sort(
+    (left, right) =>
+      compareCodepoint(left.kind, right.kind) ||
+      compareCodepoint(left.slug, right.slug),
+  );
+}
+
+/** The request and reply identity. A slug alone collides across kinds (WR-03). */
+export function pageRequestKey(request: {
+  kind: "concept" | "entity";
+  slug: string;
+}): string {
+  return `${request.kind}:${request.slug}`;
 }
 
 /** One copy of each value, sorted by codepoint. */
@@ -517,7 +530,7 @@ export async function renderLabelPages(
 
   const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
   const options = pageCallOptions(job);
-  const requested = new Set(requests.map((request) => request.slug));
+  const requested = new Set(requests.map((request) => pageRequestKey(request)));
   const bodies = new Map<string, string>();
   const failures = new Map<string, string>();
 
@@ -551,28 +564,30 @@ export async function renderLabelPages(
         PageBodiesSchema,
       );
       for (const entry of result.output) {
-        // T-P4-16: an unknown slug is ignored, and the first entry wins.
-        if (!requested.has(entry.slug)) continue;
-        if (bodies.has(entry.slug)) continue;
-        bodies.set(entry.slug, entry.body);
+        // T-P4-16: an unknown key is ignored, and the first entry wins.
+        const key = pageRequestKey(entry);
+        if (!requested.has(key)) continue;
+        if (bodies.has(key)) continue;
+        bodies.set(key, entry.body);
       }
     } catch (error) {
       const detail =
         redactDetail(error instanceof Error ? error.message : String(error)) ??
         "model_error";
-      for (const request of batch) failures.set(request.slug, detail);
+      for (const request of batch) failures.set(pageRequestKey(request), detail);
     }
   }
 
   for (const request of requests) {
-    const body = bodies.get(request.slug);
+    const key = pageRequestKey(request);
+    const body = bodies.get(key);
     const hasBody = body !== undefined;
     if (!hasBody) {
       const skipped: SkippedUnit = {
         slug: request.slug,
         stage: "S4",
         reason: "model_error",
-        detail: failures.get(request.slug) ?? "missing body",
+        detail: failures.get(key) ?? "missing body",
       };
       job.skipped.push(skipped);
       await persist();

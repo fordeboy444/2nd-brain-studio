@@ -232,25 +232,46 @@ describe("ExtractionSchema normalisation", () => {
 });
 
 describe("PageBodiesSchema", () => {
-  it("accepts two to four prose paragraphs", () => {
+  it("accepts two to four prose paragraphs and keeps the kind", () => {
     const parsed = PageBodiesSchema.parse([
-      { slug: "the-piv-loop", body: "One paragraph.\n\nTwo paragraphs." },
+      {
+        kind: "concept",
+        slug: "the-piv-loop",
+        body: "One paragraph.\n\nTwo paragraphs.",
+      },
     ]);
     expect(parsed[0]?.slug).toBe("the-piv-loop");
+    expect(parsed[0]?.kind).toBe("concept");
+  });
+
+  it("rejects an entry with no kind", () => {
+    expect(() =>
+      PageBodiesSchema.parse([
+        { slug: "x", body: "One paragraph.\n\nTwo paragraphs." },
+      ]),
+    ).toThrow();
   });
 
   it("rejects a one-paragraph body and a five-paragraph body", () => {
     expect(() =>
-      PageBodiesSchema.parse([{ slug: "x", body: "Only one paragraph." }]),
+      PageBodiesSchema.parse([
+        { kind: "concept", slug: "x", body: "Only one paragraph." },
+      ]),
     ).toThrow();
     const five = ["1", "2", "3", "4", "5"].join("\n\n");
-    expect(() => PageBodiesSchema.parse([{ slug: "x", body: five }])).toThrow();
+    expect(() =>
+      PageBodiesSchema.parse([{ kind: "concept", slug: "x", body: five }]),
+    ).toThrow();
   });
 
   it("rejects a body containing a markdown heading", () => {
     expect(() =>
       PageBodiesSchema.parse([
-        { slug: "x", body: "First paragraph.\n\n## Heading\n\nSecond paragraph." },
+        {
+          kind: "concept",
+          slug: "x",
+          body: "First paragraph.\n\n## Heading\n\nSecond paragraph.",
+        },
       ]),
     ).toThrow();
   });
@@ -258,12 +279,20 @@ describe("PageBodiesSchema", () => {
   it("rejects a body containing a markdown link or wikilink", () => {
     expect(() =>
       PageBodiesSchema.parse([
-        { slug: "x", body: "First paragraph.\n\nSee [x](y) for more." },
+        {
+          kind: "concept",
+          slug: "x",
+          body: "First paragraph.\n\nSee [x](y) for more.",
+        },
       ]),
     ).toThrow();
     expect(() =>
       PageBodiesSchema.parse([
-        { slug: "x", body: "First paragraph.\n\nSee [[other]] for more." },
+        {
+          kind: "concept",
+          slug: "x",
+          body: "First paragraph.\n\nSee [[other]] for more.",
+        },
       ]),
     ).toThrow();
   });
@@ -274,6 +303,7 @@ describe("S3 schemas", () => {
     const parsed = CanonicalizeSchema.parse({
       labels: [
         {
+          kind: "concept",
           from: "The PIV Loop",
           to: "PIV Loop",
           title: "PIV Loop",
@@ -284,6 +314,7 @@ describe("S3 schemas", () => {
     });
 
     expect(parsed.labels[0]).toEqual({
+      kind: "concept",
       from: "the-piv-loop",
       to: "piv-loop",
       title: "PIV Loop",
@@ -292,10 +323,24 @@ describe("S3 schemas", () => {
     });
   });
 
-  it("rejects a canonicalisation label with an empty title or unknown top-level key", () => {
+  it("rejects a canonicalisation label with an empty title, no kind or unknown top-level key", () => {
     expect(() =>
       CanonicalizeSchema.parse({
-        labels: [{ from: "a", to: "b", title: "", tags: [], aliases: [] }],
+        labels: [
+          {
+            kind: "concept",
+            from: "a",
+            to: "b",
+            title: "",
+            tags: [],
+            aliases: [],
+          },
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      CanonicalizeSchema.parse({
+        labels: [{ from: "a", to: "b", title: "B", tags: [], aliases: [] }],
       }),
     ).toThrow();
     expect(() =>

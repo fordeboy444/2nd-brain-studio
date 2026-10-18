@@ -83,6 +83,7 @@ interface FakeLlm {
 function defaultCanonical(labels: BatchLabel[]): string {
   return JSON.stringify({
     labels: labels.map((label) => ({
+      kind: label.kind,
       from: label.slug,
       to: label.slug,
       title: label.name,
@@ -142,6 +143,7 @@ function fakeLlm(options: {
       if (pages) {
         text = JSON.stringify(
           labels.map((label) => ({
+            kind: label.kind,
             slug: label.slug,
             body: "First paragraph.\n\nSecond paragraph.",
           })),

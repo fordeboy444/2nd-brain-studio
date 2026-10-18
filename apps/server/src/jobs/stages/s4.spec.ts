@@ -74,7 +74,7 @@ function ctxFor(job: JobRecord): UnitContext {
 
 interface CapturedCall {
   messages: LlmMessage[];
-  requests: Array<{ slug: string; name?: string }>;
+  requests: Array<{ kind: "concept" | "entity"; slug: string; name?: string }>;
   rawPath?: string;
 }
 
@@ -106,7 +106,13 @@ function makeDeps(options: {
         const requests = payload
           .split("\n")
           .filter((line) => line.trim() !== "")
-          .map((line) => JSON.parse(line) as { slug: string });
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                kind: "concept" | "entity";
+                slug: string;
+              },
+          );
         const call: CapturedCall = {
           messages,
           requests,
@@ -417,16 +423,23 @@ describe("S4a source pages", () => {
   });
 
   it("exposes the S4 prompt version", () => {
-    expect(PROMPT_VERSION_S4).toBe("s4-v1");
+    expect(PROMPT_VERSION_S4).toBe("s4-v2");
   });
 });
 
 const GOOD_BODY =
   "The label names a way of working with agents.\n\nIt appears in the first talk.";
 
-function pagePayload(bodies: Record<string, string>): string {
+function pagePayload(
+  bodies: Record<string, string>,
+  kinds: Record<string, "concept" | "entity"> = {},
+): string {
   return JSON.stringify(
-    Object.entries(bodies).map(([slug, body]) => ({ slug, body })),
+    Object.entries(bodies).map(([slug, body]) => ({
+      kind: kinds[slug] ?? "concept",
+      slug,
+      body,
+    })),
   );
 }
 
@@ -574,9 +587,13 @@ describe("S4b label pages", () => {
       {
         reply: () =>
           JSON.stringify([
-            { slug: "agentic-workflow", body: GOOD_BODY },
-            { slug: "agentic-workflow", body: "Second.\n\nDuplicate body." },
-            { slug: "evil-page", body: GOOD_BODY },
+            { kind: "concept", slug: "agentic-workflow", body: GOOD_BODY },
+            {
+              kind: "concept",
+              slug: "agentic-workflow",
+              body: "Second.\n\nDuplicate body.",
+            },
+            { kind: "concept", slug: "evil-page", body: GOOD_BODY },
           ]),
       },
     );
@@ -602,10 +619,13 @@ describe("S4b label pages", () => {
       [videoRecord(), webRecord()],
       {
         reply: () =>
-          pagePayload({
-            "agentic-workflow": GOOD_BODY,
-            n8n: "n8n is a workflow tool.\n\nIt connects services.",
-          }),
+          pagePayload(
+            {
+              "agentic-workflow": GOOD_BODY,
+              n8n: "n8n is a workflow tool.\n\nIt connects services.",
+            },
+            { n8n: "entity" },
+          ),
       },
     );
 
@@ -703,10 +723,12 @@ function chainReply(call: CapturedCall): string {
       source_clusters: [],
     });
   }
-  return pagePayload(
-    Object.fromEntries(
-      call.requests.map((request) => [request.slug, GOOD_BODY]),
-    ),
+  return JSON.stringify(
+    call.requests.map((request) => ({
+      kind: request.kind,
+      slug: request.slug,
+      body: GOOD_BODY,
+    })),
   );
 }
 

@@ -36,13 +36,14 @@ import type { JobRecord, SkipReason, SkippedUnit } from "../types.js";
 import { redactDetail } from "./fetch.js";
 import {
   buildPageRequests,
+  pageRequestKey,
   renderLabelPage,
   type PageRequest,
 } from "./s4.js";
 import { collectBundlePages, LOG_PATH } from "./s5.js";
 
 /** Bumping this invalidates every cached S6 reply. */
-export const PROMPT_VERSION_S6 = "s6-v1";
+export const PROMPT_VERSION_S6 = "s6-v2";
 
 /** The job-relative notability path template. */
 export const NOTABILITY_PATH = ".okf/jobs/<id>/notability.json";
@@ -57,9 +58,9 @@ const SWEEP_LOG_LINE = "sweep: true";
 const SWEEP_RULES = `You fill short knowledge pages and score how notable each one is.
 
 Return ONLY one JSON object:
-{"pages": [{"slug": "<request slug>", "body": "<2 to 4 paragraphs>", "notable": <0 to 1>}]}
+{"pages": [{"kind": "<request kind>", "slug": "<request slug>", "body": "<2 to 4 paragraphs>", "notable": <0 to 1>}]}
 
-- "slug" is copied exactly from its request.
+- "kind" and "slug" are copied exactly from the request.
 - "body" is 2 to 4 paragraphs of plain prose, separated by a blank line.
 - Do not add a heading, a markdown link, frontmatter or a "## Sources" section.
 - "notable" is a number from 0 to 1.
@@ -87,6 +88,7 @@ export const SweepSchema = z
   .object({
     pages: z.array(
       z.object({
+        kind: z.enum(["concept", "entity"]),
         slug: z.unknown(),
         body: z.string(),
         notable: z.number(),
@@ -108,6 +110,7 @@ export const SweepSchema = z
   })
   .transform((value) => ({
     pages: value.pages.map((page) => ({
+      kind: page.kind,
       slug: normaliseSlug(page.slug),
       body: page.body.trim(),
       notable: Math.min(1, Math.max(0, page.notable)),
@@ -184,7 +187,11 @@ export async function collectSweepTargets(
       targets.push(label);
     }
   }
-  return targets.sort((left, right) => compareCodepoint(left.slug, right.slug));
+  return targets.sort(
+    (left, right) =>
+      compareCodepoint(left.kind, right.kind) ||
+      compareCodepoint(left.slug, right.slug),
+  );
 }
 
 /**
@@ -317,7 +324,7 @@ export function createS6Stage(deps: StageDeps) {
     const records = await listExtractions(dir);
     const requests = new Map(
       buildPageRequests(manifest, records, taxonomy).map(
-        (request) => [request.slug, request] as const,
+        (request) => [pageRequestKey(request), request] as const,
       ),
     );
 
@@ -354,7 +361,7 @@ export function createS6Stage(deps: StageDeps) {
 
       const batch = batches[index] as SweepTarget[];
       const batchRequests = batch.flatMap((target) => {
-        const request = requests.get(target.slug);
+        const request = requests.get(pageRequestKey(target));
         return request === undefined ? [] : [request];
       });
       try {
@@ -371,9 +378,13 @@ export function createS6Stage(deps: StageDeps) {
         );
         for (const entry of result.output.pages) {
           if (entry.slug === undefined) continue;
-          if (!requests.has(entry.slug)) continue;
-          if (accepted.has(entry.slug)) continue;
-          accepted.set(entry.slug, {
+          const key = pageRequestKey({
+            kind: entry.kind,
+            slug: entry.slug,
+          });
+          if (!requests.has(key)) continue;
+          if (accepted.has(key)) continue;
+          accepted.set(key, {
             body: entry.body,
             notable: entry.notable,
           });
@@ -383,16 +394,19 @@ export function createS6Stage(deps: StageDeps) {
         const detail =
           redactDetail(error instanceof Error ? error.message : String(error)) ??
           reason;
-        for (const target of batch) failures.set(target.slug, { reason, detail });
+        for (const target of batch) {
+          failures.set(pageRequestKey(target), { reason, detail });
+        }
       }
     }
 
     const scores: NotabilityRecord["scores"] = [];
     for (const target of targets) {
-      const entry = accepted.get(target.slug);
-      const request = requests.get(target.slug);
+      const key = pageRequestKey(target);
+      const entry = accepted.get(key);
+      const request = requests.get(key);
       if (entry === undefined || request === undefined) {
-        const failure = failures.get(target.slug);
+        const failure = failures.get(key);
         await recordSkip(
           job,
           dir,

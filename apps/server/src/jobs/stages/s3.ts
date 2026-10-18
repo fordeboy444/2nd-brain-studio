@@ -49,7 +49,7 @@ import type { StageDeps, UnitContext } from "../runner.js";
 import { redactDetail } from "./fetch.js";
 
 /** Bumping this invalidates every cached S3 reply, canonicalise and taxonomy. */
-export const PROMPT_VERSION_S3 = "s3-v1";
+export const PROMPT_VERSION_S3 = "s3-v2";
 
 /** One label occurrence, or the merged candidate for one exact slug. */
 export interface LabelCandidate {
@@ -105,8 +105,9 @@ const CANONICALIZE_RULES = `You canonicalise knowledge labels collected from man
 
 Return ONLY one JSON object with exactly one key: "labels".
 Its value is an array with one entry per input label:
-{"from": "<input slug>", "to": "<canonical slug>", "title": "<title>", "tags": ["<tag>"], "aliases": ["<alias>"]}
+{"kind": "<input kind>", "from": "<input slug>", "to": "<canonical slug>", "title": "<title>", "tags": ["<tag>"], "aliases": ["<alias>"]}
 
+- "kind" is "concept" or "entity", copied exactly from its input label.
 - "from" is an input slug, copied exactly.
 - "to" is a kebab-case slug for the one canonical label.
 - Inputs that name the same idea share the same "to".
@@ -396,13 +397,18 @@ export async function canonicalizeLabels(
         CanonicalizeSchema,
       );
 
-      // The model may answer in any order; applying mappings by `from` sort
-      // keeps the resulting manifest independent of that order.
-      for (const label of [...result.output.labels].sort((left, right) =>
-        compareCodepoint(left.from, right.from),
+      // The model may answer in any order; applying mappings by kind then
+      // `from` keeps the resulting manifest independent of that order. The
+      // key includes `kind`, so a concept and an entity with one slug never
+      // share a canonical name (WR-03).
+      for (const label of [...result.output.labels].sort(
+        (left, right) =>
+          compareCodepoint(left.kind, right.kind) ||
+          compareCodepoint(left.from, right.from),
       )) {
-        if (specs.has(label.from)) continue;
-        specs.set(label.from, {
+        const key = keyOf(label.kind, label.from);
+        if (specs.has(key)) continue;
+        specs.set(key, {
           to: label.to,
           title: label.title,
           tags: label.tags,
@@ -417,7 +423,7 @@ export async function canonicalizeLabels(
   const mapping: LabelMapping = new Map();
 
   for (const origin of ordered) {
-    const spec = specs.get(origin.slug);
+    const spec = specs.get(keyOf(origin.kind, origin.slug));
     const to = spec?.to ?? origin.slug;
     mapping.set(keyOf(origin.kind, origin.slug), to);
 

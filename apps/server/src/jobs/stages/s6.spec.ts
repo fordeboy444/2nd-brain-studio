@@ -258,10 +258,15 @@ async function runS6(deps: StageDeps): Promise<boolean> {
   return createS6Stage(deps)(job, ctxFor(job), dir, async () => {});
 }
 
-function sweepReply(slug: string, notable = 0.8): string {
+function sweepReply(
+  slug: string,
+  notable = 0.8,
+  kind: "concept" | "entity" = "concept",
+): string {
   return JSON.stringify({
     pages: [
       {
+        kind,
         slug,
         body: "The rebuilt body paragraph.\n\nThe second rebuilt paragraph.",
         notable,
@@ -456,6 +461,7 @@ describe("SweepSchema", () => {
     const parsed = SweepSchema.parse({
       pages: [
         {
+          kind: "concept",
           slug: "Agentic Workflow",
           body: "First paragraph.\n\nSecond paragraph.",
           notable: 3,
@@ -463,6 +469,7 @@ describe("SweepSchema", () => {
       ],
     });
     expect(parsed.pages[0]).toEqual({
+      kind: "concept",
       slug: "agentic-workflow",
       body: "First paragraph.\n\nSecond paragraph.",
       notable: 1,
@@ -474,6 +481,7 @@ describe("SweepSchema", () => {
       SweepSchema.parse({
         pages: [
           {
+            kind: "concept",
             slug: "x",
             body: "## Heading\n\nA second paragraph.",
             notable: 0.5,
@@ -485,6 +493,7 @@ describe("SweepSchema", () => {
       SweepSchema.parse({
         pages: [
           {
+            kind: "concept",
             slug: "x",
             body: "A [link](../sources/x.md).\n\nA second paragraph.",
             notable: 0.5,

@@ -1120,17 +1120,23 @@ interface PipelineCall {
 
 function stageOf(system: string): PipelineCall["stage"] {
   if (system.includes("Prompt version: s2-v1.")) return "S2";
-  if (system.includes("Prompt version: s3-v1.")) return "S3";
-  if (system.includes("Prompt version: s4-v1.")) return "S4";
-  if (system.includes("Prompt version: s6-v1.")) return "S6";
+  if (system.includes("Prompt version: s3-v2.")) return "S3";
+  if (system.includes("Prompt version: s4-v2.")) return "S4";
+  if (system.includes("Prompt version: s6-v2.")) return "S6";
   return "unknown";
 }
 
-function requestLines(content: string): { slug: string; name?: string }[] {
+interface RequestLine {
+  kind: "concept" | "entity";
+  slug: string;
+  name?: string;
+}
+
+function requestLines(content: string): RequestLine[] {
   return content
     .split("\n")
     .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as { slug: string; name?: string });
+    .map((line) => JSON.parse(line) as RequestLine);
 }
 
 /**
@@ -1197,6 +1203,7 @@ function pipelineLlm(
           return {
             text: JSON.stringify({
               labels: requests.map((request) => ({
+                kind: request.kind,
                 from: request.slug,
                 to: request.slug,
                 title: request.name ?? request.slug,
@@ -1225,6 +1232,7 @@ function pipelineLlm(
             requestLines(user)
               .filter((request) => request.slug !== options.omitS4)
               .map((request) => ({
+                kind: request.kind,
                 slug: request.slug,
                 body: PIPELINE_BODY,
               })),
@@ -1238,6 +1246,7 @@ function pipelineLlm(
         return {
           text: JSON.stringify({
             pages: requestLines(user).map((request) => ({
+              kind: request.kind,
               slug: request.slug,
               body: PIPELINE_BODY,
               notable: 0.4,

@@ -609,6 +609,7 @@ export function pageBodyIssue(raw: string): string | null {
 export const PageBodiesSchema = z
   .array(
     z.object({
+      kind: z.enum(["concept", "entity"]),
       slug: z.unknown(),
       body: z.string(),
     }),
@@ -623,6 +624,7 @@ export const PageBodiesSchema = z
   })
   .transform((items) =>
     items.map((item) => ({
+      kind: item.kind,
       slug: slugOr(item.slug, undefined),
       body: item.body.trim(),
     })),
@@ -742,6 +744,7 @@ export type Taxonomy = z.infer<typeof TaxonomySchema>;
 
 const CanonicalLabelSchema = z
   .object({
+    kind: z.enum(["concept", "entity"]),
     from: z.unknown(),
     to: z.unknown(),
     title: z.string().trim().min(1),
@@ -749,6 +752,7 @@ const CanonicalLabelSchema = z
     aliases: z.array(z.unknown()),
   })
   .transform((value) => ({
+    kind: value.kind,
     from: slugOr(value.from, undefined),
     to: slugOr(value.to, undefined),
     title: value.title,
