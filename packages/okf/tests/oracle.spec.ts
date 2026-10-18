@@ -39,8 +39,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildIndexes, readIndexMeta } from "../src/index.js";
-import type { Taxonomy } from "../src/index.js";
+import {
+  buildIndexes,
+  formatLintReport,
+  lintBundle,
+  readIndexMeta,
+} from "../src/index.js";
+import type { BundlePage, Taxonomy } from "../src/index.js";
 import { readBundle } from "./helpers/bundle.js";
 
 const FIXTURE_ROOT = fileURLToPath(
@@ -163,5 +168,61 @@ describe("oracle: generated index bytes", () => {
       "  wrote raw/index.md (4 transcripts)",
       "Done.",
     ]);
+  });
+});
+
+/**
+ * The lint goldens use the same `runpy.run_path` preamble as the index
+ * goldens: copy the fixture to a temporary directory whose basename is
+ * `bundle-mini`, run the unmodified `build_indexes.py` with `ROOT` and
+ * `TAXONOMY` rebound on `main.__globals__`, then run the unmodified
+ * `lint.py` with `ROOT` rebound. The quiet golden is produced by appending
+ * `--quiet` to the driver's `sys.argv` before `main()`.
+ */
+describe("oracle: lint report bytes", () => {
+  /** The committed fixture plus the seven indexes the reference generated. */
+  function generatedPages(): BundlePage[] {
+    const indexes = buildIndexes(bundle.pages, taxonomy);
+    return [
+      ...bundle.pages,
+      ...indexes.files.map((file) => ({ path: file.path, text: file.text })),
+    ];
+  }
+
+  it("prints stdout byte-identical to the Python lint report", () => {
+    const result = lintBundle(generatedPages(), "bundle-mini");
+    expectSameBytes(
+      "lint.stdout.txt",
+      formatLintReport(result),
+      readGolden("lint.stdout.txt"),
+    );
+  });
+
+  it("prints the quiet report byte-identical, with no scanned line", () => {
+    const result = lintBundle(generatedPages(), "bundle-mini");
+    expectSameBytes(
+      "lint.quiet.stdout.txt",
+      formatLintReport(result, { quiet: true }),
+      readGolden("lint.quiet.stdout.txt"),
+    );
+
+    const normal = readGolden("lint.stdout.txt");
+    const quiet = readGolden("lint.quiet.stdout.txt");
+    expect(normal.includes("Scanned ")).toBe(true);
+    expect(quiet.includes("Scanned ")).toBe(false);
+  });
+
+  it("returns the reference exit status", () => {
+    const result = lintBundle(generatedPages(), "bundle-mini");
+    expect(String(result.exitCode)).toBe(
+      readGolden("lint.exit.txt").trim(),
+    );
+  });
+
+  it("exercises both severities, so an empty report cannot pass", () => {
+    const result = lintBundle(generatedPages(), "bundle-mini");
+    expect(result.errors).toHaveLength(3);
+    expect(result.warnings).toHaveLength(3);
+    expect(result.scanned).toBe(22);
   });
 });

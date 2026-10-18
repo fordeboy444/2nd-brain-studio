@@ -27,4 +27,21 @@ export type {
   ThemeGroup,
 } from "./indexes.js";
 
+export {
+  extractLinks,
+  isExternalTarget,
+  linkTarget,
+  resolveBundlePath,
+  stripCode,
+} from "./links.js";
+
+export { formatLintReport, lintBundle } from "./lint.js";
+export type {
+  LintFinding,
+  LintOptions,
+  LintResult,
+  LintRule,
+  LintSeverity,
+} from "./lint.js";
+
 export { slugify } from "./slug.js";

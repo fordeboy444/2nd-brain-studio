@@ -1,0 +1,8 @@
+  WARN  E4 raw/epsilon.md has no matching sources/epsilon.md (not yet ingested)
+  WARN  W1 orphan (no inbound link from a content page): concepts/gamma.md
+  WARN  W1 orphan (no inbound link from a content page): entities/tools/tool-b.md
+  ERROR E1 missing/empty `type` frontmatter: concepts/gamma.md
+  ERROR E2 broken link `../concepts/missing.md` in concepts/beta.md
+  ERROR E4 sources/delta.md has no matching raw/delta.md
+
+3 error(s), 3 warning(s).
