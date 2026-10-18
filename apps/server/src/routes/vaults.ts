@@ -1,6 +1,22 @@
 import { Hono } from "hono";
+import pino from "pino";
 import { z } from "zod";
 import { createVault, deleteVault, listVaults, readRegistry } from "../vaults/registry.js";
+
+const log = pino({ name: "vault-create" });
+
+/**
+ * Fixed copy for the filesystem failures a create can hit. The raw message of
+ * an `ENOENT`/`EACCES`/`ENOSPC` names absolute source and destination paths,
+ * and those must not reach the client.
+ */
+const CREATE_FAILURE_MESSAGES: Record<string, string> = {
+  EACCES: "The server cannot write to the vault directory.",
+  EPERM: "The server cannot write to the vault directory.",
+  ENOSPC: "The disk is full.",
+  ENOENT: "A template file needed to create the vault is missing.",
+  EEXIST: "The vault directory already exists.",
+};
 
 /**
  * GET /api/vaults — returns 200 and the ordered vault array (empty array,
@@ -45,8 +61,16 @@ vaults.post("/", async (c) => {
       // a slug. That is a request error, not a server fault.
       return c.json({ error: "invalid_name", message: msg }, 400);
     }
-    // Never leak a host path; the message already names the vault.
-    return c.json({ error: "create_failed", message: msg }, 500);
+    // Log the detail server-side and answer with fixed copy: a filesystem
+    // error message can name absolute host paths.
+    log.error({ err }, "vault create failed");
+    const fsCode = (err as NodeJS.ErrnoException).code;
+    const safe =
+      fsCode !== undefined ? CREATE_FAILURE_MESSAGES[fsCode] : undefined;
+    return c.json(
+      { error: "create_failed", message: safe ?? "Could not create the vault." },
+      500,
+    );
   }
 });
 
