@@ -101,6 +101,109 @@ describe("validateNetscapeCookie", () => {
   });
 });
 
+describe("cookieHeaderToNetscape", () => {
+  it("converts one pair into one fixed seven-field line", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID=abc123")).toEqual({
+      ok: true,
+      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc123",
+    });
+  });
+
+  it("keeps several pairs in input order", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID=x; PREF=en-US;")).toEqual({
+      ok: true,
+      text: [
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx",
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US",
+      ].join("\n"),
+    });
+  });
+
+  it("splits on the first = only, so a value may contain =", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID=a=b=c")).toEqual({
+      ok: true,
+      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\ta=b=c",
+    });
+  });
+
+  it("trims the space around the pair, the name and the value", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("   SID = abc  ;  PREF = en-US  ")).toEqual({
+      ok: true,
+      text: [
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tabc",
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten-US",
+      ].join("\n"),
+    });
+  });
+
+  it("skips empty and doubled separators", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID=x;;PREF=en;;")).toEqual({
+      ok: true,
+      text: [
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\tx",
+        ".youtube.com\tTRUE\t/\tTRUE\t0\tPREF\ten",
+      ].join("\n"),
+    });
+  });
+
+  it("allows an empty value", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID=")).toEqual({
+      ok: true,
+      text: ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\t",
+    });
+  });
+
+  it("refuses empty and whitespace-only input as empty", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("")).toEqual({ ok: false, reason: "empty" });
+    expect(cookieHeaderToNetscape("  \n\t ")).toEqual({ ok: false, reason: "empty" });
+    expect(cookieHeaderToNetscape(" ; ;; ")).toEqual({ ok: false, reason: "empty" });
+  });
+
+  it("refuses a segment without = and a segment starting with = as bad_pair", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("not-a-pair")).toEqual({ ok: false, reason: "bad_pair" });
+    expect(cookieHeaderToNetscape("SID=x; not-a-pair")).toEqual({
+      ok: false,
+      reason: "bad_pair",
+    });
+    expect(cookieHeaderToNetscape("SID=x; =value")).toEqual({ ok: false, reason: "bad_pair" });
+  });
+
+  it("refuses an empty name", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("  = value")).toEqual({ ok: false, reason: "bad_pair" });
+  });
+
+  it("refuses a tab in a name", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    expect(cookieHeaderToNetscape("SID\tX=abc")).toEqual({ ok: false, reason: "bad_pair" });
+  });
+
+  it("refuses a tab, CR or LF in a value", async () => {
+    const { cookieHeaderToNetscape } = await reload();
+    for (const value of ["ab\tc", "ab\rc", "ab\nc"]) {
+      expect(cookieHeaderToNetscape(`SID=${value}`)).toEqual({
+        ok: false,
+        reason: "bad_pair",
+      });
+    }
+  });
+
+  it("produces a body the existing validator accepts", async () => {
+    const { cookieHeaderToNetscape, validateNetscapeCookie } = await reload();
+    const converted = cookieHeaderToNetscape("SID=abc123; PREF=en-US; HSID=hidden");
+    expect(converted.ok).toBe(true);
+    expect(validateNetscapeCookie(converted.text ?? "")).toEqual({ ok: true });
+  });
+});
+
 describe("writeYoutubeCookie", () => {
   it("stores a valid body byte-identically at mode 0600", async () => {
     const { writeYoutubeCookie } = await reload();

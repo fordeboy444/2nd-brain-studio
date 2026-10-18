@@ -78,6 +78,60 @@ export function validateNetscapeCookie(text: string): CookieValidation {
   return { ok: true };
 }
 
+export type CookieHeaderReason = "empty" | "bad_pair" | "too_large";
+
+export interface CookieHeaderConversion {
+  ok: boolean;
+  /** The Netscape body, without a trailing newline. Present only when `ok`. */
+  text?: string;
+  reason?: CookieHeaderReason;
+}
+
+/** A tab, CR or LF would shift a field or start a line inside the file. */
+const HEADER_INJECTION = /[\t\r\n]/;
+
+/**
+ * Convert a raw browser `Cookie` header (`name=value; name=value`) into a
+ * Netscape cookie body for `.youtube.com` (INGEST-05, T-261018-02).
+ *
+ * Each segment is split on the FIRST `=` so a value may contain `=`, and the
+ * pair, name and value are trimmed. An empty segment is skipped, so a trailing
+ * `;` and a doubled `;;` are accepted. An empty name, a segment without `=`, or
+ * a name/value carrying a tab, CR or LF is refused: those are exactly the
+ * characters that shift a Netscape field or inject a line. The result is
+ * re-validated as a whole file by `validateNetscapeCookie` before any write.
+ *
+ * `too_large` is defence in depth — the route caps the request body first.
+ */
+export function cookieHeaderToNetscape(header: string): CookieHeaderConversion {
+  const lines: string[] = [];
+  for (const segment of header.split(";")) {
+    const pair = segment.trim();
+    if (pair === "") continue;
+
+    const at = pair.indexOf("=");
+    // `-1` is no `=`; `0` is a pair that starts with `=`, so the name is empty.
+    if (at <= 0) return { ok: false, reason: "bad_pair" };
+
+    const name = pair.slice(0, at).trim();
+    const value = pair.slice(at + 1).trim();
+    if (name === "") return { ok: false, reason: "bad_pair" };
+    if (HEADER_INJECTION.test(name) || HEADER_INJECTION.test(value)) {
+      return { ok: false, reason: "bad_pair" };
+    }
+
+    lines.push(`.youtube.com\tTRUE\t/\tTRUE\t0\t${name}\t${value}`);
+  }
+
+  if (lines.length === 0) return { ok: false, reason: "empty" };
+
+  const text = lines.join("\n");
+  if (Buffer.byteLength(text, "utf8") > MAX_COOKIE_BYTES) {
+    return { ok: false, reason: "too_large" };
+  }
+  return { ok: true, text };
+}
+
 /**
  * The path to hand yt-dlp as `--cookies`, or undefined when no cookie file
  * exists. Existence is the only check: the body is never read here.
