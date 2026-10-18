@@ -4158,6 +4158,12 @@ button.secondary:active:not(:disabled),
 .jobs-modal {
   width: min(1080px, 94vw);
   max-width: 94vw;
+  /* The failed-unit table grows with the number of failures. Without a
+     ceiling the fixed backdrop clips a tall table at both ends and no
+     scroll container exists, so those rows are unreachable. Same pattern
+     as the Settings modal. */
+  max-height: 86vh;
+  overflow-y: auto;
 }
 .jobs-screen {
   display: grid;
