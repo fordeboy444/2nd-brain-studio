@@ -139,6 +139,27 @@ export function renderSourcesSection(bullets: readonly string[]): string {
 /** A page slug and an entity subtype name a path, so both are closed shapes. */
 const PAGE_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 
+/**
+ * The reference entity directories. The bundle and `buildIndexes` know only
+ * these three groups, so each manifest entity type maps onto one of them.
+ */
+const ENTITY_DIRS: ReadonlyMap<string, string> = new Map([
+  ["person", "people"],
+  ["organization", "organizations"],
+]);
+
+/**
+ * The bundle directory for one entity type.
+ *
+ * `tools` is the reference group for tools, products and frameworks; any type
+ * outside the three fixed groups (including `unknown`) also lands there, so
+ * every entity page is listed by an index and the bundle still lints.
+ */
+export function entityDirFor(entityType: string): string {
+  if (!PAGE_SLUG_RE.test(entityType)) throw new Error("invalid entity type");
+  return ENTITY_DIRS.get(entityType) ?? "tools";
+}
+
 /** The three page kinds a bundle contains below its root. */
 export type PageKind = "source" | "concept" | "entity";
 
@@ -158,10 +179,8 @@ export function pagePathFor(
   if (kind === "source") return `sources/${slug}.md`;
   if (kind === "concept") return `concepts/${slug}.md`;
   if (kind === "entity") {
-    if (entityType === undefined || !PAGE_SLUG_RE.test(entityType)) {
-      throw new Error("invalid entity type");
-    }
-    return `entities/${entityType}/${slug}.md`;
+    if (entityType === undefined) throw new Error("invalid entity type");
+    return `entities/${entityDirFor(entityType)}/${slug}.md`;
   }
   throw new Error(`unknown page kind: ${String(kind)}`);
 }

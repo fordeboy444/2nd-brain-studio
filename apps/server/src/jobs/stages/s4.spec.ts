@@ -286,7 +286,7 @@ describe("S4a source pages", () => {
     ]);
     const labels = new Set([
       "concepts/agentic-workflow.md",
-      "entities/tool/n8n.md",
+      "entities/tools/n8n.md",
     ]);
     const result = await renderSourcePages(
       job,
@@ -328,7 +328,7 @@ describe("S4a source pages", () => {
     expect(video!.body).toContain(
       "- [Agentic Workflow](../concepts/agentic-workflow.md)",
     );
-    expect(video!.body).toContain("- [n8n](../entities/tool/n8n.md)");
+    expect(video!.body).toContain("- [n8n](../entities/tools/n8n.md)");
     expect(video!.body).toContain("- **[0:01:05]** hello there");
     expect(video!.body).not.toContain("## Sources");
 
@@ -798,7 +798,7 @@ describe("S4 typed edges and written-page links", () => {
     expect(page!.body).toContain(
       "- [Agentic Workflow](../concepts/agentic-workflow.md)",
     );
-    expect(page!.body).not.toContain("../entities/tool/n8n.md");
+    expect(page!.body).not.toContain("../entities/tools/n8n.md");
   });
 
   it("runs S3 and S4 without opening a raw capture", async () => {

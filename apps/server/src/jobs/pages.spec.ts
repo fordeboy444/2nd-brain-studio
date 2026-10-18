@@ -157,7 +157,17 @@ describe("pagePathFor", () => {
     expect(pagePathFor("concept", "agentic-workflow")).toBe(
       "concepts/agentic-workflow.md",
     );
-    expect(pagePathFor("entity", "n8n", "tool")).toBe("entities/tool/n8n.md");
+    expect(pagePathFor("entity", "n8n", "tool")).toBe("entities/tools/n8n.md");
+    expect(pagePathFor("entity", "ada", "person")).toBe(
+      "entities/people/ada.md",
+    );
+    expect(pagePathFor("entity", "acme", "organization")).toBe(
+      "entities/organizations/acme.md",
+    );
+    // A type outside the three reference groups still reaches an index.
+    expect(pagePathFor("entity", "mystery", "unknown")).toBe(
+      "entities/tools/mystery.md",
+    );
   });
 
   it("rejects an entity with no type and a slug that could leave the bundle", () => {
@@ -268,7 +278,7 @@ describe("label page renderers", () => {
     expect(body).toContain(
       "- [Context Engineering](../concepts/context-engineering.md)",
     );
-    expect(body).toContain("- [n8n](../entities/tool/n8n.md)");
+    expect(body).toContain("- [n8n](../entities/tools/n8n.md)");
   });
 
   it("renders the reference citation grammar from the first quote", () => {
@@ -343,7 +353,7 @@ describe("renderSourcePage", () => {
     expect(entitiesAt).toBeGreaterThan(conceptsAt);
     expect(momentsAt).toBeGreaterThan(entitiesAt);
     expect(body).toContain("- [Agentic Workflow](../concepts/agentic-workflow.md)");
-    expect(body).toContain("- [n8n](../entities/tool/n8n.md)");
+    expect(body).toContain("- [n8n](../entities/tools/n8n.md)");
     expect(body).toContain("- **[0:00:00]** hello there");
     // A source page has no `## Sources` section.
     expect(body).not.toContain("## Sources");

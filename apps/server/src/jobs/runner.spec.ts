@@ -190,6 +190,12 @@ function makeDeps(overrides: Partial<StageDeps> = {}): StageDeps {
   };
 }
 
+/** The raw capture files, without the index S5 writes into the same folder. */
+async function rawCaptures(): Promise<string[]> {
+  const names = await readdir(join(root, "raw"));
+  return names.filter((name) => name !== "index.md");
+}
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "runner-spec-"));
   await mkdir(join(root, "raw"), { recursive: true });
@@ -412,7 +418,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       await readFile(join(root, ".okf", "jobs", job.id, "01-enumerate.json"), "utf8"),
     );
     expect(enumerated.count).toBe(1);
-    expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    expect(await rawCaptures()).toEqual(["first-talk.md"]);
     expect(llm.calls).toBe(1);
 
     const extraction = JSON.parse(
@@ -422,7 +428,41 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       ),
     );
     expect(extraction.slug).toBe("first-talk");
-    expect(await readdir(join(root, "sources"))).toEqual(["first-talk.md"]);
+    expect(
+      (await readdir(join(root, "sources"))).filter(
+        (name) => name !== "index.md",
+      ),
+    ).toEqual(["first-talk.md"]);
+
+    // S5 runs after S4, makes no model call, and always leaves a report.
+    const jobDir = join(root, ".okf", "jobs", job.id);
+    for (const path of [
+      "concepts/index.md",
+      "entities/index.md",
+      "entities/tools/index.md",
+      "entities/people/index.md",
+      "entities/organizations/index.md",
+      "sources/index.md",
+      "raw/index.md",
+    ]) {
+      await expect(readFile(join(root, path), "utf8")).resolves.toContain("#");
+    }
+    await expect(readFile(join(root, "log.md"), "utf8")).resolves.toContain(
+      "Done.",
+    );
+    const report = JSON.parse(
+      await readFile(join(jobDir, "lint-report.json"), "utf8"),
+    ) as { exitCode: number };
+    expect(report.exitCode).toBe(0);
+    const events = await readEvents(jobDir, 0);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "stage" &&
+          event.data.stage === "S5" &&
+          event.data.status === "lint",
+      ),
+    ).toBe(true);
 
     const onDisk = await readJob(root, job.id);
     expect(onDisk.status).toBe("completed");
@@ -495,7 +535,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     const onDisk = await readJob(root, job.id);
     expect(onDisk.status).toBe("failed");
     expect(onDisk.error).toBe("preflight_failed");
-    expect(await readdir(join(root, "raw"))).toEqual([]);
+    expect(await rawCaptures()).toEqual([]);
   });
 
   it("continues the job when one unit fails, recording the injected reason", async () => {
@@ -524,7 +564,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
       stage: "S1",
       reason: "blocked",
     });
-    expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    expect(await rawCaptures()).toEqual(["first-talk.md"]);
   });
 
   it("applies the persisted filters in S0 before any unit runs", async () => {
@@ -641,7 +681,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     await runJob(job, deps);
 
     expect(fetched).toEqual(["abc123", "def456"]);
-    expect((await readdir(join(root, "raw"))).sort()).toEqual([
+    expect((await rawCaptures()).sort()).toEqual([
       "live-def456.md",
       "live.md",
     ]);
@@ -713,7 +753,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(fetches).toBe(0);
     const onDisk = await readJob(root, job.id);
     expect(onDisk.status).toBe("completed");
-    expect(await readdir(join(root, "raw"))).toEqual(["example-post.md"]);
+    expect(await rawCaptures()).toEqual(["example-post.md"]);
     const events = await readEvents(join(root, ".okf", "jobs", job.id), 0);
     const skip = events.find(
       (event) => event.type === "unit" && event.data.status === "skipped",
@@ -740,7 +780,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
 
     expect(finished.status).toBe("completed");
     expect(finished.stage).toBe("done");
-    expect(await readdir(join(root, "raw"))).toEqual(["fresh-page.md"]);
+    expect(await rawCaptures()).toEqual(["fresh-page.md"]);
     const parsed = parseFrontmatter(
       await readFile(join(root, "raw", "fresh-page.md"), "utf8"),
     );
@@ -765,7 +805,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(finished.stage).toBe("done");
     expect(finished.skipped).toHaveLength(1);
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "fetch_error" });
-    expect(await readdir(join(root, "raw"))).toEqual([]);
+    expect(await rawCaptures()).toEqual([]);
   });
 
   it("keeps a tagged web SkipError and never calls the web classifier", async () => {
@@ -787,7 +827,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(finished.status).toBe("completed");
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "blocked" });
     expect(classified).toBe(0);
-    expect(await readdir(join(root, "raw"))).toEqual([]);
+    expect(await rawCaptures()).toEqual([]);
   });
 
   it("runs the real createWebFetcher through runJob with a fake fetch and lookup", async () => {
@@ -815,7 +855,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     const finished = await runJob(job, deps);
 
     expect(finished.status).toBe("completed");
-    const files = await readdir(join(root, "raw"));
+    const files = await rawCaptures();
     expect(files).toHaveLength(1);
     const parsed = parseFrontmatter(
       await readFile(join(root, "raw", files[0] as string), "utf8"),
@@ -845,7 +885,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(finished.status).toBe("completed");
     expect(finished.skipped).toHaveLength(1);
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "empty_transcript" });
-    expect(await readdir(join(root, "raw"))).toEqual([]);
+    expect(await rawCaptures()).toEqual([]);
   });
 
   it("skips a matching video capture on a second run with zero adapter calls", async () => {
@@ -909,7 +949,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     ]);
     expect(onDisk.skipped[0]?.detail).toBe("sign in wall");
     expect(webCalls).toBe(0);
-    expect(await readdir(join(root, "raw"))).toEqual(["third-talk.md"]);
+    expect(await rawCaptures()).toEqual(["third-talk.md"]);
   });
 
   it("never writes the Supadata key to job state, events, raw captures or pino lines", async () => {
@@ -987,7 +1027,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     const jobDir = join(root, ".okf", "jobs", job.id);
     artifacts.set("job.json", await readFile(join(jobDir, "job.json"), "utf8"));
     artifacts.set("events.ndjson", await readFile(join(jobDir, "events.ndjson"), "utf8"));
-    const rawFiles = await readdir(join(root, "raw"));
+    const rawFiles = await rawCaptures();
     for (const name of rawFiles) {
       artifacts.set(`raw/${name}`, await readFile(join(root, "raw", name), "utf8"));
     }
@@ -1074,7 +1114,7 @@ describe("cancel", () => {
     await runJob(job, deps);
 
     expect(secondCalled).toBe(false);
-    expect(await readdir(join(root, "raw"))).toEqual(["first-talk.md"]);
+    expect(await rawCaptures()).toEqual(["first-talk.md"]);
     const onDisk = await readJob(root, job.id);
     expect(onDisk.status).toBe("cancelled");
     expect(onDisk.stage).toBe("S1");
