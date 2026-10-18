@@ -1563,7 +1563,7 @@ describe("retry scope (PIPE-12)", () => {
       skipped: [
         { slug: "alpha", stage: "S2", reason: "malformed_json" },
         { slug: "alpha", stage: "S2", reason: "model_error" },
-        { slug: "labels-0", stage: "S3", reason: "model_error" },
+        { slug: "delta", stage: "S3", reason: "model_error" },
         { slug: "gamma", stage: "S4", reason: "model_error" },
         { slug: "some-label", stage: "S6", reason: "model_error" },
         { slug: "beta", stage: "S1", reason: "no_captions" },
@@ -1574,7 +1574,7 @@ describe("retry scope (PIPE-12)", () => {
       { slug: "alpha", stage: "S2" },
     ]);
     expect(retryUnitsFor(job, "S3")).toEqual([
-      { slug: "labels-0", stage: "S3" },
+      { slug: "delta", stage: "S3" },
     ]);
     expect(retryUnitsFor(job, "S4")).toEqual([
       { slug: "gamma", stage: "S4" },
@@ -1619,13 +1619,13 @@ describe("retry scope (PIPE-12)", () => {
     const job = makeVideoJob({
       status: "completed",
       stage: "done",
-      skipped: [{ slug: "labels-0", stage: "S3", reason: "model_error" }],
+      skipped: [{ slug: "delta", stage: "S3", reason: "model_error" }],
     });
 
     expect(retryJobRecord(job)).toEqual({ stage: "S3" });
     expect(job.stage).toBe("S3");
     expect(job.status).toBe("queued");
-    expect(job.retry?.units).toEqual([{ slug: "labels-0", stage: "S3" }]);
+    expect(job.retry?.units).toEqual([{ slug: "delta", stage: "S3" }]);
     expect(job.skipped).toEqual([]);
   });
 

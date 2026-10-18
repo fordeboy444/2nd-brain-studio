@@ -74,9 +74,9 @@ export interface S3CallContext {
   dir: string;
 }
 
-/** A batch the model could not answer; the stage turns it into a skip. */
+/** A batch the model could not answer; each member label becomes a skip. */
 export interface BatchFailure {
-  unit: string;
+  slugs: string[];
   reason: SkipReason;
   detail?: string;
 }
@@ -352,10 +352,15 @@ function callOptions(job: JobRecord) {
   };
 }
 
-function failureFrom(unit: string, error: unknown): BatchFailure {
+function failureFrom(
+  batch: readonly LabelCandidate[],
+  error: unknown,
+): BatchFailure {
   const detail = redactDetail(detailFor(error));
   return {
-    unit,
+    // Real label slugs, never a batch id: `skipped[]` is a unit surface and
+    // `labels-N` names nothing in the bundle (WR-07).
+    slugs: sortedUnique(batch.map((label) => label.slug)),
     reason: reasonForError(error),
     ...(detail !== undefined ? { detail } : {}),
   };
@@ -415,7 +420,7 @@ export async function canonicalizeLabels(
         });
       }
     } catch (error) {
-      failures.push(failureFrom(`labels-${index}`, error));
+      failures.push(failureFrom(batch, error));
     }
   }
 
@@ -669,7 +674,7 @@ export async function buildTaxonomy(
       mergeThemes(toolThemes, result.output.tool_themes);
       mergeThemes(sourceClusters, result.output.source_clusters);
     } catch (error) {
-      failures.push(failureFrom(`taxonomy-${index}`, error));
+      failures.push(failureFrom(batch, error));
     }
   }
 
@@ -687,7 +692,11 @@ export async function buildTaxonomy(
   };
 }
 
-/** Persist one failed batch as a retryable stage-S3 unit, then carry on. */
+/**
+ * Persist every member label of a failed batch as a retryable stage-S3 unit,
+ * then carry on. A batch id is not a unit slug, so it never reaches
+ * `job.skipped` or the Jobs screen (WR-07).
+ */
 async function recordFailures(
   failures: readonly BatchFailure[],
   job: JobRecord,
@@ -695,21 +704,23 @@ async function recordFailures(
   persist: () => Promise<void>,
 ): Promise<void> {
   for (const failure of failures) {
-    const skipped: SkippedUnit = {
-      slug: failure.unit,
-      stage: "S3",
-      reason: failure.reason,
-    };
-    if (failure.detail !== undefined) skipped.detail = failure.detail;
-    job.skipped.push(skipped);
-    await persist();
-    await appendEvent(dir, "unit", {
-      slug: failure.unit,
-      stage: "S3",
-      status: "skipped",
-      reason: failure.reason,
-      ...(failure.detail !== undefined ? { detail: failure.detail } : {}),
-    });
+    for (const slug of failure.slugs) {
+      const skipped: SkippedUnit = {
+        slug,
+        stage: "S3",
+        reason: failure.reason,
+      };
+      if (failure.detail !== undefined) skipped.detail = failure.detail;
+      job.skipped.push(skipped);
+      await persist();
+      await appendEvent(dir, "unit", {
+        slug,
+        stage: "S3",
+        status: "skipped",
+        reason: failure.reason,
+        ...(failure.detail !== undefined ? { detail: failure.detail } : {}),
+      });
+    }
   }
 }
 

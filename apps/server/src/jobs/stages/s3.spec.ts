@@ -807,13 +807,18 @@ describe("S3 failure containment", () => {
       await readFile(join(dir, "llm", "S3-labels-0-1.txt"), "utf8"),
     ).toBe("this is not json at all");
 
+    // One skip per member label of the failed batch, never the batch id.
     const skipped = finished.skipped.filter((unit) => unit.stage === "S3");
-    expect(skipped).toHaveLength(1);
-    expect(skipped[0]).toMatchObject({
-      slug: "labels-0",
-      stage: "S3",
-      reason: "malformed_json",
-    });
+    expect(skipped).toHaveLength(35);
+    expect(skipped.map((unit) => unit.slug)).toEqual(
+      Array.from(
+        { length: 35 },
+        (_, index) => `concept-${String(index).padStart(2, "0")}`,
+      ),
+    );
+    expect(skipped.map((unit) => unit.reason)).toEqual(
+      Array.from({ length: 35 }, () => "malformed_json"),
+    );
     expect(skipped[0]?.detail?.length).toBeLessThanOrEqual(200);
 
     const manifest = await readManifest(dir);

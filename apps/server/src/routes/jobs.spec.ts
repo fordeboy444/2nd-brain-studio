@@ -899,7 +899,7 @@ describe("POST /api/jobs/:id/retry", () => {
     const { vaultId, vaultDir } = await seeded(routes);
     const id = await settled(routes, vaultId, vaultDir, [
       { slug: "alpha", stage: "S2", reason: "malformed_json" },
-      { slug: "labels-0", stage: "S3", reason: "model_error" },
+      { slug: "delta", stage: "S3", reason: "model_error" },
       { slug: "gamma", stage: "S4", reason: "model_error" },
       { slug: "some-label", stage: "S6", reason: "model_error" },
     ]);
@@ -911,7 +911,7 @@ describe("POST /api/jobs/:id/retry", () => {
     expect(stored.stage).toBe("S2");
     expect(stored.retry?.units).toEqual([
       { slug: "alpha", stage: "S2" },
-      { slug: "labels-0", stage: "S3" },
+      { slug: "delta", stage: "S3" },
       { slug: "gamma", stage: "S4" },
       { slug: "some-label", stage: "S6" },
     ]);
