@@ -19,8 +19,18 @@ export type {
   OkfFrontmatter,
 } from "./frontmatter.js";
 
-export { buildIndexes, compareCodepoint } from "./indexes.js";
+export {
+  ROOT_BANNER_END,
+  ROOT_BANNER_START,
+  RootIndexError,
+  buildIndexes,
+  buildRootIndex,
+  compareCodepoint,
+  countBundle,
+  renderRootBanner,
+} from "./indexes.js";
 export type {
+  BundleCounts,
   IndexBuildResult,
   IndexFile,
   Taxonomy,

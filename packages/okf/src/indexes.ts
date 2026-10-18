@@ -8,8 +8,8 @@
  * Pure: pages arrive as plain `{ path, text }` objects and the result is plain
  * strings. No filesystem, no clock, no locale.
  */
-import { readIndexMeta } from "./frontmatter.js";
-import type { BundlePage } from "./frontmatter.js";
+import { parseFrontmatterSafe, readIndexMeta } from "./frontmatter.js";
+import type { BundlePage, OkfFrontmatter } from "./frontmatter.js";
 
 /** A theme name and the slugs it groups. */
 export type ThemeGroup = [string, string[]];
@@ -286,4 +286,155 @@ export function buildIndexes(
       "Done.",
     ],
   };
+}
+
+/**
+ * The reference banner marker.
+ *
+ * The reference uses one marker string for both ends of the generated region,
+ * so a search for the closing marker must start after the opening one.
+ */
+export const ROOT_BANNER_START = "<!-- GENERATED:BANNER -->";
+
+/** The marker that closes the generated region (the same literal). */
+export const ROOT_BANNER_END = "<!-- GENERATED:BANNER -->";
+
+/** The countable source pages of a bundle, split by source kind. */
+export interface BundleCounts {
+  /** Legacy and explicit video sources. */
+  videos: number;
+  /** Sources whose normalized `source_kind` is `web`. */
+  webPages: number;
+}
+
+/** Raised when the root index does not carry a balanced marker pair. */
+export class RootIndexError extends Error {
+  readonly code: "unbalanced_markers" = "unbalanced_markers";
+
+  constructor() {
+    super("root index has an unbalanced banner marker pair");
+    this.name = "RootIndexError";
+  }
+}
+
+/** Read one scalar frontmatter field with the library's quote stripping. */
+function frontmatterScalar(
+  data: OkfFrontmatter,
+  key: string,
+): string | null {
+  const value = data[key];
+  if (value === undefined || Array.isArray(value)) return null;
+  return String(value)
+    .trim()
+    .replace(/^"+|"+$/g, "")
+    .replace(/^'+|'+$/g, "");
+}
+
+/**
+ * Count the `sources/<stem>.md` pages of a bundle by source kind.
+ *
+ * Only a top-level page whose frontmatter parses and whose `type` is `source`
+ * is countable; a reserved `index.md` or `log.md` never is. A page with
+ * unsupported YAML is silently skipped rather than thrown on. A page with no
+ * `source_kind` is a legacy video source, so an imported reference bundle
+ * counts correctly.
+ */
+export function countBundle(pages: readonly BundlePage[]): BundleCounts {
+  const counts: BundleCounts = { videos: 0, webPages: 0 };
+  const prefix = "sources/";
+  for (const page of pages) {
+    if (!page.path.startsWith(prefix)) continue;
+    const name = page.path.slice(prefix.length);
+    if (name.includes("/") || !name.endsWith(".md")) continue;
+    if (name === "index.md" || name === "log.md") continue;
+    const parsed = parseFrontmatterSafe(page.text);
+    if (parsed === null) continue;
+    if (frontmatterScalar(parsed.data, "type") !== "source") continue;
+    const kind = frontmatterScalar(parsed.data, "source_kind");
+    if (kind !== null && kind.toLowerCase() === "web") {
+      counts.webPages += 1;
+    } else {
+      counts.videos += 1;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Render the generated coverage banner.
+ *
+ * Plain decimal digits, no separators, and the singular form for exactly one.
+ */
+export function renderRootBanner(counts: BundleCounts): string {
+  const videoWord = counts.videos === 1 ? "video" : "videos";
+  const webWord = counts.webPages === 1 ? "web page" : "web pages";
+  return [
+    ROOT_BANNER_START,
+    `**Coverage:** ${counts.videos} ${videoWord}, ${counts.webPages} ${webWord}`,
+    ROOT_BANNER_END,
+  ].join("\n");
+}
+
+/** Insert `okf_version: "0.1"` when the frontmatter does not declare one. */
+function ensureOkfVersion(text: string): string {
+  if (!text.startsWith("---")) {
+    return `---\nokf_version: "0.1"\n---\n\n${text}`;
+  }
+  const end = text.indexOf("\n---", 3);
+  if (end === -1) return text;
+  const frontmatter = text.slice(3, end);
+  if (/^okf_version\s*:/m.test(frontmatter)) return text;
+  const crlf = text.startsWith("---\r\n");
+  const insertAt = crlf ? 5 : 4;
+  return (
+    text.slice(0, insertAt) +
+    'okf_version: "0.1"' +
+    (crlf ? "\r\n" : "\n") +
+    text.slice(insertAt)
+  );
+}
+
+/** Insert the banner after the first H1, with one blank line on each side. */
+function insertBannerAfterHeading(text: string, banner: string): string {
+  const heading = /^# .*$/m.exec(text);
+  if (heading === null) {
+    const separator = text.endsWith("\n") ? "\n" : "\n\n";
+    return `${text}${separator}${banner}\n`;
+  }
+  let insertAt = heading.index + heading[0].length;
+  if (text.startsWith("\r\n", insertAt)) insertAt += 2;
+  else if (text.startsWith("\n", insertAt)) insertAt += 1;
+  const rest = text.slice(insertAt);
+  const trailing =
+    rest.startsWith("\n") || rest.startsWith("\r\n") ? "" : "\n";
+  return `${text.slice(0, insertAt)}\n${banner}\n${trailing}${rest}`;
+}
+
+/**
+ * Rebuild a root `index.md`: normalize `okf_version` and splice the banner.
+ *
+ * Every other byte is returned unchanged, including line endings and the
+ * final-newline state. The banner region is the only part replaced.
+ */
+export function buildRootIndex(
+  text: string,
+  pages: readonly BundlePage[],
+): string {
+  const normalized = ensureOkfVersion(text);
+  const banner = renderRootBanner(countBundle(pages));
+  const start = normalized.indexOf(ROOT_BANNER_START);
+  if (start >= 0) {
+    const end = normalized.indexOf(
+      ROOT_BANNER_END,
+      start + ROOT_BANNER_START.length,
+    );
+    if (end < 0) throw new RootIndexError();
+    return (
+      normalized.slice(0, start) +
+      banner +
+      normalized.slice(end + ROOT_BANNER_END.length)
+    );
+  }
+  if (normalized.includes(ROOT_BANNER_END)) throw new RootIndexError();
+  return insertBannerAfterHeading(normalized, banner);
 }

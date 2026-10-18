@@ -6,6 +6,10 @@ updated: 2026-10-17
 
 # Knowledge Bundle
 
+<!-- GENERATED:BANNER -->
+**Coverage:** 0 videos, 0 web pages
+<!-- GENERATED:BANNER -->
+
 This is the root catalog of an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog) (OKF v0.1) bundle. Read `SCHEMA.md` for the page types and frontmatter contract, then navigate by the indexes below.
 
 > This is a fresh scaffold. The sub-indexes populate as ingestion jobs run.

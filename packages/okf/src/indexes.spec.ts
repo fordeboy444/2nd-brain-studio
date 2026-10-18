@@ -11,7 +11,16 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { BundlePage } from "./frontmatter.js";
-import { buildIndexes, compareCodepoint } from "./indexes.js";
+import {
+  ROOT_BANNER_END,
+  ROOT_BANNER_START,
+  RootIndexError,
+  buildIndexes,
+  buildRootIndex,
+  compareCodepoint,
+  countBundle,
+  renderRootBanner,
+} from "./indexes.js";
 import type { IndexBuildResult, Taxonomy } from "./indexes.js";
 
 /** Build a page with the frontmatter subset the index reader consumes. */
@@ -195,6 +204,193 @@ describe("idempotency and ordering", () => {
     expect(compareCodepoint("～", "\u{1F600}")).toBeLessThan(0);
     expect(compareCodepoint("a", "a")).toBe(0);
     expect(compareCodepoint("b", "a")).toBeGreaterThan(0);
+  });
+});
+
+/** A source page with an optional `source_kind`. */
+function sourcePage(path: string, kind: string | null): BundlePage {
+  const lines = ["---", "type: source"];
+  if (kind !== null) lines.push(`source_kind: ${kind}`);
+  lines.push("---", "", "Body.", "");
+  return { path, text: lines.join("\n") };
+}
+
+/** Read a fixture or template file from the repository. */
+function read(relative: string): string {
+  return readFileSync(
+    fileURLToPath(new URL(relative, import.meta.url)),
+    "utf8",
+  );
+}
+
+describe("bundle counts", () => {
+  it("counts the clean fixture as one video and one web page", () => {
+    const root = "../tests/fixtures/bundle-clean/";
+    const pages: BundlePage[] = [
+      { path: "sources/video-a.md", text: read(`${root}sources/video-a.md`) },
+      { path: "sources/web-a.md", text: read(`${root}sources/web-a.md`) },
+    ];
+    expect(countBundle(pages)).toEqual({ videos: 1, webPages: 1 });
+  });
+
+  it("counts a legacy page with no source_kind as a video", () => {
+    expect(countBundle([sourcePage("sources/legacy.md", null)])).toEqual({
+      videos: 1,
+      webPages: 0,
+    });
+  });
+
+  it("normalizes source_kind case and surrounding space", () => {
+    expect(countBundle([sourcePage("sources/upper.md", " WEB ")])).toEqual({
+      videos: 0,
+      webPages: 1,
+    });
+  });
+
+  it("ignores reserved, nested, non-source and frontmatter-free pages", () => {
+    const pages: BundlePage[] = [
+      sourcePage("sources/index.md", "video"),
+      sourcePage("sources/log.md", "web"),
+      sourcePage("sources/nested/deep.md", "video"),
+      sourcePage("docs/elsewhere.md", "video"),
+      { path: "sources/note.md", text: "---\ntype: concept\n---\n" },
+      { path: "sources/nothing.md", text: "No frontmatter.\n" },
+    ];
+    expect(countBundle(pages)).toEqual({ videos: 0, webPages: 0 });
+  });
+
+  it("skips an unsupported nested map without throwing", () => {
+    const nested: BundlePage = {
+      path: "sources/unparseable.md",
+      text: "---\ntype: source\nmeta:\n  nested: true\n---\n",
+    };
+    expect(() => countBundle([nested])).not.toThrow();
+    expect(countBundle([nested])).toEqual({ videos: 0, webPages: 0 });
+  });
+});
+
+describe("coverage banner", () => {
+  it("renders zero counts with the plural form", () => {
+    expect(renderRootBanner({ videos: 0, webPages: 0 })).toBe(
+      [
+        ROOT_BANNER_START,
+        "**Coverage:** 0 videos, 0 web pages",
+        ROOT_BANNER_END,
+      ].join("\n"),
+    );
+  });
+
+  it("renders the singular form for exactly one", () => {
+    const banner = renderRootBanner({ videos: 1, webPages: 1 });
+    expect(banner).toContain("**Coverage:** 1 video, 1 web page");
+    expect(banner).not.toContain("1 videos");
+    expect(banner).not.toContain("1 web pages");
+  });
+
+  it("renders large counts as plain digits with no separators", () => {
+    expect(renderRootBanner({ videos: 1234, webPages: 5678 })).toContain(
+      "**Coverage:** 1234 videos, 5678 web pages",
+    );
+  });
+});
+
+describe("root index rebuild", () => {
+  it("is idempotent on the committed template", () => {
+    const template = read("../../../templates/okf-bundle/index.md");
+    expect(template).toContain("<!-- GENERATED:BANNER -->");
+    expect(template).toContain("**Coverage:** 0 videos, 0 web pages");
+    expect(buildRootIndex(template, [])).toBe(template);
+  });
+
+  it("replaces the region and preserves the prose bytes around it", () => {
+    const text = [
+      "---",
+      'okf_version: "0.1"',
+      "---",
+      "",
+      "# Knowledge Bundle",
+      "",
+      "Intro paragraph.",
+      "",
+      ROOT_BANNER_START,
+      "**Coverage:** 9 videos, 9 web pages",
+      ROOT_BANNER_END,
+      "",
+      "Tail paragraph.",
+      "",
+    ].join("\n");
+    const rebuilt = buildRootIndex(text, [sourcePage("sources/a.md", "video")]);
+    expect(rebuilt).toBe(
+      text.replace(
+        "**Coverage:** 9 videos, 9 web pages",
+        "**Coverage:** 1 video, 0 web pages",
+      ),
+    );
+  });
+
+  it("inserts the banner after the first H1 when the markers are absent", () => {
+    const text = '---\nokf_version: "0.1"\n---\n\n# Title\n\nBody.\n';
+    expect(buildRootIndex(text, [])).toBe(
+      '---\nokf_version: "0.1"\n---\n\n# Title\n\n' +
+        `${ROOT_BANNER_START}\n` +
+        "**Coverage:** 0 videos, 0 web pages\n" +
+        `${ROOT_BANNER_END}\n\n` +
+        "Body.\n",
+    );
+  });
+
+  it("throws a typed error on a single marker", () => {
+    const text = "# Title\n\n<!-- GENERATED:BANNER -->\n**Coverage:** 1 video\n";
+    let caught: unknown;
+    try {
+      buildRootIndex(text, []);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(RootIndexError);
+    expect((caught as RootIndexError).code).toBe("unbalanced_markers");
+    expect((caught as Error).message).toBe(
+      "root index has an unbalanced banner marker pair",
+    );
+  });
+
+  it("gains okf_version as the first frontmatter line when absent", () => {
+    const text = '---\ntitle: "Bundle"\n---\n\n# Bundle\n';
+    expect(buildRootIndex(text, [])).toContain(
+      '---\nokf_version: "0.1"\ntitle: "Bundle"\n---',
+    );
+  });
+
+  it("leaves an existing okf_version value unchanged", () => {
+    const text = '---\nokf_version: "0.2"\n---\n\n# Bundle\n';
+    const rebuilt = buildRootIndex(text, []);
+    expect(rebuilt).toContain('okf_version: "0.2"');
+    expect(rebuilt).not.toContain('okf_version: "0.1"');
+  });
+
+  it("preserves CRLF outside the banner region", () => {
+    const text =
+      '---\r\nokf_version: "0.1"\r\n---\r\n\r\n# Title\r\n\r\n' +
+      `${ROOT_BANNER_START}\r\n` +
+      "**Coverage:** 0 videos\r\n" +
+      `${ROOT_BANNER_END}\r\n\r\nTail.\r\n`;
+    const rebuilt = buildRootIndex(text, [
+      sourcePage("sources/a.md", "video"),
+      sourcePage("sources/b.md", "video"),
+    ]);
+    expect(rebuilt.slice(0, rebuilt.indexOf("<!"))).toBe(
+      '---\r\nokf_version: "0.1"\r\n---\r\n\r\n# Title\r\n\r\n',
+    );
+    expect(rebuilt).toContain("**Coverage:** 2 videos, 0 web pages");
+    const closing = rebuilt.lastIndexOf(ROOT_BANNER_END) + ROOT_BANNER_END.length;
+    expect(rebuilt.slice(closing)).toBe("\r\n\r\nTail.\r\n");
+  });
+
+  it("inserts okf_version with CRLF in a CRLF frontmatter block", () => {
+    const text = '---\r\ntitle: "Bundle"\r\n---\r\n\r\n# Bundle\r\n';
+    expect(buildRootIndex(text, [])).toContain(
+      '---\r\nokf_version: "0.1"\r\ntitle: "Bundle"\r\n---',
+    );
   });
 });
 
