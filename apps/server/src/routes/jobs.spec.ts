@@ -843,6 +843,30 @@ describe("POST /api/jobs/:id/retry", () => {
     expect(harness.enqueued.filter((job) => job.id === id)).toHaveLength(2);
   });
 
+  it("answers one 202 and one 409 when two retries overlap", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+    const before = harness.enqueued.filter((job) => job.id === id).length;
+
+    // Both requests read the terminal record before either write lands.
+    const [first, second] = await Promise.all([
+      routes.jobs.request(`/${id}/retry`, jsonInit({})),
+      routes.jobs.request(`/${id}/retry`, jsonInit({})),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([202, 409]);
+    const refused = first.status === 409 ? first : second;
+    expect(((await refused.json()) as { error: string }).error).toBe(
+      "retry_running",
+    );
+    expect(harness.enqueued.filter((job) => job.id === id)).toHaveLength(
+      before + 1,
+    );
+  });
+
   it("starts a fresh event log so the prior done frame is not replayed", async () => {
     const routes = await reload();
     const { vaultId, vaultDir } = await seeded(routes);

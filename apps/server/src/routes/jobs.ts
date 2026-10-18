@@ -526,6 +526,14 @@ jobs.get("/:id/artifacts", async (c) => {
 });
 
 /**
+ * Job ids with a retry in flight. The route reads, checks and writes in three
+ * steps; two overlapping POSTs for one id would both pass the terminal check
+ * and enqueue twice (WR-04). This set closes the check-to-write window. The
+ * stored `queued` record rejects every later retry after the write.
+ */
+const retriesInFlight = new Set<string>();
+
+/**
  * Retry the failed units of a terminal job (PIPE-12). The reset record comes
  * from the stored `skipped[]`, never from the request; the body only chooses
  * the retry mode, and PIPE-12 has one: failed units only. A running or queued
@@ -548,35 +556,46 @@ jobs.post("/:id/retry", async (c) => {
     );
   }
 
-  const found = await findJob(id);
-  if (found === null) {
-    return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
-  }
-
-  const plan = retryJobRecord(found.job);
-  if ("error" in plan) {
-    if (plan.error === "running") {
-      return c.json(
-        { error: "retry_running", message: "Retry after the job finishes." },
-        409,
-      );
-    }
+  if (retriesInFlight.has(id)) {
     return c.json(
-      { error: "no_failed_units", message: "No failed units to retry." },
+      { error: "retry_running", message: "Retry after the job finishes." },
       409,
     );
   }
+  retriesInFlight.add(id);
+  try {
+    const found = await findJob(id);
+    if (found === null) {
+      return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
+    }
 
-  // Persist first, exactly like create: boot resume can recover the reset job.
-  await writeJob(found.vaultDir, found.job);
-  // Start a fresh event log, so a client that reconnects at seq 0 does not
-  // replay the prior run's `done` frame and pin itself terminal (CR-01).
-  await resetJobEvents(jobDir(found.vaultDir, id));
-  void getJobQueue()
-    .enqueue(found.job)
-    .catch(() => undefined);
+    const plan = retryJobRecord(found.job);
+    if ("error" in plan) {
+      if (plan.error === "running") {
+        return c.json(
+          { error: "retry_running", message: "Retry after the job finishes." },
+          409,
+        );
+      }
+      return c.json(
+        { error: "no_failed_units", message: "No failed units to retry." },
+        409,
+      );
+    }
 
-  return c.json({ id, status: "queued" }, 202);
+    // Persist first, exactly like create: boot resume can recover the reset job.
+    await writeJob(found.vaultDir, found.job);
+    // Start a fresh event log, so a client that reconnects at seq 0 does not
+    // replay the prior run's `done` frame and pin itself terminal (CR-01).
+    await resetJobEvents(jobDir(found.vaultDir, id));
+    void getJobQueue()
+      .enqueue(found.job)
+      .catch(() => undefined);
+
+    return c.json({ id, status: "queued" }, 202);
+  } finally {
+    retriesInFlight.delete(id);
+  }
 });
 
 jobs.get("/:id", async (c) => {
