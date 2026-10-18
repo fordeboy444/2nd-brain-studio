@@ -152,12 +152,17 @@ For each source:
 ## 9. Validation
 
 The lint pass (Phase 2 `packages/okf`) enforces, deterministically:
-- every non-reserved `.md` has frontmatter with a non-empty `type`;
-- every relative markdown link resolves to a file in the bundle;
-- every concept/entity/source page appears in its directory `index.md`;
-- every `sources/<slug>.md` has a matching `raw/<slug>.md` and vice-versa;
-- no orphan concept/entity pages (each has >=1 inbound link);
-- the `.okf/` directory is pruned from the walk.
+- E1: every non-reserved `.md` has frontmatter with a non-empty `type`;
+- E2: every relative markdown link resolves to a file in the bundle;
+- E3: every concept/entity/source page appears in its directory `index.md`;
+- E4: every `sources/<slug>.md` has a matching `raw/<slug>.md` and vice-versa;
+- E5: every source page's `source_kind` agrees with `youtube_id`;
+- E6: no `## Sources` bullet cites a web source with a video timestamp (warning);
+- E7: no `[[wikilink]]` survives in prose, with code spans and fences excluded;
+- E8: every quoted citation appears in its cited raw material — within 45 seconds
+  before and 120 seconds after a video timestamp, or anywhere in a web capture —
+  at 55 percent word overlap, with the legacy `videos:` severity split;
+- W1: no orphan concept/entity pages (warning).
 
 Semantic checks (contradictions, staleness, missing concepts) are an LLM pass, not the script.
 
@@ -169,6 +174,8 @@ Semantic checks (contradictions, staleness, missing concepts) are an LLM pass, n
 | E2 | A relative markdown link does not resolve to a file |
 | E3 | A concept/entity/source page is absent from its directory `index.md` |
 | E4 | A `sources/<slug>.md` has no matching `raw/<slug>.md` or vice-versa |
-| E5 | A concept/entity page has zero inbound links (orphan) |
-| E6 | The `.okf/` directory was not pruned from the walk |
-| **E7** | **A source page cites a timestamp that is absent from its raw source record** — a provenance integrity error: the citation points at a moment that does not exist in the immutable source material. The lint pass flags any `## Sources` entry whose timestamp marker is not present in the matching `raw/<slug>.md`. |
+| E5 | A source page's `source_kind` and `youtube_id` disagree: a `web` source carries a `youtube_id`, or a `video` source lacks one |
+| E6 | A `## Sources` bullet cites a web source but carries a video timestamp (warning) |
+| E7 | A `[[wikilink]]` appears in prose; code spans and fenced blocks are excluded |
+| E8 | Citation integrity: a quoted citation does not match the cited raw material, or a citation has no quote, a video citation has no timestamp, or the cited source or raw page is missing. On a page declaring `sources:` these are errors; on a legacy page declaring only `videos:`, only a bullet in the grammar `link - "[H:MM:SS] quote"` is scored, and a below-threshold quote is a warning |
+| W1 | A concept/entity page has no inbound link from a non-index page (orphan, warning) |

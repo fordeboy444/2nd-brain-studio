@@ -21,20 +21,33 @@ function toPosix(path: string): string {
   return sep === "/" ? path : path.split(sep).join("/");
 }
 
+/** True when a path's first segment or the path itself is excluded. */
+function isExcluded(
+  relativePath: string,
+  excludeTopLevel: readonly string[],
+): boolean {
+  if (excludeTopLevel.includes(relativePath)) return true;
+  const slash = relativePath.indexOf("/");
+  const first = slash === -1 ? relativePath : relativePath.slice(0, slash);
+  return excludeTopLevel.includes(first);
+}
+
 /** Walk one directory, appending pages and every entry path. */
 function walk(
   root: string,
   dir: string,
   pages: BundlePage[],
   paths: string[],
+  excludeTopLevel: readonly string[],
 ): void {
   const entries = readdirSync(dir).sort();
   for (const name of entries) {
     const absolute = join(dir, name);
     const relativePath = toPosix(relative(root, absolute));
+    if (isExcluded(relativePath, excludeTopLevel)) continue;
     paths.push(relativePath);
     if (statSync(absolute).isDirectory()) {
-      walk(root, absolute, pages, paths);
+      walk(root, absolute, pages, paths, excludeTopLevel);
       continue;
     }
     if (!name.endsWith(".md")) continue;
@@ -42,17 +55,27 @@ function walk(
   }
 }
 
+/** Options shared by every bundle reader. */
+export interface ReadBundleOptions {
+  /** Top-level names or exact relative paths to skip, subtree included. */
+  excludeTopLevel?: readonly string[];
+}
+
 /**
  * Read a fixture bundle.
  *
  * @param root Absolute (or cwd-relative) path to the bundle directory.
+ * @param options Optional top-level exclusions for imported trees.
  */
-export function readBundle(root: string): {
+export function readBundle(
+  root: string,
+  options: ReadBundleOptions = {},
+): {
   pages: BundlePage[];
   paths: string[];
 } {
   const pages: BundlePage[] = [];
   const paths: string[] = [];
-  walk(root, root, pages, paths);
+  walk(root, root, pages, paths, options.excludeTopLevel ?? []);
   return { pages, paths };
 }
