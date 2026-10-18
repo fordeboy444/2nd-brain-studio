@@ -203,7 +203,7 @@ describe("POST /api/jobs", () => {
     // The per-job input and the global defaults are both in the record.
     expect(before.settings.maxVideos).toBe(5);
     expect(before.settings.fetch.concurrency).toBe(2);
-    expect(before.settings.sweep).toEqual({ enabled: true });
+    expect(before.settings.sweep).toEqual({ enabled: false });
 
     const settingsRoutes = await import("./settings.js");
     const put = await settingsRoutes.settings.request("/", {
