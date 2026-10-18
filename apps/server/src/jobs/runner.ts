@@ -373,14 +373,14 @@ async function runS1(
   }
   const units = [...bySlug.entries()];
 
-  const alreadyDone = job.progress?.done ?? 0;
-  job.progress = {
-    done: Math.min(alreadyDone, units.length),
-    total: units.length,
-  };
+  // `progress` counts this run's units. On resume the units re-run (captures
+  // are idempotent), so a carried-over count would double count them; the
+  // pre-reset value only tells us whether S1 has ever started.
+  const resumedDone = job.progress?.done ?? 0;
+  job.progress = { done: 0, total: units.length };
   await persist();
 
-  if (units.length > 0 && alreadyDone === 0) {
+  if (units.length > 0 && resumedDone === 0) {
     try {
       await deps.preflight(
         units.map(([, candidate]) => candidate),
