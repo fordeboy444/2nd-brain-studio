@@ -47,10 +47,12 @@ async function reload() {
   const store = await import("../jobs/store.js");
   return {
     jobs: routes.jobs,
+    sseOptions: routes.sseOptions,
     createVault: registry.createVault,
     vaultDirPath: registry.vaultDirPath,
     readJob: store.readJob,
     listJobs: store.listJobs,
+    appendEvent: store.appendEvent,
   };
 }
 
@@ -204,6 +206,50 @@ describe("GET /api/jobs", () => {
       expect(res.status).toBe(404);
       expect(((await res.json()) as { error: string }).error).toBe("job_not_found");
     }
+  });
+});
+
+describe("GET /api/jobs/:id/events", () => {
+  it("returns 404 JSON for an unknown job and never opens a stream", async () => {
+    const routes = await reload();
+    await seeded(routes);
+
+    const res = await routes.jobs.request("/j_20260101_abcdef/events");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type") ?? "").toContain("application/json");
+    expect(res.headers.get("content-type") ?? "").not.toContain("text/event-stream");
+    expect(((await res.json()) as { error: string }).error).toBe("job_not_found");
+  });
+
+  it("streams a persisted job's event log with the required SSE headers", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+    ).json()) as { id: string };
+
+    await routes.appendEvent(join(vaultDir, ".okf", "jobs", created.id), "stage", {
+      stage: "S0",
+      status: "started",
+    });
+
+    // Keep the stream quiet for the life of the assertion.
+    routes.sseOptions.pollMs = 1000;
+    routes.sseOptions.keepaliveMs = 60_000;
+
+    const res = await routes.jobs.request(`/${created.id}/events`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type") ?? "").toContain("text/event-stream");
+    expect(res.headers.get("cache-control")).toBe("no-cache");
+    expect(res.headers.get("x-accel-buffering")).toBe("no");
+
+    const reader = res.body?.getReader();
+    if (reader === undefined) throw new Error("no stream body");
+    const chunk = await reader.read();
+    await reader.cancel().catch(() => undefined);
+    const text = new TextDecoder().decode(chunk.value);
+    expect(text).toContain("id: 1");
+    expect(text).toContain("event: stage");
   });
 });
 

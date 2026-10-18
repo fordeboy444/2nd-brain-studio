@@ -17,9 +17,11 @@ import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import { InvalidSourceUrlError, normalizeChannelUrl } from "../ingest/urls.js";
 import { getJobQueue } from "../jobs/bootstrap.js";
+import { parseLastEventId, streamJobEvents } from "../jobs/events.js";
 import {
   createJobRecord,
   isJobId,
+  jobDir,
   listJobs,
   newJobId,
   readJob,
@@ -30,6 +32,16 @@ import type { JobRecord, JobSettings, JobStatus } from "../jobs/types.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 
 export const jobs = new Hono();
+
+/**
+ * Stream intervals. Production never writes this object; a spec sets short
+ * intervals so keepalive and tail behaviour are observable in a few
+ * milliseconds instead of 15 seconds.
+ */
+export const sseOptions: { pollMs: number; keepaliveMs: number } = {
+  pollMs: 250,
+  keepaliveMs: 15_000,
+};
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -190,6 +202,20 @@ jobs.get("/", async (c) => {
   });
 
   return c.json({ jobs: filtered });
+});
+
+/**
+ * Replay then tail one job's event log. An unknown job is a plain JSON 404
+ * before any stream opens, so the client never sees a 200 with no frames.
+ */
+jobs.get("/:id/events", async (c) => {
+  const id = c.req.param("id");
+  const found = await findJob(id);
+  if (found === null) {
+    return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
+  }
+  const lastSeq = parseLastEventId(c.req.header("last-event-id"));
+  return streamJobEvents(c, jobDir(found.vaultDir, id), lastSeq, sseOptions);
 });
 
 jobs.get("/:id", async (c) => {
