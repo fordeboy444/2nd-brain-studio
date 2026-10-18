@@ -25,6 +25,7 @@ import { resolveInVault } from "../../paths/jail.js";
 import { listExtractions } from "../extraction.js";
 import { readManifest, readTaxonomy, type ManifestRecord } from "../manifest.js";
 import {
+  readNotability,
   writeNotability,
   type NotabilityRecord,
 } from "../notability.js";
@@ -187,6 +188,24 @@ export async function collectSweepTargets(
 }
 
 /**
+ * The label slugs a retry narrows S6 to, or `null` for a full sweep. A retry
+ * that re-runs any earlier stage (S2/S3/S4) rebuilds the manifest or the
+ * pages, so the whole target set is evaluated, exactly like S4's barrier.
+ */
+export function s6Scope(job: JobRecord): ReadonlySet<string> | null {
+  if (job.retry === undefined) return null;
+  const barrier = job.retry.units.some(
+    (unit) => unit.stage === "S2" || unit.stage === "S3" || unit.stage === "S4",
+  );
+  if (barrier) return null;
+  return new Set(
+    job.retry.units
+      .filter((unit) => unit.stage === "S6")
+      .map((unit) => unit.slug),
+  );
+}
+
+/**
  * Rewrite `log.md` with one final `sweep: true` line. A second S6 run over the
  * same log does not add the line twice.
  */
@@ -279,23 +298,18 @@ export function createS6Stage(deps: StageDeps) {
     }
 
     const allTargets = await collectSweepTargets(job, manifest, ctx.vaultDir);
-    // A retry narrows the sweep to its recorded S6 units. A target outside
-    // that set makes no call and no event, so its page stays untouched.
-    const retrySlugs =
-      job.retry === undefined
-        ? null
-        : new Set(
-            job.retry.units
-              .filter((unit) => unit.stage === "S6")
-              .map((unit) => unit.slug),
-          );
+    // A retry narrows the sweep to its recorded S6 units, unless it also
+    // re-runs an earlier stage, which rebuilds the target set. A target
+    // outside the scope makes no call and no event, so its page stays
+    // untouched.
+    const scope = s6Scope(job);
     const targets =
-      retrySlugs === null
+      scope === null
         ? allTargets
-        : allTargets.filter((target) => retrySlugs.has(target.slug));
+        : allTargets.filter((target) => scope.has(target.slug));
     await writeSweepLog(deps, ctx.vaultDir);
     if (targets.length === 0) {
-      await writeNotability(dir, { scores: [], at: job.createdAt });
+      // Nothing was evaluated, so the stored triage stays as it was (CR-02).
       return false;
     }
 
@@ -407,7 +421,21 @@ export function createS6Stage(deps: StageDeps) {
       });
     }
 
-    await writeNotability(dir, { scores, at: job.createdAt });
+    // A retry merges into the stored triage, so scores for targets it did not
+    // evaluate survive. A full run replaces the record (CR-02).
+    if (job.retry === undefined) {
+      await writeNotability(dir, { scores, at: job.createdAt });
+    } else {
+      const previous = await readNotability(dir);
+      const merged = new Map(
+        (previous?.scores ?? []).map((score) => [score.slug, score.score] as const),
+      );
+      for (const score of scores) merged.set(score.slug, score.score);
+      await writeNotability(dir, {
+        scores: [...merged].map(([slug, score]) => ({ slug, score })),
+        at: previous?.at ?? job.createdAt,
+      });
+    }
     return false;
   };
 }

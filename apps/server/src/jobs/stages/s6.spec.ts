@@ -343,6 +343,54 @@ describe("S6 sweep", () => {
     ).toBe(true);
   });
 
+  it("keeps the stored triage and sweeps every target on an earlier-stage retry", async () => {
+    await writeFixtures(true);
+    await writeFile(
+      notabilityPath(dir),
+      JSON.stringify({
+        scores: [{ slug: "n8n", score: 0.4 }],
+        at: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+    // An S2 retry rebuilds the manifest and pages, so S6 must not narrow.
+    job.retry = { units: [{ slug: "first-talk", stage: "S2" }] };
+    job.skipped = [];
+    const { deps, calls } = makeDeps(() => sweepReply("agentic-workflow"));
+
+    const cancelled = await runS6(deps);
+
+    expect(cancelled).toBe(false);
+    expect(calls).toHaveLength(1);
+    const notability = NotabilitySchema.parse(
+      JSON.parse(await readFile(notabilityPath(dir), "utf8")),
+    );
+    expect(notability.scores).toEqual([
+      { slug: "agentic-workflow", score: 0.8 },
+      { slug: "n8n", score: 0.4 },
+    ]);
+    expect(notability.at).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("leaves the triage untouched when a narrowed retry has no targets", async () => {
+    await writeFixtures(true);
+    const stored = JSON.stringify({
+      scores: [{ slug: "agentic-workflow", score: 0.7 }],
+      at: JOB_CREATED,
+    });
+    await writeFile(notabilityPath(dir), stored, "utf8");
+    // The only target is outside the S6 scope; the sweep evaluates nothing.
+    job.retry = { units: [{ slug: "n8n", stage: "S6" }] };
+    job.skipped = [];
+    const { deps, calls } = makeDeps(() => sweepReply("agentic-workflow"));
+
+    const cancelled = await runS6(deps);
+
+    expect(cancelled).toBe(false);
+    expect(calls).toHaveLength(0);
+    expect(await readFile(notabilityPath(dir), "utf8")).toBe(stored);
+  });
+
   it("keeps the raw reply, the page and a retryable skip on a rejected reply", async () => {
     await writeFixtures(true);
     const before = await readFile(
