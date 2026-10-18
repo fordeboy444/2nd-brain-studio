@@ -422,6 +422,9 @@ export async function runJob(
       await appendEvent(dir, "stage", { stage, status: "completed" });
     }
 
+    // The retry scope lasts one run. Clearing it before the final persist keeps
+    // a finished retry from narrowing a later run (PIPE-12).
+    delete job.retry;
     job.stage = "done";
     job.status = "completed";
     await persist();

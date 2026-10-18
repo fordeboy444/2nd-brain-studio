@@ -278,7 +278,21 @@ export function createS6Stage(deps: StageDeps) {
       return false;
     }
 
-    const targets = await collectSweepTargets(job, manifest, ctx.vaultDir);
+    const allTargets = await collectSweepTargets(job, manifest, ctx.vaultDir);
+    // A retry narrows the sweep to its recorded S6 units. A target outside
+    // that set makes no call and no event, so its page stays untouched.
+    const retrySlugs =
+      job.retry === undefined
+        ? null
+        : new Set(
+            job.retry.units
+              .filter((unit) => unit.stage === "S6")
+              .map((unit) => unit.slug),
+          );
+    const targets =
+      retrySlugs === null
+        ? allTargets
+        : allTargets.filter((target) => retrySlugs.has(target.slug));
     await writeSweepLog(deps, ctx.vaultDir);
     if (targets.length === 0) {
       await writeNotability(dir, { scores: [], at: job.createdAt });

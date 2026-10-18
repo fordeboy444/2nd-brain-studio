@@ -208,11 +208,14 @@ export async function renderSourcePages(
   records: ReadonlyMap<string, ExtractionRecord>,
   written: Set<string>,
   persist: () => Promise<void>,
+  /** S4 unit slugs a retry may write, or `null` for a full run. */
+  only: ReadonlySet<string> | null = null,
 ): Promise<S4RunResult> {
   for (const source of manifest.sources) {
     const latest = await readJob(ctx.vaultDir, job.id);
     job.cancelRequested = latest.cancelRequested;
     if (job.cancelRequested) return { written, cancelled: true };
+    if (only !== null && !only.has(source.slug)) continue;
 
     const record = records.get(source.slug) ?? null;
     if (record === null) {
@@ -501,8 +504,15 @@ export async function renderLabelPages(
   records: readonly ExtractionRecord[],
   written: Set<string>,
   persist: () => Promise<void>,
+  /** S4 unit slugs a retry may write, or `null` for a full run. */
+  only: ReadonlySet<string> | null = null,
 ): Promise<boolean> {
-  const requests = buildPageRequests(manifest, records, taxonomy);
+  const allRequests = buildPageRequests(manifest, records, taxonomy);
+  if (allRequests.length === 0) return false;
+  const requests =
+    only === null
+      ? allRequests
+      : allRequests.filter((request) => only.has(request.slug));
   if (requests.length === 0) return false;
 
   const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
@@ -511,10 +521,11 @@ export async function renderLabelPages(
   const bodies = new Map<string, string>();
   const failures = new Map<string, string>();
 
-  // Every request gets a page, so an edge to a requested label resolves even
-  // before that page is written. A filtered label has no request and no page.
+  // Every manifest label resolves, so an edge from a source page written by
+  // this run still points at a page the earlier run wrote. A filtered label
+  // makes no call and no event.
   const labelPaths = new Set(
-    requests.map((request) =>
+    allRequests.map((request) =>
       pagePathFor(request.kind, request.slug, request.entityType),
     ),
   );
@@ -595,6 +606,26 @@ export async function renderLabelPages(
 }
 
 /**
+ * The S4 unit slugs a retry may write, or `null` for a full run.
+ *
+ * An S2 or S3 retry re-runs the manifest barrier, so S3 may have named a label
+ * the first run never saw. S4 then refreshes every page the new manifest
+ * references. A retry with only S4 or S6 units writes just its S4 units.
+ */
+function s4Scope(job: JobRecord): ReadonlySet<string> | null {
+  if (job.retry === undefined) return null;
+  const barrier = job.retry.units.some(
+    (unit) => unit.stage === "S2" || unit.stage === "S3",
+  );
+  if (barrier) return null;
+  return new Set(
+    job.retry.units
+      .filter((unit) => unit.stage === "S4")
+      .map((unit) => unit.slug),
+  );
+}
+
+/**
  * Build the S4 stage. It runs S4a, then the bounded S4b model path.
  */
 export function createS4Stage(deps: StageDeps): S4Stage {
@@ -618,6 +649,17 @@ export function createS4Stage(deps: StageDeps): S4Stage {
       records.map((record) => [record.source.slug, record] as const),
     );
     const written = new Set<string>();
+    const only = s4Scope(job);
+    if (only !== null) {
+      // A narrowed retry still resolves links against pages the first run
+      // wrote, so a source page keeps every concept and entity link.
+      for (const concept of manifest.concepts) {
+        written.add(pagePathFor("concept", concept.slug));
+      }
+      for (const entity of manifest.entities) {
+        written.add(pagePathFor("entity", entity.slug, entity.type));
+      }
+    }
 
     // S4b first: a source page links only to label pages that exist.
     const labelsCancelled = await renderLabelPages(
@@ -630,6 +672,7 @@ export function createS4Stage(deps: StageDeps): S4Stage {
       records,
       written,
       persist,
+      only,
     );
     if (labelsCancelled) return true;
 
@@ -643,6 +686,7 @@ export function createS4Stage(deps: StageDeps): S4Stage {
       bySlug,
       written,
       persist,
+      only,
     );
     return sourceResult.cancelled;
   };

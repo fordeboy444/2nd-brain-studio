@@ -1316,12 +1316,13 @@ async function runPipeline(
   job: JobRecord,
   client: LlmClient,
   counters: { fetchTranscript: number; fetchWeb: number },
+  candidates: VideoCandidate[] = PIPELINE_CANDIDATES,
 ): Promise<void> {
   await writeJob(root, job);
   const deps = makeDeps({
     llm: client,
     async enumerate() {
-      return PIPELINE_CANDIDATES;
+      return candidates;
     },
     async fetchTranscript(candidate) {
       counters.fetchTranscript += 1;
@@ -1797,7 +1798,9 @@ describe("retry scope (PIPE-12)", () => {
     expect(job.retry).toBeUndefined();
     expect(job.status).toBe("completed");
     expect(
-      Object.keys(await vaultPages()).filter((path) => path.startsWith("sources/")),
+      Object.keys(await vaultPages()).filter(
+        (path) => path.startsWith("sources/") && path !== "sources/index.md",
+      ),
     ).toHaveLength(4);
   });
 
@@ -1892,10 +1895,18 @@ describe("retry scope (PIPE-12)", () => {
 
   it("writes a label the retried extraction adds and links it from the new source", async () => {
     const job = makeVideoJob();
-    await runPipeline(job, failingS2Client("Agent talk", { quotes: true }).client, {
-      fetchTranscript: 0,
-      fetchWeb: 0,
-    });
+    // A deep-dive source keeps a label that only one extraction names.
+    const candidates = PIPELINE_CANDIDATES.map((candidate) =>
+      candidate.youtubeId === "vid1"
+        ? { ...candidate, durationSec: 1800 }
+        : candidate,
+    );
+    await runPipeline(
+      job,
+      failingS2Client("Agent talk", { quotes: true }).client,
+      { fetchTranscript: 0, fetchWeb: 0 },
+      candidates,
+    );
     const pagesA = await vaultPages();
     expect(pagesA["concepts/beta.md"]).toBeUndefined();
 

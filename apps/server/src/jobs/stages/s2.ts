@@ -213,11 +213,22 @@ export function createS2Stage(deps: StageDeps): S2Stage {
     const vaultDir = ctx.vaultDir;
     const slugs = await captureSlugs(vaultDir);
     const cache = createLlmCache(deps.cacheDirFor(job.vaultId));
+    // A retry narrows the loop to its recorded S2 units. A good unit makes no
+    // call and emits no event, so the earlier run's output stays untouched.
+    const retrySlugs =
+      job.retry === undefined
+        ? null
+        : new Set(
+            job.retry.units
+              .filter((unit) => unit.stage === "S2")
+              .map((unit) => unit.slug),
+          );
 
     for (const slug of slugs) {
       const latest = await readJob(vaultDir, job.id);
       job.cancelRequested = latest.cancelRequested;
       if (job.cancelRequested) return true;
+      if (retrySlugs !== null && !retrySlugs.has(slug)) continue;
 
       const capture = await readCaptureOnce(vaultDir, slug);
       if (capture === null) continue;
