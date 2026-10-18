@@ -161,7 +161,19 @@ export async function resumeJobs(): Promise<string[]> {
   const ids: string[] = [];
   for (const job of found) {
     log.info({ jobId: job.id, status: job.status }, "job_resumed");
-    active.enqueue(job);
+    // Observe the run promise. `runJob` can reject before its own try (for
+    // example a parseable record with no `settings`), and a bare
+    // fire-and-forget promise would become an unhandled rejection that Node
+    // 22 turns into a process exit — at boot, before the server listens.
+    void active.enqueue(job).catch((error) => {
+      log.error(
+        {
+          jobId: job.id,
+          reason: error instanceof Error ? error.message : String(error),
+        },
+        "job_resume_failed",
+      );
+    });
     ids.push(job.id);
   }
   return ids;

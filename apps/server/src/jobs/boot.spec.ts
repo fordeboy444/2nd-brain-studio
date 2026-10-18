@@ -172,6 +172,55 @@ describe("resumeJobs (PIPE-11)", () => {
     expect((await store.readJob(dirA, valid.id)).status).toBe("completed");
   });
 
+  it("survives a parseable record with no settings instead of rejecting unhandled", async () => {
+    const { registry, store, bootstrap, runner } = await load();
+    const dirA = await makeVault("vault-a");
+    await registry.writeRegistryAtomic({
+      version: 1,
+      vaults: [
+        {
+          id: "vault-a",
+          name: "Vault A",
+          path: "vault-a",
+          sourceKind: "manual",
+          createdAt: "2026-10-18T08:00:00.000Z",
+          lastOpenedAt: "2026-10-18T08:00:00.000Z",
+        },
+      ],
+    });
+
+    // Sorts like a real record and passes the queued filter, but `makeCtx`
+    // dereferences `settings.filters` and throws before runJob's own try.
+    const brokenId = "j_20261018_0000cc";
+    const brokenDir = join(dirA, ".okf", "jobs", brokenId);
+    await mkdir(brokenDir, { recursive: true });
+    await writeFile(
+      join(brokenDir, "job.json"),
+      JSON.stringify({
+        id: brokenId,
+        vaultId: "vault-a",
+        kind: "youtube",
+        status: "queued",
+        input: { url: "https://www.youtube.com/@vault-a" },
+        createdAt: "2026-10-18T09:00:00.000Z",
+        updatedAt: "2026-10-18T09:00:00.000Z",
+        progress: { done: 0, total: 0 },
+        skipped: [],
+        error: null,
+        cancelRequested: false,
+      }),
+      "utf8",
+    );
+
+    const queue = inertQueue(bootstrap, runner);
+    const ids = await bootstrap.resumeJobs();
+
+    expect(ids).toEqual([brokenId]);
+    // A rejected job must be observed: idle() resolves and the process lives.
+    await expect(queue.idle()).resolves.toBeUndefined();
+    expect((await store.readJob(dirA, brokenId)).status).toBe("queued");
+  });
+
   it("throws a clear error when the queue was never configured", async () => {
     const { bootstrap } = await load();
     expect(() => bootstrap.getJobQueue()).toThrow("not configured");
