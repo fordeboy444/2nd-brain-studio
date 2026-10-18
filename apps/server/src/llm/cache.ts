@@ -168,15 +168,21 @@ export async function callCached<T>(
     messages: request.messages,
   });
 
-  const cached = await cache.get<T>(key);
+  const cached = await cache.get<unknown>(key);
   if (cached !== null) {
-    return {
-      output: cached.output,
-      tokensIn: cached.tokensIn,
-      tokensOut: cached.tokensOut,
-      at: cached.at,
-      hit: true,
-    };
+    // The stored output must still satisfy the caller's schema. A parseable
+    // entry with a matching key is not enough: a hand-edited or pre-schema
+    // entry is a miss, not a trusted value (WR-01).
+    const stored = schema.safeParse(cached.output);
+    if (stored.success) {
+      return {
+        output: stored.data,
+        tokensIn: cached.tokensIn,
+        tokensOut: cached.tokensOut,
+        at: cached.at,
+        hit: true,
+      };
+    }
   }
 
   // `callJson` returns the validated value; wrap the client to observe the

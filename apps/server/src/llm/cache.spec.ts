@@ -269,6 +269,41 @@ describe("callCached", () => {
     expect(repaired.output).toEqual({ slug: "a" });
   });
 
+  it("treats a schema-invalid stored output as a miss and re-fetches once", async () => {
+    const cache = createLlmCache(root);
+    const key = cacheKey({
+      model: REQUEST.model,
+      promptVersion: REQUEST.promptVersion,
+      messages: REQUEST.messages,
+    });
+    await writeFile(
+      cache.pathFor(key),
+      JSON.stringify({
+        key,
+        model: REQUEST.model,
+        promptVersion: REQUEST.promptVersion,
+        stage: REQUEST.stage,
+        inputHash: hashMessages(REQUEST.messages),
+        output: { slug: 42 },
+        tokensIn: 5,
+        tokensOut: 6,
+        at: "2026-01-01T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const { client, calls } = fakeClient(['{"slug":"a"}']);
+    const result = await callCached(cache, client, REQUEST, SCHEMA);
+
+    expect(result.hit).toBe(false);
+    expect(result.output).toEqual({ slug: "a" });
+    expect(calls).toHaveLength(1);
+    const repaired = JSON.parse(await readFile(cache.pathFor(key), "utf8")) as {
+      output: unknown;
+    };
+    expect(repaired.output).toEqual({ slug: "a" });
+  });
+
   it("writes no entry when the reply is unrecoverable", async () => {
     const cache = createLlmCache(root);
     const { client } = fakeClient(["not json at all"]);
