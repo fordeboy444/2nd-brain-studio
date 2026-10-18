@@ -118,6 +118,34 @@ button.primary.hero:hover:not(:disabled) {
   box-shadow: var(--shadow-lg);
 }
 
+/* Default (non-accent) pill surface. `.primary` carries the accent fill; this
+   is the "default button surface" the UI-SPEC names for secondary actions, so
+   a `.ghost-pill` never falls back to native browser button chrome. */
+.ghost-pill {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  padding: var(--sp-2) var(--sp-4);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  transition:
+    background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease),
+    transform var(--t-fast) var(--ease);
+}
+.ghost-pill:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.ghost-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ghost-pill:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* Secondary / ghost text button */
 .link-btn {
   background: none;
@@ -4449,6 +4477,9 @@ button.secondary:active:not(:disabled),
   flex-direction: column;
   gap: var(--sp-2);
   min-width: 0;
+  /* Four columns in an auto-layout table: scroll instead of squeezing the
+     Reason cell to one character per line on a narrow viewport. */
+  overflow-x: auto;
 }
 .job-failed-table {
   width: 100%;
@@ -4473,6 +4504,11 @@ button.secondary:active:not(:disabled),
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
+}
+/* UI-SPEC exception: job row action buttons are 44px touch targets. */
+.job-failed-table .ghost-pill {
+  min-width: 44px;
+  min-height: 44px;
 }
 .job-empty {
   padding: var(--sp-3);

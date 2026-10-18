@@ -196,6 +196,25 @@ describe("pruned App.css", () => {
     expect(declaration(rule, "color")).toContain("var(--text-primary)");
   });
 
+  it("gives every .ghost-pill its own default button surface", () => {
+    // Phase 4's Retry controls use the bare class, and before this rule the
+    // only matches were `.confirm-actions .ghost-pill` and an `:active`
+    // pseudo-rule. A bare button then painted with the browser's native
+    // ButtonFace chrome in both themes. Anchor at column 0 so the check cannot
+    // be satisfied by the scoped confirm-dialog rule.
+    const base = ruleBody(appCssRules, /^\.ghost-pill\s*\{([^}]*)\}/m);
+    expect(declaration(base, "background")).toBe("var(--bg-surface)");
+    expect(declaration(base, "border")).toContain("var(--border-strong)");
+    expect(declaration(base, "border-radius")).toBe("var(--radius-pill)");
+    expect(declaration(base, "font-weight")).toBe("600");
+  });
+
+  it("gives the failed-unit Retry column the 44px touch target", () => {
+    const rule = ruleBody(appCssRules, /\.job-failed-table \.ghost-pill\s*\{([^}]*)\}/);
+    expect(declaration(rule, "min-width")).toBe("44px");
+    expect(declaration(rule, "min-height")).toBe("44px");
+  });
+
   it("references no custom property whose only declaration was pruned", () => {
     const declared = new Set([
       ...declaredProperties(appCssRules),
