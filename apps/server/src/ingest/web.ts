@@ -167,7 +167,10 @@ export const pinnedFetch: WebFetch = (input, init = {}) => {
         headers: Object.fromEntries(new Headers(init.headers).entries()),
         lookup: createPinnedLookup(addresses) as never,
         signal: init.signal ?? undefined,
-        servername: url.hostname,
+        // WHATWG `hostname` keeps the brackets around an IPv6 literal, but
+        // Node's TLS layer tests `net.isIP(servername)` and compares the
+        // certificate's IP SAN against the bare address. Brackets break both.
+        servername: url.hostname.replace(/^\[|\]$/g, ""),
       },
       (res) => {
         const peer = comparableAddress(res.socket.remoteAddress ?? "");
