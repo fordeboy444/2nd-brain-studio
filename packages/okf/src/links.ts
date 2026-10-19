@@ -33,11 +33,17 @@ export function stripCode(text: string): string {
 export function extractLinks(text: string): string[] {
   const links: string[] = [];
   let i = 0;
+  // The next `]` after the current `[`. Recomputing it only when it falls
+  // behind keeps the scan linear when many `[` precede one `]`.
+  let nextClose = -1;
   while (true) {
     const openBracket = text.indexOf("[", i);
     if (openBracket === -1) break;
-    const closeBracket = text.indexOf("]", openBracket + 1);
-    if (closeBracket === -1) break;
+    if (nextClose <= openBracket) {
+      nextClose = text.indexOf("]", openBracket + 1);
+      if (nextClose === -1) break;
+    }
+    const closeBracket = nextClose;
     if (text[closeBracket + 1] !== "(") {
       i = openBracket + 1;
       continue;

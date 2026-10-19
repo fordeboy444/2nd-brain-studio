@@ -156,4 +156,27 @@ describe("WR-09 regression", () => {
     expect(Date.now() - started).toBeLessThan(1000);
     expect(links).toEqual([]);
   });
+
+  it("stays linear when many openings precede one closing bracket (WR-13)", () => {
+    const shape = (size: number): string => "[".repeat(size) + "]";
+    // Warm both sizes so one-time JIT compilation is not measured.
+    extractLinks(shape(50_000));
+    extractLinks(shape(200_000));
+
+    const measure = (size: number): number => {
+      let best = Number.POSITIVE_INFINITY;
+      for (let run = 0; run < 3; run += 1) {
+        const started = Date.now();
+        expect(extractLinks(shape(size))).toEqual([]);
+        best = Math.min(best, Date.now() - started);
+      }
+      // Keep a 1 ms floor so sub-millisecond noise cannot inflate the ratio.
+      return Math.max(best, 1);
+    };
+
+    const small = measure(50_000);
+    const large = measure(200_000);
+    // Linear work grows 4x, quadratic work grows 16x; allow noise up to 10x.
+    expect(large).toBeLessThan(small * 10);
+  });
 });
