@@ -507,6 +507,7 @@ function conflictedState() {
       {
         path: "a.md",
         vaultId: VAULT_FOR_TABS.id,
+        generation: 0,
         baseHash: "old-hash",
         serverContent: "old",
         buffer: "new",
@@ -554,6 +555,7 @@ it("ignores a conflict that belongs to a vault no longer open", () => {
       {
         path: "a.md",
         vaultId: vaultB.id,
+        generation: 0,
         baseHash: "b-old",
         serverContent: "b old",
         buffer: "b unsaved",
@@ -589,6 +591,7 @@ it("drops a save failure that lands after a vault switch", async () => {
       {
         path: "a.md",
         vaultId: VAULT_FOR_TABS.id,
+        generation: 0,
         baseHash: "a-old",
         serverContent: "a old",
         buffer: "a unsaved",
@@ -617,6 +620,7 @@ it("drops a save failure that lands after a vault switch", async () => {
       {
         path: "a.md",
         vaultId: vaultB.id,
+        generation: 0,
         baseHash: "b-old",
         serverContent: "b old",
         buffer: "b unsaved",
@@ -634,6 +638,59 @@ it("drops a save failure that lands after a vault switch", async () => {
   expect(useStore.getState().conflict).toBeNull();
   expect(useStore.getState().saveError).toBeNull();
   expect(useStore.getState().tabs[0]!.buffer).toBe("b unsaved");
+});
+
+it("does not patch a re-opened tab with a save that started before it", async () => {
+  useStore.setState({
+    ...INITIAL,
+    currentVault: VAULT_FOR_TABS,
+    tabs: [
+      {
+        path: "a.md",
+        vaultId: VAULT_FOR_TABS.id,
+        generation: 0,
+        baseHash: "a-old",
+        serverContent: "a old",
+        buffer: "a edit",
+        loading: false,
+        error: null,
+        saving: false,
+      },
+    ],
+    activeTabPath: "a.md",
+    conflict: null,
+    saveError: null,
+  });
+
+  let releaseWrite = () => {};
+  const heldWrite = new Promise<Response>((resolve) => {
+    releaseWrite = () => resolve(json({ path: "a.md", baseHash: "a-saved" }));
+  });
+  globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "PUT") return heldWrite;
+    // The re-open's GET lands before the PUT's rename, so it sees pre-save bytes.
+    return json({ path: "a.md", content: "a old", baseHash: "a-old" });
+  }) as unknown as typeof fetch;
+
+  const saving = useStore.getState().saveActive();
+  // Close the tab while the PUT is in flight and re-open the same path. The new
+  // tab is a different instance at the same `(vaultId, path)`.
+  useStore.getState().closeTab(VAULT_FOR_TABS.id, "a.md");
+  useStore.getState().openFile(VAULT_FOR_TABS.id, "a.md");
+  await vi.waitFor(() => {
+    expect(useStore.getState().tabs[0]?.loading).toBe(false);
+  });
+
+  releaseWrite();
+  await saving;
+
+  const tab = useStore.getState().tabs[0]!;
+  expect(tab.serverContent).toBe("a old");
+  expect(tab.baseHash).toBe("a-old");
+  // Nothing was typed into the re-opened tab, so it must stay clean: patching it
+  // would make the next Save revert the edit that already succeeded.
+  expect(tab.buffer).toBe(tab.serverContent);
+  expect(useStore.getState().pendingTreeRefresh).toBeNull();
 });
 
 it("keeps a cancel failure visible instead of refreshing it away", async () => {

@@ -63,6 +63,7 @@ const TREE = markLoaded(EMPTY_TREE, "", [entry("notes", true), entry("Alpha.md",
 const TAB: Tab = {
   path: "Alpha.md",
   vaultId: VAULT.id,
+  generation: 0,
   baseHash: "base-hash",
   serverContent: SERVER_CONTENT,
   buffer: DOC,

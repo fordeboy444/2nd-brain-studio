@@ -61,6 +61,13 @@ import { toast } from "./lib/toast.js";
 export interface Tab {
   path: string;
   vaultId: string;
+  /**
+   * Instance token, unique per tab created by `freshTab`. A tab is identified by
+   * `(vaultId, path)` for lookup, but a close and re-open of the same path
+   * produces a NEW tab at the same pair. An async save/read started on the old
+   * instance must not patch the new one, so responses compare this value.
+   */
+  generation: number;
   baseHash: string | null;
   /** The last content the server acknowledged; `null` until the read lands. */
   serverContent: string | null;
@@ -366,11 +373,15 @@ function patchTabs(tabs: Tab[], vaultId: string, path: string, patch: Partial<Ta
   return tabs.map((t) => (sameTab(t, vaultId, path) ? { ...t, ...patch } : t));
 }
 
+/** Monotonic tab instance token. Only `freshTab` consumes it. */
+let nextGeneration = 0;
+
 /** A fresh tab for a path nobody has read yet. */
 function freshTab(vaultId: string, path: string): Tab {
   return {
     path,
     vaultId,
+    generation: nextGeneration++,
     baseHash: null,
     serverContent: null,
     buffer: "",
@@ -563,30 +574,51 @@ export const useStore = create<AppState>((set, get) => {
       // clear over text the server never received.
       const sending = tab.buffer;
       const wasCreate = tab.baseHash === null;
+      // The response may land after this tab was closed and the same path
+      // re-opened. `(vaultId, path)` still matches the new tab, but its buffer
+      // is the freshly read one. Patching it with `sending` would mark text the
+      // user never typed as dirty and let the next save revert the edit that
+      // just succeeded, so the token captured here must match before any patch.
+      const generation = tab.generation;
       setTab(tab.vaultId, tab.path, { saving: true });
       try {
         const res = await writeFile(tab.vaultId, tab.path, sending, tab.baseHash);
-        set((s) => ({
-          tabs: patchTabs(s.tabs, tab.vaultId, tab.path, {
-            saving: false,
-            baseHash: res.baseHash,
-            serverContent: sending,
-          }),
-          saveError:
-            s.saveError?.vaultId === tab.vaultId && s.saveError.path === tab.path
-              ? null
-              : s.saveError,
-          // A file the server did not know about now exists, and the tree is
-          // the only place that shows it. One level is re-read — the directory
-          // the file landed in — rather than the whole tree: the sidebar shows
-          // a row for a file the moment its level comes back.
-          pendingTreeRefresh: wasCreate ? dirOf(tab.path) : s.pendingTreeRefresh,
-        }));
+        set((s) => {
+          const now = s.tabs.find((t) => sameTab(t, tab.vaultId, tab.path));
+          if (!now || now.generation !== generation) return { tabs: s.tabs };
+          return {
+            tabs: patchTabs(s.tabs, tab.vaultId, tab.path, {
+              saving: false,
+              baseHash: res.baseHash,
+              serverContent: sending,
+            }),
+            saveError:
+              s.saveError?.vaultId === tab.vaultId && s.saveError.path === tab.path
+                ? null
+                : s.saveError,
+            // A file the server did not know about now exists, and the tree is
+            // the only place that shows it. One level is re-read — the directory
+            // the file landed in — rather than the whole tree: the sidebar shows
+            // a row for a file the moment its level comes back. Only ask when
+            // this tab is still open in the vault that is current: a refresh
+            // request from another vault would name a directory that vault does
+            // not have.
+            pendingTreeRefresh:
+              wasCreate && s.currentVault?.id === tab.vaultId
+                ? dirOf(tab.path)
+                : s.pendingTreeRefresh,
+          };
+        });
       } catch (e) {
         // The BUFFER IS NEVER TOUCHED on either path below. Not on a conflict,
         // not on a failure: the user's text is still on screen and still in the
         // store, and only an explicit choice replaces it.
         set((s) => {
+          const now = s.tabs.find((t) => sameTab(t, tab.vaultId, tab.path));
+          // Same rule as the success path: a response for a tab instance that
+          // no longer exists must not clear the re-opened tab's `saving` flag
+          // (it is already false) or attach a banner to it.
+          if (!now || now.generation !== generation) return { tabs: s.tabs };
           const tabsNow = patchTabs(s.tabs, tab.vaultId, tab.path, { saving: false });
           // The response can land after a vault switch. A banner from the old
           // vault would be meaningless in the new one (and could replace a
