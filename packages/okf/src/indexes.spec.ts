@@ -399,6 +399,8 @@ describe("root index rebuild", () => {
     expect(rebuilt).toContain("**Coverage:** 2 videos, 0 web pages");
     const closing = rebuilt.lastIndexOf(ROOT_BANNER_END) + ROOT_BANNER_END.length;
     expect(rebuilt.slice(closing)).toBe("\r\n\r\nTail.\r\n");
+    // The banner region is replaced, not appended: no lone LF may survive.
+    expect(rebuilt.replace(/\r\n/g, "")).not.toContain("\n");
   });
 
   it("inserts okf_version with CRLF in a CRLF frontmatter block", () => {

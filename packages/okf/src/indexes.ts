@@ -437,9 +437,13 @@ export function buildRootIndex(
       start + ROOT_BANNER_START.length,
     );
     if (end < 0) throw new RootIndexError();
+    // The banner is built with LF; match the file's own line ending so the
+    // replaced region cannot splice a lone LF into a CRLF document.
+    const eol = normalized.includes("\r\n") ? "\r\n" : "\n";
+    const bannerText = banner.replace(/\n/g, eol);
     return (
       normalized.slice(0, start) +
-      banner +
+      bannerText +
       normalized.slice(end + ROOT_BANNER_END.length)
     );
   }
