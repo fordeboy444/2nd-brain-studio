@@ -1,3 +1,11 @@
+---
+type: overview
+title: "Knowledge Bundle"
+description: "An Open Knowledge Format (OKF) bundle: a synthesized, densely cross-linked graph of concepts and entities mined from a source, not a raw dump."
+tags: [readme, overview]
+updated: 2026-10-17
+---
+
 # Knowledge Bundle
 
 This is an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog) (OKF v0.1) bundle: a synthesized, densely cross-linked graph of concepts and entities mined from a source, not a raw dump.
