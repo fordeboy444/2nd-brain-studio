@@ -164,16 +164,17 @@ describe("LintModal", () => {
     expect(link).toBeTruthy();
     expect(link!.getAttribute("data-path")).toBe("sources/src.md");
 
-    // A message with no .md path at all renders as text, no link.
+    // A message with no .md path at all renders as text, no link. The phrase
+    // "bundle configuration is invalid" contains no markdown file path.
     const noPath: LintReport = {
       ok: false,
       scanned: 1,
-      errors: [{ rule: "E1", severity: "error", message: "E1 bundle has no index.md" }],
+      errors: [{ rule: "E1", severity: "error", message: "E1 bundle configuration is invalid" }],
       warnings: [],
     };
     const { host: host2 } = await mount({ report: noPath });
     expect(host2.querySelector("[data-lint-file-link]")).toBeNull();
-    expect(host2.querySelector("[data-lint-issue]")?.textContent).toContain("bundle has no index.md");
+    expect(host2.querySelector("[data-lint-issue]")?.textContent).toContain("bundle configuration is invalid");
   });
 
   it("scrolls inside a bounded container so a large lint list cannot freeze the UI (T-05-12)", async () => {
@@ -194,10 +195,10 @@ describe("LintModal", () => {
 
     const list = host.querySelector("[data-lint-list]");
     expect(list).toBeTruthy();
-    expect(list!.scrollHeight).toBeGreaterThan(0);
-    // The max-height is set inline; jsdom does not compute layout, so the
-    // assertion is on the declaration the browser acts on, not a measured
-    // pixel height. `overflowY: "auto"` is what makes the container scroll.
+    // jsdom does not compute layout, so scrollHeight is always 0. The
+    // assertion is on the CSS declaration the browser acts on, not a measured
+    // pixel height: `overflowY: "auto"` is what makes the container scroll,
+    // and `maxHeight` bounds it so the modal never grows past the viewport.
     expect((list as HTMLElement).style.overflowY).toBe("auto");
     const maxHeight = (list as HTMLElement).style.maxHeight;
     expect(maxHeight).not.toBe("");

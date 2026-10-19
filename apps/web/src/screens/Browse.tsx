@@ -4,6 +4,7 @@ import { BacklinksPanel } from "../components/BacklinksPanel.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
 import { IndexCatalog } from "../components/IndexCatalog.js";
+import { LintModal } from "../components/LintModal.js";
 import { MarkdownEditor } from "../components/MarkdownEditor.js";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { RightPanel } from "../components/RightPanel.js";
@@ -13,7 +14,7 @@ import { Spinner } from "../components/Spinner.js";
 import { TabBar } from "../components/TabBar.js";
 import { ThemeToggle } from "../components/ThemeToggle.js";
 import { VaultTree } from "../components/VaultTree.js";
-import { writeFile, type Vault } from "../lib/api.js";
+import { lintVault, reindexVault, writeFile, type LintReport, type Vault } from "../lib/api.js";
 import { ROOT } from "../lib/tree/lazyTree.js";
 import { toast } from "../lib/toast.js";
 import { useSidebarWidth } from "../lib/useSidebarWidth.js";
@@ -57,11 +58,16 @@ export function Browse() {
   const currentVault = useStore((s) => s.currentVault);
   const health = useStore((s) => s.health);
   const healthError = useStore((s) => s.healthError);
+  const isReadOnly = useStore((s) => s.isReadOnly);
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const openRightPanel = useStore((s) => s.openRightPanel);
   const closeRightPanel = useStore((s) => s.closeRightPanel);
   const activeTabPath = useStore((s) => s.activeTabPath);
   const [mode, setMode] = useState<ViewMode>("edit");
+  // The lint report modal. `null` = closed; a `LintReport` = open with that
+  // report. The Lint button sets this after the API call lands; the modal's
+  // close handler and file-link click both clear it.
+  const [lintReport, setLintReport] = useState<LintReport | null>(null);
 
   // The mode belongs to the screen, but the catalog is only meaningful for an
   // index file. When the active tab changes, snap to the right default:
@@ -72,6 +78,49 @@ export function Browse() {
     if (activeTabPath && isIndexPath(activeTabPath)) setMode("catalog");
     else setMode("edit");
   }, [activeTabPath]);
+
+  /**
+   * Lint the current vault. The call is read-only — the server's lint route
+   * does not write anything — so it stays enabled in read-only mode (T-05-13
+   * only gates Reindex). A failure is a toast, not a modal: the modal is for a
+   * successful scan's report, and a lint call that cannot reach the server is
+   * the same shape as any other failed fetch.
+   */
+  async function handleLint() {
+    const vaultId = useStore.getState().currentVault?.id;
+    if (!vaultId) return;
+    try {
+      const report = await lintVault(vaultId);
+      setLintReport(report);
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
+
+  /**
+   * Reindex the current vault. The server's read-only middleware rejects this
+   * with 403 when the instance is secondary; the button is disabled
+   * client-side too (T-05-13), so the 403 path is a defense-in-depth backstop.
+   * On success the tree is refreshed so the new index files appear, and a
+   * toast names how many files were rewritten.
+   */
+  async function handleReindex() {
+    const state = useStore.getState();
+    const vaultId = state.currentVault?.id;
+    if (!vaultId) return;
+    try {
+      const result = await reindexVault(vaultId);
+      state.requestTreeRefresh(ROOT);
+      toast(
+        result.updated.length > 0
+          ? `Reindexed ${result.updated.length} ${result.updated.length === 1 ? "file" : "files"}`
+          : "Reindexed: no changes",
+        "success",
+      );
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  }
 
   /**
    * Create a document in the vault root and open it (`New file`).
@@ -205,6 +254,40 @@ export function Browse() {
             </AsyncButton>
           )}
           <div className="header-actions">
+            {/* Lint and Reindex: bundle-maintenance actions. Lint is read-only
+                and stays enabled in read-only mode; Reindex writes files, so
+                the server rejects it with 403 and the button is disabled
+                client-side too (T-05-13). */}
+            {currentVault && (
+              <AsyncButton
+                className="ghost sm"
+                aria-label="Lint"
+                onClick={handleLint}
+                style={{
+                  padding: "var(--sp-1) var(--sp-3)",
+                  fontSize: "var(--fs-sm)",
+                  fontWeight: 600,
+                }}
+              >
+                Lint
+              </AsyncButton>
+            )}
+            {currentVault && (
+              <AsyncButton
+                className="ghost sm"
+                aria-label="Reindex"
+                onClick={handleReindex}
+                disabled={isReadOnly}
+                title={isReadOnly ? "Reindex is disabled in read-only mode" : undefined}
+                style={{
+                  padding: "var(--sp-1) var(--sp-3)",
+                  fontSize: "var(--fs-sm)",
+                  fontWeight: 600,
+                }}
+              >
+                Reindex
+              </AsyncButton>
+            )}
             <span
               title={healthError ?? undefined}
               style={{
@@ -287,6 +370,21 @@ export function Browse() {
           <RightPanel />
         </div>
       </main>
+
+      {/* The lint report modal. Rendered when `lintReport` is set — the Lint
+          button's handler — and cleared by the modal's close handler and by a
+          file-link click (which opens the file and closes the modal in one
+          gesture). */}
+      {lintReport && (
+        <LintModal
+          report={lintReport}
+          onSelectFile={(path) => {
+            const state = useStore.getState();
+            if (state.currentVault) state.openFile(state.currentVault.id, path);
+          }}
+          onClose={() => setLintReport(null)}
+        />
+      )}
     </div>
   );
 }

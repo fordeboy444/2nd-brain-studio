@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Browse } from "./Browse.js";
 import { isDirty, useStore, type AppState } from "../store.js";
+import { clearToasts, getToasts } from "../lib/toast.js";
 import type { Vault } from "../lib/api.js";
 
 /**
@@ -246,6 +247,7 @@ beforeEach(() => {
   deleteAnswer = () => json({ deleted: true, id: VAULT.id });
   vaultList = [VAULT];
   failDir = null;
+  clearToasts();
   useStore.setState(INITIAL);
   stubFetch();
 });
@@ -1155,8 +1157,11 @@ describe("Browse, the Lint and Reindex toolbar (API-01, API-02, T-05-13)", () =>
     expect(reindexCalls.length).toBe(1);
     expect(reindexCalls[0]!.method).toBe("POST");
 
-    // A success toast was emitted.
-    expect(host.textContent).toContain("Reindexed");
+    // A success toast was emitted. The toast lives in the module-level toast
+    // emitter (lib/toast.ts), not in the Browse DOM — the Toasts viewport is
+    // mounted in App, not in this test's <Browse>-only mount.
+    const toasts = getToasts();
+    expect(toasts.some((t) => t.text.includes("Reindexed"))).toBe(true);
 
     // The tree was refreshed — at least one more root-level read than before.
     const after = callsTo("/api/vaults/v1/tree").length;
@@ -1164,8 +1169,13 @@ describe("Browse, the Lint and Reindex toolbar (API-01, API-02, T-05-13)", () =>
   });
 
   it("disables Reindex when the instance is read-only (T-05-13)", async () => {
-    useStore.setState({ isReadOnly: true });
     const host = await mountWithVault();
+    // Flip to read-only AFTER mount: mountWithVault sets isReadOnly: false in
+    // its setState, so the toggle has to come after to be observed by Browse.
+    await act(async () => {
+      useStore.setState({ isReadOnly: true });
+    });
+    await settle();
 
     const reindexBtn = host.querySelector<HTMLButtonElement>(
       'button[aria-label="Reindex"]',
