@@ -92,8 +92,10 @@ const CreateJobBody = z.discriminatedUnion("kind", [YoutubeCreateBody, WebCreate
 /**
  * POST /:id/retry body. Strict, so an unknown key is a 400 rather than a value
  * that silently changes what the route does. An empty body means `onlyFailed`.
+ * `onlyFailed: false` is refused: PIPE-12 has one retry mode, and accepting the
+ * value while retrying failed units only would do the opposite of the request.
  */
-const RetryBody = z.object({ onlyFailed: z.boolean().optional() }).strict();
+const RetryBody = z.object({ onlyFailed: z.literal(true).optional() }).strict();
 
 /**
  * POST /api/jobs/preview body: the create body without `vaultId`, because a

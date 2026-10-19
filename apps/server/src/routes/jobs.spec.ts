@@ -1017,6 +1017,25 @@ describe("POST /api/jobs/:id/retry", () => {
     expect(harness.enqueued).toHaveLength(before);
   });
 
+  it("returns 400 for onlyFailed: false and changes nothing", async () => {
+    const routes = await reload();
+    const { vaultId, vaultDir } = await seeded(routes);
+    const id = await settled(routes, vaultId, vaultDir, [
+      { slug: "alpha", stage: "S2", reason: "malformed_json" },
+    ]);
+
+    const res = await routes.jobs.request(
+      `/${id}/retry`,
+      jsonInit({ onlyFailed: false }),
+    );
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("invalid_body");
+
+    const stored = await routes.readJob(vaultDir, id);
+    expect(stored.status).toBe("completed");
+    expect(stored.retry).toBeUndefined();
+  });
+
   it("returns 400 for an unknown body key and changes nothing", async () => {
     const routes = await reload();
     const { vaultId, vaultDir } = await seeded(routes);
