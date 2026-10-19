@@ -598,6 +598,8 @@ async function runS1(
         tier: capture.tier,
       });
     } catch (error) {
+      // A cancel is not a unit failure: record no skip and stop the stage.
+      if (ctx.signal.aborted) return true;
       const skipped = skippedFor(
         error,
         slug,
@@ -684,6 +686,8 @@ async function runS1w(
     await persist();
     await appendEvent(dir, "unit", { slug, stage: "S1w", status: "written" });
   } catch (error) {
+    // As in S1: an aborted scrape ends the stage and is not a skip.
+    if (ctx.signal.aborted) return true;
     const skipped = skippedFor(error, fallbackSlug, "S1w", deps.classifyWebError);
     job.skipped.push(skipped);
     job.progress.done = 1;

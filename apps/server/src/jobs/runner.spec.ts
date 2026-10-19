@@ -1620,6 +1620,43 @@ describe("cancel", () => {
     expect((await readJob(root, job.id)).status).toBe("cancelled");
   });
 
+  it("records no skip when an abort lands inside a unit fetch", async () => {
+    let signalEntered: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const deps = makeDeps({
+      async enumerate() {
+        return [VIDEO_A];
+      },
+      async fetchTranscript(_candidate, ctx) {
+        signalEntered();
+        await new Promise<never>((_resolve, reject) => {
+          const fail = (): void => reject(new DOMException("The operation was aborted.", "AbortError"));
+          if (ctx.signal.aborted) {
+            fail();
+            return;
+          }
+          ctx.signal.addEventListener("abort", fail, { once: true });
+        });
+      },
+    });
+
+    const queue = createJobQueue(deps);
+    const run = queue.enqueue(job);
+    await entered;
+    await queue.cancel(root, job.id);
+    await run;
+
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("cancelled");
+    // The abort is not a unit failure: no bogus skip and no progress advance.
+    expect(onDisk.skipped).toEqual([]);
+    expect(onDisk.progress.done).toBe(0);
+  });
+
   it("stops between units, keeps the first capture and never calls the second adapter", async () => {
     let secondCalled = false;
     let job: JobRecord = makeVideoJob();

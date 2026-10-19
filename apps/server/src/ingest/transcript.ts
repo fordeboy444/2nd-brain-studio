@@ -264,9 +264,14 @@ async function fetchTierThree(
   try {
     response = await deps.fetch(url, {
       headers: { "x-api-key": deps.supadataKey },
-      signal: AbortSignal.timeout(30_000),
+      // The job signal is authoritative: a cancel must end the request now,
+      // not after the 30 s cap.
+      signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(30_000)]),
     });
   } catch (error) {
+    // Abort could come from the job signal or the timeout; only the latter is
+    // a timeout.
+    if (ctx.signal.aborted) return failed("fetch_error", "cancelled");
     const name = (error as { name?: unknown } | null)?.name;
     if (name === "TimeoutError" || name === "AbortError") {
       return failed("timeout");
@@ -329,15 +334,21 @@ export function createTranscriptCascade(
     candidate: VideoCandidate,
     ctx: UnitContext,
   ): Promise<TierResult> {
+    // A cancellation is authoritative: do not start another tier after it.
+    // The runner re-checks the signal and ends the stage instead of recording
+    // this result as a skip.
+    if (ctx.signal.aborted) return failed("fetch_error", "cancelled");
     const attempts: { tier: number; result: TierResult }[] = [];
 
     const tier1 = await fetchJson3Transcript(candidate, ctx, { run: runYtDlp });
     attempts.push({ tier: 1, result: tier1 });
     if (tier1.ok) return tier1;
+    if (ctx.signal.aborted) return failed("fetch_error", "cancelled");
 
     const tier2 = await fetchTierTwo(candidate, ctx, runPython);
     attempts.push({ tier: 2, result: tier2 });
     if (tier2.ok) return tier2;
+    if (ctx.signal.aborted) return failed("fetch_error", "cancelled");
 
     if (supadataKey !== undefined && supadataKey !== "") {
       const tier3 = await fetchTierThree(candidate, ctx, {

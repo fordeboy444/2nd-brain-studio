@@ -271,6 +271,62 @@ describe("tier 3 (Supadata)", () => {
     expect((result as { detail?: string }).detail).toContain("tier3=fetch_error");
   });
 
+  it("aborts the Supadata request with the job signal", async () => {
+    const controller = new AbortController();
+    const seen: AbortSignal[] = [];
+    const fetch = (async (_input: unknown, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) throw new Error("no signal");
+      seen.push(signal);
+      const aborted = new Promise<never>((_resolve, reject) => {
+        const fail = (): void =>
+          reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+        if (signal.aborted) {
+          fail();
+          return;
+        }
+        signal.addEventListener("abort", fail, { once: true });
+      });
+      controller.abort();
+      await aborted;
+      throw new Error("unreachable");
+    }) as unknown as typeof globalThis.fetch;
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneMissing,
+      runPython: pythonReturning("[]", 1).run,
+      fetch,
+      supadataKey: KEY,
+    });
+
+    const result = await cascade.fetch(CANDIDATE, ctx({ signal: controller.signal }));
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.aborted).toBe(true);
+    // The job signal is reported as a cancel, not as the 30 s timeout.
+    expect(result).toMatchObject({ ok: false, reason: "fetch_error" });
+    expect((result as { detail?: string }).detail).toContain("cancelled");
+  });
+
+  it("does not start tier 3 after the job signal aborts", async () => {
+    const controller = new AbortController();
+    const http = fetchReturning({ content: [] });
+    const abortingPython: PythonRun = async () => {
+      controller.abort();
+      return { exitCode: 1, stdout: "", stderr: "", timedOut: false };
+    };
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneMissing,
+      runPython: abortingPython,
+      fetch: http.fetch,
+      supadataKey: KEY,
+    });
+
+    const result = await cascade.fetch(CANDIDATE, ctx({ signal: controller.signal }));
+
+    expect(http.calls).toHaveLength(0);
+    expect(result).toMatchObject({ ok: false, reason: "fetch_error", detail: "cancelled" });
+  });
+
   it("maps an abort to timeout", async () => {
     const timeout = new Error("The operation was aborted");
     timeout.name = "TimeoutError";
