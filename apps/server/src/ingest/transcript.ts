@@ -128,13 +128,28 @@ function failed(reason: SkipReason, detail?: string): TierResult {
 }
 
 /**
- * A channel verdict outranks a per-video reason, which outranks nothing.
- * Other reasons tie, so the later real attempt supplies the explanation.
+ * A channel verdict outranks everything; an actionable per-video verdict
+ * (`no_captions`, `empty_transcript`) and a local tier failure tie above the
+ * generic tier-3 HTTP error. Without the last rule a Supadata 5xx masked the
+ * real "this video has no captions" answer.
+ *
+ * Ties keep the later attempt (the established contract: a real tier-2
+ * failure explains a missing caption file better than tier 1's bare
+ * `no_captions`), but a tier-3 `fetch_error` never outranks an earlier
+ * actionable reason.
  */
 const REASON_SPECIFICITY: Partial<Record<SkipReason, number>> = {
   blocked: 2,
   timeout: 2,
+  no_captions: 1,
+  empty_transcript: 1,
 };
+
+function specificityOf(attempt: { tier: number; result: TierResult }): number {
+  if (attempt.result.ok) return 0;
+  if (attempt.result.reason === "fetch_error" && attempt.tier === 3) return 0;
+  return REASON_SPECIFICITY[attempt.result.reason] ?? 1;
+}
 
 function mostSpecificReason(
   attempts: readonly { tier: number; result: TierResult }[],
@@ -152,8 +167,8 @@ function mostSpecificReason(
       chosen = attempt;
       continue;
     }
-    const rank = REASON_SPECIFICITY[attempt.result.reason] ?? 1;
-    const chosenRank = REASON_SPECIFICITY[chosen.result.reason] ?? 1;
+    const rank = specificityOf(attempt);
+    const chosenRank = specificityOf(chosen);
     if (rank >= chosenRank) chosen = attempt;
   }
   return chosen !== undefined && chosen.result.ok === false

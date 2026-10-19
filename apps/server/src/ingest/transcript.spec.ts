@@ -252,6 +252,25 @@ describe("tier 3 (Supadata)", () => {
     });
   });
 
+  it("keeps no_captions when the Supadata call returns a generic error", async () => {
+    const fetch = (async () =>
+      ({ ok: false, status: 500, json: async () => ({}) }) as Response) as unknown as typeof globalThis.fetch;
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneMissing,
+      // An empty array exits 0 but yields no segments: empty_transcript.
+      runPython: pythonReturning("[]").run,
+      fetch,
+      supadataKey: KEY,
+    });
+
+    const result = await cascade.fetch(CANDIDATE, ctx());
+
+    // The tier-3 generic error ranks below the actionable earlier reasons.
+    expect(result).toMatchObject({ ok: false, reason: "empty_transcript" });
+    expect((result as { detail?: string }).detail).toContain("tier1=no_captions");
+    expect((result as { detail?: string }).detail).toContain("tier3=fetch_error");
+  });
+
   it("maps an abort to timeout", async () => {
     const timeout = new Error("The operation was aborted");
     timeout.name = "TimeoutError";
