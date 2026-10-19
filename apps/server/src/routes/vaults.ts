@@ -2,11 +2,13 @@ import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
 import { sameOrigin } from "../http/origin.js";
+import { listJobs } from "../jobs/store.js";
 import {
   createVault,
   deleteVault,
   listVaults,
   readRegistry,
+  vaultDirPath,
   type Registry,
 } from "../vaults/registry.js";
 
@@ -160,6 +162,20 @@ vaults.delete("/:id", async (c) => {
     return c.json(
       { error: "confirm_mismatch", message: "`confirmName` does not match the vault name." },
       400,
+    );
+  }
+
+  // A queued or running job keeps its vault path. If the directory is removed
+  // now, the job's next persist or capture recreates `.okf/jobs/<id>` under an
+  // unregistered path: no list, cancel or retry can reach it again.
+  const jobs = await listJobs(vaultDirPath(id));
+  if (jobs.some((job) => job.status === "queued" || job.status === "running")) {
+    return c.json(
+      {
+        error: "vault_busy",
+        message: "A job for this vault is queued or running. Cancel it or wait for it to finish.",
+      },
+      409,
     );
   }
 

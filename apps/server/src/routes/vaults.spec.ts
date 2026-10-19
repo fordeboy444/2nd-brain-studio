@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createJobRecord, writeJob } from "../jobs/store.js";
+import type { JobSettings } from "../jobs/types.js";
 
 const ORIG_ENV = { ...process.env };
 
@@ -218,6 +220,41 @@ describe("DELETE /api/vaults/:id", () => {
     expect(body.deleted).toBe(true);
     expect(body.id).toBe(vaultId);
     expect(existsSync(vaultDir)).toBe(false);
+  });
+
+  it("refuses a vault with a running job with 409 and keeps the directory (WR-14)", async () => {
+    const { vaults } = await reload();
+    const vaultId = await createVault(vaults, "Busy Vault");
+    const vaultDir = join(root, vaultId);
+
+    const settings: JobSettings = {
+      maxVideos: 1,
+      filters: {},
+      fetch: { concurrency: 1 },
+      llm: { model: "test" },
+    };
+    const job = createJobRecord({
+      id: "j_20261018_0000aa",
+      vaultId,
+      kind: "youtube",
+      input: { url: "https://www.youtube.com/@busy" },
+      settings,
+    });
+    job.status = "running";
+    job.stage = "S1";
+    await writeJob(vaultDir, job);
+
+    const res = await vaults.request(`/${vaultId}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Busy Vault" }),
+    });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("vault_busy");
+    expect(existsSync(vaultDir)).toBe(true);
+    // The job record must still be reachable through its vault.
+    expect(existsSync(join(vaultDir, ".okf", "jobs", job.id, "job.json"))).toBe(true);
   });
 
   it("two sequential deletes produce 200 then 404; the registry afterwards has no entry for the id", async () => {
