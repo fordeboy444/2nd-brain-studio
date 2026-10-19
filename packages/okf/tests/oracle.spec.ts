@@ -121,8 +121,25 @@ describe("oracle: reference metadata", () => {
 
   it("keeps meta.json in the pinned Python serialization", () => {
     const raw = readGolden("meta.json");
-    const parsed: unknown = JSON.parse(raw);
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      { title: string; description: string; duration: string }
+    >;
     expect(JSON.stringify(parsed, null, 2) + "\n").toBe(raw);
+
+    // `JSON.parse` preserves the golden's own order, so the round-trip above
+    // cannot detect a regeneration without `sort_keys=True`. Pin the order
+    // the Python serializer must produce: sorted paths, and the alphabetical
+    // inner keys (`description`, `duration`, `title`).
+    const paths = Object.keys(parsed);
+    expect(paths).toEqual([...paths].sort());
+    for (const path of paths) {
+      expect(Object.keys(parsed[path]), path).toEqual([
+        "description",
+        "duration",
+        "title",
+      ]);
+    }
   });
 });
 
