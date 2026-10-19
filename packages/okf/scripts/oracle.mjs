@@ -105,10 +105,15 @@ function parseMode(args) {
   return mode;
 }
 
-/** Print the loud skip line. Update mode cannot regenerate, so it exits 2. */
+/**
+ * Print the loud skip line.
+ *
+ * Update mode cannot regenerate without the reference, and CI must not report
+ * a gate as passing when its inputs are absent, so both exit 2.
+ */
 function skip(what, mode) {
   console.log(`ORACLE SKIPPED: ${what} not found`);
-  process.exit(mode === "update" ? 2 : 0);
+  process.exit(mode === "update" || process.env.CI ? 2 : 0);
 }
 
 /** True when `python3` answers on PATH. */

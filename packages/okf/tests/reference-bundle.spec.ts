@@ -7,8 +7,9 @@
  * warnings on legacy `videos:` pages. The `videos`/`sources` key counts show
  * E8 actually ran with the legacy severity split rather than being skipped.
  *
- * The case never writes under the reference root. A missing checkout skips
- * loudly so a machine without the reference repository still runs the suite.
+ * The case never writes under the reference root. A missing checkout fails the
+ * suite unless `OKF_SKIP_REFERENCE=1` is set explicitly, and always fails on
+ * CI: the real-data proof must not pass by never running.
  */
 // @ts-expect-error -- @types/node is not linked into packages/okf (its
 // devDependencies are frozen to typescript + vitest); vitest resolves this
@@ -52,7 +53,18 @@ describe("reference bundle", () => {
   it(
     "lints with zero errors and only the five measured legacy E8 warnings",
     () => {
+      // This is the phase's only proof against real data, so a missing
+      // checkout is a failure unless the caller explicitly opts out. CI has
+      // no opt-out: a gate that cannot run must not report success.
       if (!existsSync(REFERENCE_ROOT)) {
+        if (process.env.CI) {
+          throw new Error(`reference bundle missing: ${REFERENCE_ROOT}`);
+        }
+        if (process.env.OKF_SKIP_REFERENCE !== "1") {
+          throw new Error(
+            "set OKF_SKIP_REFERENCE=1 to skip the real-data proof",
+          );
+        }
         console.log(`REFERENCE BUNDLE SKIPPED: ${REFERENCE_ROOT} not found`);
         return;
       }
