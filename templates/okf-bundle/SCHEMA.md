@@ -39,7 +39,7 @@ Verified against the OKF SPEC (§3.1, §4.1, §5, §9, §11):
 ├── index.md            # OKF root catalog (declares okf_version); read first after SCHEMA
 ├── SCHEMA.md           # this file — the maintainer contract
 ├── README.md           # human entry point + copy-paste consume prompt
-├── log.md              # append-only ingestion history (reserved)
+├── log.md              # generated build log (reserved)
 ├── concepts/           # ideas, techniques, patterns, mental models
 │   └── <concept-id>.md
 ├── entities/           # nameable things that exist

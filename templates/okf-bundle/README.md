@@ -24,7 +24,7 @@ This is an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowle
 ├── index.md        # OKF root catalog (declares okf_version); the entry point
 ├── SCHEMA.md       # the maintainer contract
 ├── README.md       # this file
-├── log.md          # append-only ingestion history
+├── log.md          # generated build log (latest run)
 ├── concepts/       # ideas, techniques, patterns (one page per idea)
 ├── entities/       # tools, people, organizations
 │   ├── tools/
