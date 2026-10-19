@@ -140,8 +140,18 @@ export async function scaffoldVault(dir: string): Promise<void> {
       for (const file of SCAFFOLD_FILES) {
         await rm(resolve(dir, file), { force: true });
       }
-      for (const sub of SCAFFOLD_DIRS) {
-        await rm(resolve(dir, sub), { recursive: true, force: true });
+      // Remove the top-level directories, not the leaves: `entities` is created
+      // implicitly by `mkdir("entities/tools", {recursive:true})`, and removing
+      // its children leaves the empty parent behind. That leftover makes the
+      // directory non-empty, so `looksLikeScaffold` rejects the retry with
+      // `non_empty`. The pre-existing directory itself stays.
+      const topDirs = new Set(
+        SCAFFOLD_DIRS.map((d) => d.split("/")[0]).filter(
+          (d): d is string => d !== undefined,
+        ),
+      );
+      for (const top of topDirs) {
+        await rm(resolve(dir, top), { recursive: true, force: true });
       }
     }
     throw err;

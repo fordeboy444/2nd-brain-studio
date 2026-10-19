@@ -3,13 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// `cp` is the one call a rollback test needs to fail on demand; every other
-// filesystem call stays real.
+// `cp` and `mkdir` are the calls a rollback test needs to fail on demand; every
+// other filesystem call stays real.
 vi.mock("node:fs/promises", async (importActual) => {
   const actual = (await importActual()) as typeof import("node:fs/promises");
+  const realMkdir = actual.mkdir as (
+    ...args: unknown[]
+  ) => Promise<unknown>;
   return {
     ...actual,
     cp: vi.fn(async (...args: Parameters<typeof actual.cp>) => actual.cp(...args)),
+    mkdir: vi.fn(async (...args: unknown[]) =>
+      realMkdir(...args),
+    ) as unknown as typeof actual.mkdir,
   };
 });
 
@@ -129,5 +135,44 @@ describe("scaffoldVault", () => {
 
     // The directory the caller owned stays; only this call's output is undone.
     expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("removes the implied entity tree on a mkdir failure so a retry succeeds", async () => {
+    const { scaffoldVault } = await reload();
+    const fsMod = await import("node:fs/promises");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+    const realMkdir = actual.mkdir as (...args: unknown[]) => Promise<unknown>;
+    const mkdirMock = vi.mocked(fsMod.mkdir);
+    mkdirMock.mockClear();
+    // Fail on the last-but-one skeleton directory, after `entities/tools`,
+    // `entities/people` and `entities/organizations` exist on disk. This is the
+    // stage the earlier tests miss: the file copies have all succeeded and the
+    // implicit `entities/` parent exists.
+    mkdirMock.mockImplementation(async (...args: unknown[]) => {
+      if (String(args[0]).endsWith("sources")) throw new Error("disk full");
+      return realMkdir(...args);
+    });
+
+    const dir = join(base, "vault-mkdir-fail");
+    await mkdir(dir, { recursive: true });
+    await expect(scaffoldVault(dir)).rejects.toThrow("disk full");
+
+    // No orphan `entities/` parent survives: the retry must not answer non_empty.
+    expect(await readdir(dir)).toEqual([]);
+
+    mkdirMock.mockImplementation(async (...args: unknown[]) => realMkdir(...args));
+    await scaffoldVault(dir);
+    expect((await readdir(dir)).sort()).toEqual([
+      "README.md",
+      "SCHEMA.md",
+      "concepts",
+      "entities",
+      "index.md",
+      "log.md",
+      "raw",
+      "sources",
+    ]);
   });
 });
