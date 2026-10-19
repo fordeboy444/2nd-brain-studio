@@ -1337,6 +1337,17 @@ describe("private state directory prune", () => {
     ];
     expect(lintBundle(pages, "edge").scanned).toBe(1);
   });
+
+  it("omits a page with a nested .git segment (WR-03)", () => {
+    const pages: BundlePage[] = [
+      { path: "notes/.git/config.md", text: "# Nested Checkout\n" },
+      { path: "vendor/repo/.git/x.md", text: "# Worktree\n" },
+      { path: "notes/valid.md", text: "---\ntype: note\n---\n" },
+    ];
+    const result = lintBundle(pages, "edge");
+    expect(result.scanned).toBe(1);
+    expect(result.findings).toEqual([]);
+  });
 });
 
 describe("quiet mode", () => {

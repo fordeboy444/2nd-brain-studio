@@ -92,11 +92,9 @@ function isReserved(path: string): boolean {
   return name === "index.md" || name === "log.md";
 }
 
-/** True when the first path segment names a private state directory. */
+/** True when any path segment names a private state directory. */
 function isPrivateState(path: string): boolean {
-  const slash = path.indexOf("/");
-  const first = slash === -1 ? path : path.slice(0, slash);
-  return first === ".git" || first === ".okf";
+  return path.split("/").some((segment) => segment === ".git" || segment === ".okf");
 }
 
 /** True for a top-level page of `directory`, with no nested path. */
@@ -229,9 +227,10 @@ function bundlePathSet(
 /**
  * Lint a page set and return structured findings.
  *
- * The caller supplies the page list. Pages under `.okf/` and `.git/` are
- * pruned here before sorting, so they are not scanned, not counted and cannot
- * produce a finding. `buildIndexes` needs no change: it receives this filtered
+ * The caller supplies the page list. A page with a `.okf` or `.git` segment
+ * anywhere in its path is pruned here before sorting, so it is not scanned,
+ * not counted and cannot produce a finding, mirroring the reference's
+ * `".git" not in p.parts` walk. `buildIndexes` needs no change: it receives this filtered
  * set, never the raw walk.
  */
 export function lintBundle(
