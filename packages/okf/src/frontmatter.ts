@@ -113,7 +113,11 @@ function splitArrayItems(inner: string): string[] {
   // A quote is structural only at the start of an item; an apostrophe or
   // quote appearing mid-scalar (for example in `don't`) stays literal text.
   let atItemStart = true;
-  for (const ch of inner) {
+  // Index-based iteration: a single-quoted `''` escape consumes two characters,
+  // so the loop must be able to skip the second one.
+  const chars = [...inner];
+  for (let i = 0; i < chars.length; i += 1) {
+    const ch = chars[i] as string;
     if (quote === '"') {
       current += ch;
       if (escaped) {
@@ -127,7 +131,15 @@ function splitArrayItems(inner: string): string[] {
     }
     if (quote === "'") {
       current += ch;
-      if (ch === "'") quote = null;
+      if (ch === "'") {
+        if (chars[i + 1] === "'") {
+          // Two single quotes are YAML's escaped quote, not a close.
+          current += chars[i + 1] as string;
+          i += 1;
+        } else {
+          quote = null;
+        }
+      }
       continue;
     }
     if (atItemStart && (ch === " " || ch === "\t")) {

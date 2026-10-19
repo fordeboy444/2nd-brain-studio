@@ -378,6 +378,15 @@ describe("CR-01 quoted first array item and escaped single quotes", () => {
       parseFrontmatter("---\ntags: ['a''b # c', 'd']\n---\n")?.data.tags,
     ).toEqual(["a'b # c", "d"]);
   });
+
+  it("does not split a comma inside a single-quoted item with an escaped quote (WR-15)", () => {
+    expect(
+      parseFrontmatter("---\ntags: ['a''b, c', 'd']\n---\n")?.data.tags,
+    ).toEqual(["a'b, c", "d"]);
+    expect(
+      parseFrontmatter("---\ntags: ['x', 'a''b, c']\n---\n")?.data.tags,
+    ).toEqual(["x", "a'b, c"]);
+  });
 });
 
 describe("WR-07/WR-08 regression", () => {
