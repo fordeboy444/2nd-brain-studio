@@ -47,6 +47,38 @@ export function formatSseFrame(event: JobEvent): string {
   return `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`;
 }
 
+/** The part of Hono's SSE stream this helper needs. */
+export interface SseWriter {
+  readonly aborted: boolean;
+  write(chunk: string): Promise<unknown>;
+}
+
+/**
+ * Write one frame, or stop the stream when the client has gone.
+ *
+ * A write can reject when the client disconnects between the `aborted` check
+ * and the write. The rejection is caught here: an escaped rejection would be
+ * unhandled, and Node 22 turns an unhandled rejection into a process exit.
+ * No write error is recoverable, so every failure stops the stream.
+ */
+export async function writeFrameSafely(
+  stream: SseWriter,
+  frame: string,
+  stop: () => void,
+): Promise<boolean> {
+  if (stream.aborted) {
+    stop();
+    return false;
+  }
+  try {
+    await stream.write(frame);
+    return true;
+  } catch {
+    stop();
+    return false;
+  }
+}
+
 /**
  * Replay `events.ndjson` after `lastSeq`, then tail it, writing a `:keepalive`
  * comment periodically. Resolves when the client disconnects.
@@ -83,8 +115,8 @@ export function streamJobEvents(
       // Replay first: the keepalive timer is created only after this loop, so a
       // replayed frame can never be interleaved with a keepalive.
       for (const event of await readEvents(jobDirPath, lastSeq)) {
-        if (stopped || stream.aborted) return;
-        await stream.write(formatSseFrame(event));
+        if (stopped) return;
+        if (!(await writeFrameSafely(stream, formatSseFrame(event), stop))) return;
         cursor = event.seq;
       }
 
@@ -95,8 +127,8 @@ export function streamJobEvents(
           try {
             const fresh = await readEvents(jobDirPath, cursor);
             for (const event of fresh) {
-              if (stopped || stream.aborted) return;
-              await stream.write(formatSseFrame(event));
+              if (stopped) return;
+              if (!(await writeFrameSafely(stream, formatSseFrame(event), stop))) return;
               cursor = event.seq;
             }
           } catch {
@@ -110,7 +142,9 @@ export function streamJobEvents(
 
       keepaliveTimer = setInterval(() => {
         if (stopped) return;
-        void stream.write(":keepalive\n\n");
+        // Never `void stream.write(...)`: a rejected keepalive would be an
+        // unhandled rejection. The helper stops the stream on any write error.
+        void writeFrameSafely(stream, ":keepalive\n\n", stop);
       }, keepaliveMs);
 
       if (c.req.raw.signal.aborted) {

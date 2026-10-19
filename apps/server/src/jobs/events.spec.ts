@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatSseFrame, parseLastEventId, streamJobEvents } from "./events.js";
+import {
+  formatSseFrame,
+  parseLastEventId,
+  streamJobEvents,
+  writeFrameSafely,
+} from "./events.js";
 import { appendEvent } from "./store.js";
 import type { JobEvent } from "./types.js";
 
@@ -117,6 +122,63 @@ describe("formatSseFrame (T-03-07)", () => {
     expect(dataLines[0]).toBe('data: {"message":"line one\\nline two"}');
     // A forged event line cannot survive inside the JSON-encoded data.
     expect(frame.match(/^event: /gm)).toHaveLength(1);
+  });
+});
+
+describe("writeFrameSafely (WR-15)", () => {
+  it("stops the stream and resolves when a write rejects", async () => {
+    let stops = 0;
+    const stream = {
+      aborted: false,
+      write: (): Promise<void> => Promise.reject(new Error("client gone")),
+    };
+
+    // Resolving is the assertion: a rejection that escaped here would be an
+    // unhandled rejection, and Node 22 exits the process on one.
+    await expect(
+      writeFrameSafely(stream, ":keepalive\n\n", () => {
+        stops += 1;
+      }),
+    ).resolves.toBe(false);
+    expect(stops).toBe(1);
+  });
+
+  it("does not write when the stream is already aborted", async () => {
+    let wrote = false;
+    const stream = {
+      aborted: true,
+      write: async (): Promise<void> => {
+        wrote = true;
+      },
+    };
+    let stops = 0;
+
+    await expect(
+      writeFrameSafely(stream, "id: 1\n\n", () => {
+        stops += 1;
+      }),
+    ).resolves.toBe(false);
+    expect(wrote).toBe(false);
+    expect(stops).toBe(1);
+  });
+
+  it("returns true and does not stop when the write resolves", async () => {
+    const frames: string[] = [];
+    const stream = {
+      aborted: false,
+      write: async (chunk: string): Promise<void> => {
+        frames.push(chunk);
+      },
+    };
+    let stops = 0;
+
+    await expect(
+      writeFrameSafely(stream, "id: 1\n\n", () => {
+        stops += 1;
+      }),
+    ).resolves.toBe(true);
+    expect(frames).toEqual(["id: 1\n\n"]);
+    expect(stops).toBe(0);
   });
 });
 
