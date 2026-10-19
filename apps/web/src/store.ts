@@ -34,6 +34,7 @@ import {
 import { readLastTab, writeLastTab, type RightPanelTab } from "./components/rightPanelTab.js";
 import { dirOf, EMPTY_TREE, type TreeState } from "./lib/tree/lazyTree.js";
 import { toast } from "./lib/toast.js";
+import { getBacklinks } from "./lib/api.js";
 
 /**
  * The app store. Baalda's panel model — `sidebar`, `editor`, `rightPanel` plus
@@ -263,6 +264,7 @@ export interface AppState {
   /** A save that failed for any reason other than a conflict. */
   saveError: SaveFailure | null;
   backlinks: BacklinkRef[];
+  loadBacklinks: (vaultId: string, path: string) => Promise<void>;
 
   // Requests the panels raise and the editor/tree consume exactly once.
   /** An outline click asks the editor to reveal a one-based line. */
@@ -805,6 +807,25 @@ export const useStore = create<AppState>((set, get) => {
 
     saveError: null,
     backlinks: [],
+
+    loadBacklinks: async (vaultId, path) => {
+      try {
+        const result = await getBacklinks(vaultId, path);
+        if (get().currentVault?.id !== vaultId) return;
+        if (get().activeTabPath !== path) return;
+        set({
+          backlinks: result.backlinks.map((entry, index) => ({
+            id: `${entry.source}#${index}`,
+            path: entry.source,
+            linkText: entry.text,
+          })),
+        });
+      } catch {
+        if (get().currentVault?.id !== vaultId) return;
+        if (get().activeTabPath !== path) return;
+        set({ backlinks: [] });
+      }
+    },
 
     pendingRevealLine: null,
     requestReveal: (line) => set({ pendingRevealLine: line }),

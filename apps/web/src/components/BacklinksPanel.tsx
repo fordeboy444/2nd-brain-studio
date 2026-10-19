@@ -23,11 +23,18 @@ export function BacklinksPanel() {
   const backlinks = useStore((s) => s.backlinks);
   const vaultId = useStore((s) => s.currentVault?.id ?? null);
   const notePath = useStore((s) => s.activeTabPath);
+  const loadBacklinks = useStore((s) => s.loadBacklinks);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // A different note has different backlinks: never carry an open card over.
   useEffect(() => setOpen(false), [notePath]);
+
+  // Fetch backlinks whenever the open note (or vault) changes.
+  useEffect(() => {
+    if (!vaultId || !notePath) return;
+    void loadBacklinks(vaultId, notePath);
+  }, [vaultId, notePath, loadBacklinks]);
 
   // Close on outside click or Escape (the reference's popover pattern).
   useEffect(() => {

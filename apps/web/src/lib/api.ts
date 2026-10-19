@@ -512,6 +512,27 @@ export function getGraph(vaultId: string): Promise<GraphResult> {
   return request<GraphResult>(`/vaults/${encodeURIComponent(vaultId)}/graph`);
 }
 
+export interface BacklinkEntry {
+  source: string;
+  heading?: string;
+  text: string;
+}
+
+export interface BacklinksResult {
+  target: string;
+  backlinks: BacklinkEntry[];
+}
+
+/** GET /api/vaults/:id/backlinks?file=… — every markdown note that links to the
+ *  requested file, with the heading under which the link appeared and the link
+ *  text. */
+export function getBacklinks(vaultId: string, file: string): Promise<BacklinksResult> {
+  return request<BacklinksResult>(
+    `/vaults/${encodeURIComponent(vaultId)}/backlinks?file=${encodeURIComponent(file)}`
+  );
+}
+
+
 /* -------------------------------------------------------------------------
    Lint and Reindex (Phase 5)
    ------------------------------------------------------------------------- */
