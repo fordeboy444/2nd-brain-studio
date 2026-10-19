@@ -217,12 +217,16 @@ describe("IndexCatalog", () => {
   it("strips YAML frontmatter before parsing so the banner block is not a section", async () => {
     const { host } = await mount({ content: ROOT_INDEX, basePath: "index.md" });
 
-    // The frontmatter (`---\nokf_version: ...\n---`) and the GENERATED banner
-    // are not `## ` headings; only `## Catalog` and `## Consume` become
-    // sections.
+    // The frontmatter (`---\nokf_version: ...\n---`), the `# H1` title, and the
+    // `<!-- GENERATED:BANNER -->` block are not `## ` headings. Only `## Catalog`
+    // renders as a section card — `## Consume` has no link items so it is not
+    // shown, but the key assertion is that the frontmatter and banner content
+    // never appear as section names.
     const sections = host.querySelectorAll("[data-section]");
     const names = Array.from(sections).map((s) => s.getAttribute("data-section"));
-    expect(names).toEqual(["Catalog", "Consume"]);
+    expect(names).toEqual(["Catalog"]);
+    expect(names).not.toContain("okf_version");
+    expect(names).not.toContain("Knowledge Bundle");
   });
 
   it("renders an empty state when the index has no link items", async () => {

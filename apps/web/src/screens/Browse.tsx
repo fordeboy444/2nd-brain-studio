@@ -3,6 +3,7 @@ import { AsyncButton } from "../components/AsyncButton.js";
 import { BacklinksPanel } from "../components/BacklinksPanel.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { ErrorBoundary } from "../components/ErrorBoundary.js";
+import { IndexCatalog } from "../components/IndexCatalog.js";
 import { MarkdownEditor } from "../components/MarkdownEditor.js";
 import { MarkdownView } from "../components/MarkdownView.js";
 import { RightPanel } from "../components/RightPanel.js";
@@ -39,8 +40,17 @@ import { useStore } from "../store.js";
  * The sidebar width is a CSS variable on the grid, not a React width on a child,
  * so dragging only repaints the row that moved (`lib/useSidebarWidth.ts`).
  */
-/** Read the whole row, or edit it. The editor region renders one or the other. */
-type ViewMode = "edit" | "read";
+/** Read the whole row, edit it, or — for an `index.md` — browse it as a
+ *  navigable catalog. The editor region renders one of the three. */
+type ViewMode = "edit" | "read" | "catalog";
+
+/** An OKF index file is any markdown file whose basename is `index.md`. The
+ *  root index and every sub-index share the catalog shape, so the catalog view
+ *  is offered on all of them. Case-insensitive so a Windows-authored
+ *  `Index.md` is not left out. */
+function isIndexPath(path: string): boolean {
+  return /(?:^|\/)index\.md$/i.test(path);
+}
 
 export function Browse() {
   const { width, setWidth } = useSidebarWidth();
@@ -50,7 +60,18 @@ export function Browse() {
   const rightPanelOpen = useStore((s) => s.rightPanelOpen);
   const openRightPanel = useStore((s) => s.openRightPanel);
   const closeRightPanel = useStore((s) => s.closeRightPanel);
+  const activeTabPath = useStore((s) => s.activeTabPath);
   const [mode, setMode] = useState<ViewMode>("edit");
+
+  // The mode belongs to the screen, but the catalog is only meaningful for an
+  // index file. When the active tab changes, snap to the right default:
+  // `catalog` for an index.md, `edit` for anything else. Without this, opening
+  // an index.md while in `read` mode would render the markdown view and hide
+  // the catalog the user just asked for by opening the index.
+  useEffect(() => {
+    if (activeTabPath && isIndexPath(activeTabPath)) setMode("catalog");
+    else setMode("edit");
+  }, [activeTabPath]);
 
   /**
    * Create a document in the vault root and open it (`New file`).
@@ -138,7 +159,15 @@ export function Browse() {
               aria-label="Document view"
               style={{ display: "inline-flex", gap: 2, flexShrink: 0 }}
             >
-              {(["edit", "read"] as const).map((m) => (
+              {/* The catalog is only offered for an `index.md` — every other
+                  file gets the two-state Edit/Read toggle. The order is
+                  Catalog, Read, Edit so the catalog (the default on an index)
+                  is the leftmost pill, matching the leftmost position Edit
+                  holds for a non-index file. */}
+              {(isIndexPath(activeTabPath ?? "")
+                ? (["catalog", "read", "edit"] as const)
+                : (["edit", "read"] as const)
+              ).map((m) => (
                 <button
                   key={m}
                   type="button"
@@ -155,7 +184,7 @@ export function Browse() {
                     color: mode === m ? "var(--text-primary)" : "var(--text-secondary)",
                   }}
                 >
-                  {m === "edit" ? "Edit" : "Read"}
+                  {m === "edit" ? "Edit" : m === "read" ? "Read" : "Catalog"}
                 </button>
               ))}
             </div>
@@ -264,10 +293,11 @@ export function Browse() {
 
 /** What the middle region shows, in the one order the states can be in: no
  *  vault, then no file, then a file that is still loading, then a file whose
- *  read failed, then the document — read or edited. */
+ *  read failed, then the document — catalogued, read, or edited. */
 function EditorRegion({ mode }: { mode: ViewMode }) {
   const currentVault = useStore((s) => s.currentVault);
   const tab = useStore((s) => s.tabs.find((t) => t.path === s.activeTabPath) ?? null);
+  const openFile = useStore((s) => s.openFile);
 
   if (!currentVault) return <VaultList />;
 
@@ -313,6 +343,22 @@ function EditorRegion({ mode }: { mode: ViewMode }) {
       <div className="editor-empty">
         <Spinner size="md" tone="neutral" />
       </div>
+    );
+  }
+
+  // The catalog is the index.md's own view: the bytes the editor holds become
+  // a grid of navigable cards. The buffer — not the last server content — is
+  // what is parsed, so an unsaved edit to the index shows up in the catalog
+  // immediately, the same way it would in the editor or the read view.
+  if (mode === "catalog" && isIndexPath(tab.path) && /\.(md|markdown)$/i.test(tab.path)) {
+    return (
+      <IndexCatalog
+        content={tab.buffer}
+        basePath={tab.path}
+        onSelectFile={(path) => {
+          if (currentVault) openFile(currentVault.id, path);
+        }}
+      />
     );
   }
 
