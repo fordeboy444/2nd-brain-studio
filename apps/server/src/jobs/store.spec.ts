@@ -1,4 +1,4 @@
-import { appendFile, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   readEvents,
   readJob,
   requestCancel,
+  storeIo,
   withJobLock,
   writeJob,
 } from "./store.js";
@@ -62,6 +63,17 @@ describe("writeAtomic (T-03-02)", () => {
     await writeTextAtomic(target, "---\ntype: x\n---\n\nbody\n");
     expect(await readFile(target, "utf8")).toBe("---\ntype: x\n---\n\nbody\n");
   });
+
+  it("removes the temp sibling when the rename fails", async () => {
+    // Renaming a file over an existing directory fails; the temp must not stay.
+    const target = join(root, "target-dir");
+    await mkdir(target, { recursive: true });
+
+    await expect(writeTextAtomic(target, "x")).rejects.toThrow();
+
+    const leftovers = (await readdir(root)).filter((name) => name.includes(".tmp-"));
+    expect(leftovers).toEqual([]);
+  });
 });
 
 describe("events.ndjson", () => {
@@ -93,22 +105,28 @@ describe("events.ndjson", () => {
     expect(next.seq).toBe(3);
   });
 
-  it("notifies subscribers only after the event is durable", async () => {
+  it("syncs the event before it notifies subscribers", async () => {
     const dir = join(root, "job");
-    const seen: number[] = [];
-    const onDisk: number[] = [];
+    const order: string[] = [];
     const { onEventAppended } = await import("./store.js");
-    const unsubscribe = onEventAppended(dir, (event) => {
-      seen.push(event.seq);
+    const realSync = storeIo.syncFile;
+    storeIo.syncFile = async (handle) => {
+      order.push("sync");
+      await realSync(handle);
+    };
+    const unsubscribe = onEventAppended(dir, () => {
+      order.push("notify");
     });
-    await appendEvent(dir, "unit", { slug: "a" });
-    onDisk.push(...(await readEvents(dir, 0)).map((event) => event.seq));
-    unsubscribe();
-    await appendEvent(dir, "unit", { slug: "b" });
+    try {
+      await appendEvent(dir, "unit", { slug: "a" });
+    } finally {
+      storeIo.syncFile = realSync;
+      unsubscribe();
+    }
 
-    expect(seen).toEqual([1]);
-    expect(onDisk).toEqual([1]);
-    expect((await readEvents(dir, 0)).map((event) => event.seq)).toEqual([1, 2]);
+    // The assertion fails if appendEvent never fsyncs or notifies first.
+    expect(order).toEqual(["sync", "notify"]);
+    expect((await readEvents(dir, 0)).map((event) => event.seq)).toEqual([1]);
   });
 });
 

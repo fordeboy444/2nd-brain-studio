@@ -9,7 +9,7 @@
  * `events.ndjson` is append-only and is the replay source. `seq` starts at 1 and
  * increases by one; the event is on disk before any subscriber sees it.
  */
-import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
@@ -313,9 +313,20 @@ async function readLastSeq(dir: string): Promise<number> {
 }
 
 /**
- * Append `{seq, type, data, at}` as one line, then notify subscribers. The
- * write completes before any listener runs, so a crashed process never leaves a
- * subscriber believing an event is durable when it is not.
+ * The fsync seam. A spec replaces `syncFile` to prove the sync completes
+ * before any subscriber runs; production always calls `FileHandle.sync`.
+ */
+export const storeIo = {
+  async syncFile(handle: { sync: () => Promise<void> }): Promise<void> {
+    await handle.sync();
+  },
+};
+
+/**
+ * Append `{seq, type, data, at}` as one line, fsync it, then notify
+ * subscribers. The data is durable before any listener runs, so a crash never
+ * leaves a subscriber — or the SSE stream — believing an event is on disk when
+ * it is only in the page cache.
  */
 export function appendEvent(
   dir: string,
@@ -335,7 +346,13 @@ export function appendEvent(
       data,
       at: new Date().toISOString(),
     };
-    await appendFile(join(dir, "events.ndjson"), `${JSON.stringify(event)}\n`, "utf8");
+    const handle = await open(join(dir, "events.ndjson"), "a");
+    try {
+      await handle.write(`${JSON.stringify(event)}\n`, null, "utf8");
+      await storeIo.syncFile(handle);
+    } finally {
+      await handle.close();
+    }
     lastSeq.set(dir, seq);
     for (const listener of listeners.get(dir) ?? []) {
       try {

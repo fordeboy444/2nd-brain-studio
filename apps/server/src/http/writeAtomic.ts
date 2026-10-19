@@ -59,11 +59,22 @@ async function writeAtomic(target: string, text: string, mode?: number): Promise
     // Durability, not just ordering: without sync the rename can be visible
     // while the data blocks are still in the page cache.
     await fh.sync();
+    await fh.close();
+    await rename(tmp, target);
   } catch (error) {
+    // `close` and `rename` share this path, so a failure at either step cannot
+    // leave a `.<name>.tmp-*` sibling behind.
     await fh.close().catch(() => undefined);
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
-  await fh.close();
-  await rename(tmp, target);
+
+  // The rename is metadata. Without syncing the parent directory a crash can
+  // lose the new name even though the file contents were synced.
+  const parent = await open(dirname(target), "r");
+  try {
+    await parent.sync();
+  } finally {
+    await parent.close();
+  }
 }
