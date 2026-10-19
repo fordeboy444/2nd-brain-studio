@@ -110,6 +110,9 @@ function splitArrayItems(inner: string): string[] {
   let current = "";
   let quote: '"' | "'" | null = null;
   let escaped = false;
+  // A quote is structural only at the start of an item; an apostrophe or
+  // quote appearing mid-scalar (for example in `don't`) stays literal text.
+  let atItemStart = true;
   for (const ch of inner) {
     if (quote === '"') {
       current += ch;
@@ -127,15 +130,24 @@ function splitArrayItems(inner: string): string[] {
       if (ch === "'") quote = null;
       continue;
     }
-    if (ch === '"' || ch === "'") {
+    if (atItemStart && (ch === " " || ch === "\t")) {
+      current += ch;
+      continue;
+    }
+    if (atItemStart && (ch === '"' || ch === "'")) {
       quote = ch;
       current += ch;
+      atItemStart = false;
       continue;
     }
     if (ch === ",") {
       items.push(current);
       current = "";
+      atItemStart = true;
       continue;
+    }
+    if (ch !== " " && ch !== "\t") {
+      atItemStart = false;
     }
     current += ch;
   }
@@ -157,18 +169,45 @@ function stripComment(raw: string): string {
   const structuralQuotes = first === '"' || first === "'" || first === "[";
   let quote: '"' | "'" | null = null;
   let escaped = false;
+  // Whether a quote may open at the current position. In an inline array a
+  // quote is structural only at the start of an item; an apostrophe mid-scalar
+  // stays literal.
+  let atItemStart = first === "[";
+  let seenContent = first !== '"' && first !== "'" && first !== "[";
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i] as string;
     if (quote === '"') {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
       else if (ch === '"') quote = null;
-    } else if (quote === "'") {
+      continue;
+    }
+    if (quote === "'") {
       if (ch === "'") quote = null;
-    } else if (ch === "#" && (i === 0 || /\s/.test(raw[i - 1] as string))) {
+      continue;
+    }
+    if (ch === "#" && (i === 0 || /\s/.test(raw[i - 1] as string))) {
       return raw.slice(0, i);
-    } else if (structuralQuotes && (ch === '"' || ch === "'")) {
-      quote = ch;
+    }
+    if (structuralQuotes && (ch === '"' || ch === "'")) {
+      let canOpen = false;
+      if (first === '"' || first === "'") {
+        if (!seenContent) canOpen = true;
+      } else if (first === "[") {
+        if (atItemStart) canOpen = true;
+      }
+      if (canOpen) {
+        quote = ch;
+        atItemStart = false;
+        seenContent = true;
+        continue;
+      }
+    }
+    if (ch === ",") {
+      atItemStart = true;
+    } else if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
+      atItemStart = false;
+      seenContent = true;
     }
   }
   return raw;
@@ -284,6 +323,10 @@ const NEEDS_QUOTE_START_RE = /^[[{&*!|>@\-"'#%`,\]}?]/;
 /** Bare words a YAML 1.2 reader turns into null or a boolean. */
 const RESERVED_SCALAR_RE = /^(null|~|yes|no|on|off)$/i;
 
+/** Scalars a standard YAML reader changes type for. */
+const YAML_TYPED_RE =
+  /^(?:~|null|true|false|yes|no|on|off|[-+]?(?:0x[0-9a-f]+|0o[0-7]+|\d+(?:\.\d*)?(?:e[-+]?\d+)?)|[-+]?(?:\.inf|\.nan)|\d{4}-\d{2}-\d{2}(?:[Tt ].*)?|\d+(?::\d+)+)$/i;
+
 /** Quote a string and escape what the parser reads back. */
 function quoteString(value: string): string {
   const escaped = value
@@ -312,6 +355,7 @@ function renderScalar(value: string | number | boolean): string {
     value.includes("\n") ||
     value.includes("\r") ||
     RESERVED_SCALAR_RE.test(value) ||
+    YAML_TYPED_RE.test(value) ||
     NEEDS_QUOTE_START_RE.test(value);
   return mustQuote ? quoteString(value) : value;
 }
@@ -331,7 +375,7 @@ export function renderFrontmatter(data: OkfFrontmatter): string {
       // a comma separates items, and brackets/braces end or nest the sequence.
       // `renderScalar` only protects a *leading* indicator, so quote here.
       const items = value.map((item) =>
-        typeof item === "string" && /[,\[\]{}]/.test(item)
+        typeof item === "string" && !/^[A-Za-z0-9_.-]+$/.test(item)
           ? quoteString(item)
           : renderScalar(item),
       );

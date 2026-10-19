@@ -348,3 +348,29 @@ describe("cross-reader round-trip over the fixture", () => {
     expect(parsedPages, "fixture pages with frontmatter").toBeGreaterThan(0);
   });
 });
+
+
+describe("WR-07/WR-08 regression", () => {
+  it("parses array items containing apostrophes as separate items (WR-07)", () => {
+    const parsed = parseFrontmatter('---\ntype: concept\ntags: [don\'t, demo]\n---\n')!;
+    expect(parsed.data.tags).toEqual(["don't", "demo"]);
+  });
+
+  it("strips trailing comments on arrays with apostrophes (WR-07)", () => {
+    const parsed = parseFrontmatter('---\ntype: concept\ntags: [don\'t, demo] # note\n---\n')!;
+    expect(parsed.data.tags).toEqual(["don't", "demo"]);
+  });
+
+  it("renders arrays with apostrophes quoted (WR-07)", () => {
+    const rendered = renderFrontmatter({ type: "concept", tags: ["don't", "demo"] });
+    expect(parseFrontmatter(rendered)!.data.tags).toEqual(["don't", "demo"]);
+  });
+
+  it("quotes YAML-typed scalars when rendering (WR-08)", () => {
+    for (const value of ["True", "FALSE", "1.5", "0x10", ".inf", "2024-01-01"]) {
+      const rendered = renderFrontmatter({ title: value });
+      expect(rendered).toContain(`title: "${value}"`);
+      expect(parseFrontmatter(rendered)!.data.title).toBe(value);
+    }
+  });
+});
