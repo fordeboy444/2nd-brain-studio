@@ -916,3 +916,133 @@ describe("Browse, the slide-over panels", () => {
     expect(header!.parentElement).toBe(canvas!.parentElement);
   });
 });
+
+describe("Browse, the index.md catalog view (UI-08)", () => {
+  // The root index.md: a Catalog section with three directory links, plus a
+  // Consume section with no links. Parsed by IndexCatalog, navigated by Browse.
+  const INDEX_CONTENT = [
+    "---",
+    'okf_version: "0.1"',
+    'title: "Knowledge Bundle"',
+    "updated: 2026-10-17",
+    "---",
+    "",
+    "# Knowledge Bundle",
+    "",
+    "## Catalog",
+    "",
+    "- [Concepts](./concepts/) — ideas, techniques, patterns, mental models",
+    "- [Entities](./entities/) — tools, people, organizations",
+    "- [Sources](./sources/) — one summary page per source (provenance)",
+    "",
+    "## Consume",
+    "",
+    "Read `README.md` for the human entry point.",
+    "",
+  ].join("\n");
+
+  /** Open index.md as a ready, non-loading tab so EditorRegion renders it. */
+  async function mountWithIndex() {
+    useStore.setState({
+      currentVault: VAULT,
+      tabs: [
+        {
+          path: "index.md",
+          vaultId: VAULT.id,
+          generation: 1,
+          baseHash: READ_HASH,
+          serverContent: INDEX_CONTENT,
+          buffer: INDEX_CONTENT,
+          loading: false,
+          error: null,
+          saving: false,
+        },
+      ],
+      activeTabPath: "index.md",
+    });
+    const host = await mount();
+    await settle();
+    return host;
+  }
+
+  it("renders the catalog by default and offers Catalog / Read / Edit toggles", async () => {
+    const host = await mountWithIndex();
+
+    // The catalog view is rendered: at least one section card from the index.
+    const section = host.querySelector('[data-section="Catalog"]');
+    expect(section, "the Catalog section did not render").toBeTruthy();
+    expect(section!.querySelectorAll("[data-catalog-item]").length).toBe(3);
+
+    // The view-mode toggle now has three buttons, with Catalog pressed.
+    const viewGroup = host.querySelector('[role="group"][aria-label="Document view"]');
+    expect(viewGroup).toBeTruthy();
+    const buttons = Array.from(viewGroup!.querySelectorAll("button"));
+    const labels = buttons.map((b) => b.textContent?.trim());
+    expect(labels).toEqual(["Catalog", "Read", "Edit"]);
+    const catalogBtn = buttons.find((b) => b.textContent?.trim() === "Catalog");
+    expect(catalogBtn?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("clicking a catalog card opens the target file in Browse", async () => {
+    const host = await mountWithIndex();
+
+    const firstCard = host.querySelector<HTMLButtonElement>("[data-catalog-item]");
+    expect(firstCard).toBeTruthy();
+    await click(firstCard!);
+
+    // The card's href was `./concepts/` — normalized to `concepts/index.md`
+    // and handed to the store's openFile, which creates a tab for it.
+    const tabs = useStore.getState().tabs;
+    const opened = tabs.find((t) => t.path === "concepts/index.md");
+    expect(opened, "clicking a catalog card did not open the sub-index").toBeTruthy();
+  });
+
+  it("switches to the raw editor when Edit is pressed, and back to the catalog", async () => {
+    const host = await mountWithIndex();
+    const viewGroup = host.querySelector('[role="group"][aria-label="Document view"]');
+    const buttons = Array.from(viewGroup!.querySelectorAll("button"));
+    const editBtn = buttons.find((b) => b.textContent?.trim() === "Edit")!;
+
+    await click(editBtn);
+    // The editor's CodeMirror pane is now the rendered region, not the catalog.
+    expect(host.querySelector(".cm-content")).toBeTruthy();
+    expect(host.querySelector('[data-section="Catalog"]')).toBeNull();
+
+    // Switch back: the catalog returns and the editor goes away.
+    const catalogBtn = buttons.find((b) => b.textContent?.trim() === "Catalog")!;
+    await click(catalogBtn);
+    expect(host.querySelector('[data-section="Catalog"]')).toBeTruthy();
+    expect(host.querySelector(".cm-content")).toBeNull();
+  });
+
+  it("falls back to the editor when the open file is not an index.md", async () => {
+    // A regular markdown file: no Catalog button, no catalog view.
+    useStore.setState({
+      currentVault: VAULT,
+      tabs: [
+        {
+          path: "Alpha.md",
+          vaultId: VAULT.id,
+          generation: 1,
+          baseHash: READ_HASH,
+          serverContent: READ_CONTENT,
+          buffer: READ_CONTENT,
+          loading: false,
+          error: null,
+          saving: false,
+        },
+      ],
+      activeTabPath: "Alpha.md",
+    });
+    const host = await mount();
+    await settle();
+
+    const viewGroup = host.querySelector('[role="group"][aria-label="Document view"]');
+    const labels = Array.from(viewGroup!.querySelectorAll("button")).map(
+      (b) => b.textContent?.trim(),
+    );
+    // No Catalog toggle for a non-index file: the two-state Edit/Read toggle.
+    expect(labels).toEqual(["Edit", "Read"]);
+    expect(host.querySelector('[data-section]')).toBeNull();
+  });
+});
