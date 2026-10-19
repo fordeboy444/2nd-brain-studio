@@ -13,6 +13,7 @@ import {
   readEvents,
   readJob,
   requestCancel,
+  resetJobEvents,
   storeIo,
   withJobLock,
   writeJob,
@@ -103,6 +104,22 @@ describe("events.ndjson", () => {
     // The next append still continues from the last complete line.
     const next = await appendEvent(dir, "done", { status: "completed" });
     expect(next.seq).toBe(3);
+  });
+
+  it("keeps seq monotonic across a retry reset (WR-16)", async () => {
+    const dir = join(root, "job");
+    for (let i = 0; i < 3; i += 1) {
+      await appendEvent(dir, "unit", { n: i });
+    }
+
+    await resetJobEvents(dir);
+    const firstOfRetry = await appendEvent(dir, "job", { status: "queued" });
+
+    // A client reconnecting from 0 sees only the retry, not the old run.
+    expect(await readEvents(dir, 0)).toEqual([firstOfRetry]);
+    // A client still holding the old run's Last-Event-ID: 3 sees the retry.
+    expect(firstOfRetry.seq).toBe(4);
+    expect((await readEvents(dir, 3)).map((event) => event.seq)).toEqual([4]);
   });
 
   it("syncs the event before it notifies subscribers", async () => {

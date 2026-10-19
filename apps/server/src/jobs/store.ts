@@ -366,15 +366,24 @@ export function appendEvent(
 }
 
 /**
- * Truncate a job's event log and forget the cached seq, so a retry starts at
- * `seq 1` against an empty log. A client that reconnects with `lastSeq = 0`
- * then replays nothing from the prior run (CR-01).
+ * Truncate a job's event log for a retry, but keep its high-water `seq`.
+ *
+ * A client that reconnects with `lastSeq = 0` replays nothing from the prior
+ * run (CR-01), while a client whose stream was disconnected across the retry
+ * still holds the old run's last `Last-Event-ID`. Event ids must stay
+ * monotonic: the first event of the retry is `oldHigh + 1`, so that client
+ * receives it and the client-side `seq <= lastSeq` guard never drops the
+ * retry's `done` frame.
  */
 export function resetJobEvents(dir: string): Promise<void> {
   return serialize(dir, async () => {
     await mkdir(dir, { recursive: true });
+    let high = lastSeq.get(dir);
+    if (high === undefined) {
+      high = await readLastSeq(dir);
+    }
     await writeFile(join(dir, "events.ndjson"), "", "utf8");
-    lastSeq.delete(dir);
+    lastSeq.set(dir, high);
   });
 }
 
