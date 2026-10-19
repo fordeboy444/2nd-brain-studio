@@ -67,6 +67,13 @@ export const config = Object.freeze({
    * deployment volume (`/data`), never the repository.
    */
   youtubeCookiePath: optional("YOUTUBE_COOKIE_PATH") ?? "/data/youtube-cookie.txt",
+  /**
+   * Comma-separated absolute origins accepted for state-changing requests
+   * (`https://brain.example,http://localhost:5173`). When set, it is the only
+   * source of truth for `sameOrigin`: client-supplied `X-Forwarded-Host` is
+   * never trusted. When unset, the guard falls back to the request hosts.
+   */
+  appOrigin: optional("APP_ORIGIN"),
   /** Pino level. Empty/unknown values are normalised to `info`, never thrown. */
   logLevel: logLevel(),
   /** Human-readable service name for health payload. */
