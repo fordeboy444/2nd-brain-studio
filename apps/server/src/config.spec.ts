@@ -14,6 +14,7 @@ beforeEach(() => {
   delete process.env.SUPADATA_API_KEY;
   delete process.env.VAULT_ROOT;
   delete process.env.PORT;
+  delete process.env.LOG_LEVEL;
 });
 
 afterEach(() => {
@@ -72,6 +73,33 @@ describe("optional / config (OPS-07)", () => {
     process.env.PORT = "4010";
     const { config: c2 } = await loadConfig();
     expect(c2.port).toBe(4010);
+  });
+
+  it("defaults LOG_LEVEL to info when unset", async () => {
+    const { config } = await loadConfig();
+    expect(config.logLevel).toBe("info");
+  });
+
+  it("treats an empty or whitespace LOG_LEVEL as unset", async () => {
+    process.env.LOG_LEVEL = "";
+    const { config: empty } = await loadConfig();
+    expect(empty.logLevel).toBe("info");
+
+    process.env.LOG_LEVEL = "   ";
+    const { config: spaced } = await loadConfig();
+    expect(spaced.logLevel).toBe("info");
+  });
+
+  it("falls back to info for a name pino does not accept", async () => {
+    process.env.LOG_LEVEL = "verbose";
+    const { config } = await loadConfig();
+    expect(config.logLevel).toBe("info");
+  });
+
+  it("honours a valid LOG_LEVEL", async () => {
+    process.env.LOG_LEVEL = "debug";
+    const { config } = await loadConfig();
+    expect(config.logLevel).toBe("debug");
   });
 
   it("config is frozen", async () => {

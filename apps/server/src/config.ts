@@ -23,6 +23,27 @@ export function optionalInt(name: string, fallback: number): number {
   return Number.isNaN(n) ? fallback : n;
 }
 
+/** The levels pino accepts. Anything else would throw at module load. */
+const LOG_LEVELS = [
+  "fatal",
+  "error",
+  "warn",
+  "info",
+  "debug",
+  "trace",
+  "silent",
+] as const;
+
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+/** `LOG_LEVEL` through the OPS-07 boundary; unknown names fall back to `info`. */
+function logLevel(): LogLevel {
+  const raw = optional("LOG_LEVEL");
+  return raw !== undefined && (LOG_LEVELS as readonly string[]).includes(raw)
+    ? (raw as LogLevel)
+    : "info";
+}
+
 /** Read once at module load. Frozen so callers cannot mutate it. */
 const pkgVersion = "0.1.0";
 
@@ -46,6 +67,8 @@ export const config = Object.freeze({
    * deployment volume (`/data`), never the repository.
    */
   youtubeCookiePath: optional("YOUTUBE_COOKIE_PATH") ?? "/data/youtube-cookie.txt",
+  /** Pino level. Empty/unknown values are normalised to `info`, never thrown. */
+  logLevel: logLevel(),
   /** Human-readable service name for health payload. */
   serviceName: "2nd-brain-studio",
   /** Service version, surfaced in /api/health. */

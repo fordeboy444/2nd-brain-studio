@@ -14,7 +14,7 @@ import { tree } from "../routes/tree.js";
 // The log level is its own setting. It must NOT follow `llmConfigured`: the
 // live deployment has no OLLAMA_API_KEY, so tying the two silenced every
 // request line, job event and diagnostic on the one host that needs them.
-const log = pino({ name: config.serviceName, level: process.env.LOG_LEVEL ?? "info" });
+const log = pino({ name: config.serviceName, level: config.logLevel });
 
 /**
  * The single Hono app. One Node process serves the API and the built SPA.
