@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ReadOnlyBanner } from "./components/ReadOnlyBanner.js";
 import { Toasts } from "./components/Toasts.js";
 import { Browse } from "./screens/Browse.js";
+import { Search } from "./screens/Search.js";
 import { Jobs } from "./screens/Jobs.js";
 import { Settings } from "./screens/Settings.js";
 import { useStore } from "./store.js";
@@ -24,8 +25,8 @@ import { useStore } from "./store.js";
  * it, and the toast viewport has to outlive it.
  *
  * The overlay slot is structural: the element is rendered for any open overlay,
- * `settings` and `jobs` have a screen behind them, and the still-reserved values
- * (`graph`, `search`) resolve to no content rather than a crash.
+ * `settings`, `jobs`, and `search` have a screen behind them, and the
+ * still-reserved value (`graph`) resolves to no content rather than a crash.
  */
 export function App() {
   const loadHealth = useStore((s) => s.loadHealth);
@@ -48,6 +49,7 @@ export function App() {
         <div className="overlay-slot" data-overlay={activeOverlay}>
           {activeOverlay === "settings" && <Settings />}
           {activeOverlay === "jobs" && <Jobs />}
+          {activeOverlay === "search" && <Search />}
         </div>
       )}
 
