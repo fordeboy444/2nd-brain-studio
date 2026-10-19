@@ -265,6 +265,40 @@ function writeGoldens(run) {
   writeFileSync(join(GOLDEN_ROOT, "lint.exit.txt"), `${run.status}\n`);
 }
 
+/**
+ * Validate two independent runs and report the outcome.
+ *
+ * Returns an exit status instead of calling `process.exit`, so `main` can
+ * leave its `finally` (and the temp-tree removal there) before exiting.
+ */
+function verify(runA, runB, mode) {
+  if (!runA.normal.toString("utf8").includes("Scanned ")) {
+    console.error("ORACLE MISMATCH: normal lint stdout has no Scanned line");
+    return 1;
+  }
+  if (runA.quiet.toString("utf8").includes("Scanned ")) {
+    console.error("ORACLE MISMATCH: quiet lint stdout has a Scanned line");
+    return 1;
+  }
+  if (runA.quietStatus !== runA.status) {
+    console.error(
+      `ORACLE MISMATCH: quiet exit ${runA.quietStatus} vs normal ${runA.status}`,
+    );
+    return 1;
+  }
+  if (!compareRuns(runA, runB)) return 1;
+
+  if (mode === "update") {
+    writeGoldens(runA);
+    console.log("ORACLE UPDATED: goldens written from the reference");
+    return 0;
+  }
+
+  if (!compareGoldens(runA)) return 1;
+  console.log("ORACLE OK: indexes, meta and lint match the reference");
+  return 0;
+}
+
 function main() {
   const mode = parseMode(process.argv.slice(2));
 
@@ -274,6 +308,7 @@ function main() {
   if (!pythonAvailable()) skip("python3", mode);
 
   const temporary = mkdtempSync(join(tmpdir(), "okf-oracle-"));
+  let status = 0;
   try {
     const copyA = join(temporary, "a", BUNDLE_NAME);
     const copyB = join(temporary, "b", BUNDLE_NAME);
@@ -282,37 +317,11 @@ function main() {
     cpSync(FIXTURE_ROOT, copyA, { recursive: true });
     cpSync(FIXTURE_ROOT, copyB, { recursive: true });
 
-    const runA = runPipeline(copyA);
-    const runB = runPipeline(copyB);
-
-    if (!runA.normal.toString("utf8").includes("Scanned ")) {
-      console.error("ORACLE MISMATCH: normal lint stdout has no Scanned line");
-      process.exit(1);
-    }
-    if (runA.quiet.toString("utf8").includes("Scanned ")) {
-      console.error("ORACLE MISMATCH: quiet lint stdout has a Scanned line");
-      process.exit(1);
-    }
-    if (runA.quietStatus !== runA.status) {
-      console.error(
-        `ORACLE MISMATCH: quiet exit ${runA.quietStatus} vs normal ${runA.status}`,
-      );
-      process.exit(1);
-    }
-    if (!compareRuns(runA, runB)) process.exit(1);
-
-    if (mode === "update") {
-      writeGoldens(runA);
-      console.log("ORACLE UPDATED: goldens written from the reference");
-      process.exit(0);
-    }
-
-    if (!compareGoldens(runA)) process.exit(1);
-    console.log("ORACLE OK: indexes, meta and lint match the reference");
-    process.exit(0);
+    status = verify(runPipeline(copyA), runPipeline(copyB), mode);
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+  process.exit(status);
 }
 
 main();
