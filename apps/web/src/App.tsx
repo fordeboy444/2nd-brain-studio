@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { ReadOnlyBanner } from "./components/ReadOnlyBanner.js";
 import { Toasts } from "./components/Toasts.js";
 import { Browse } from "./screens/Browse.js";
 import { Jobs } from "./screens/Jobs.js";
@@ -6,9 +7,11 @@ import { Settings } from "./screens/Settings.js";
 import { useStore } from "./store.js";
 
 /**
- * The shell: one screen, one overlay slot, one toast viewport.
+ * The shell: one screen, one overlay slot, one toast viewport, plus the
+ * read-only banner that appears when this instance is the secondary container.
  *
- *   .app-shell            ← the column: screen, overlay slot, toasts
+ *   .app-shell            ← the column: banner, screen, overlay slot, toasts
+ *   ├─ ReadOnlyBanner     ← persistent strip when /api/health reports readOnly
  *   ├─ Browse             ← the grid: sidebar | main (see screens/Browse.tsx)
  *   ├─ .overlay-slot      ← overlay screens, only when one is open
  *   └─ Toasts             ← one viewport for the whole app, portalled
@@ -29,14 +32,16 @@ export function App() {
   const activeOverlay = useStore((s) => s.activeOverlay);
   const overlayOpen = useStore((s) => s.overlayOpen);
 
-  // One probe for the whole shell: the header's indicator and the Settings
-  // overlay read the same slice, so they can never disagree about the server.
+  // One probe for the whole shell: the header's indicator, the Settings
+  // overlay, and the ReadOnlyBanner all read the same slice, so they can never
+  // disagree about the server.
   useEffect(() => {
     void loadHealth();
   }, [loadHealth]);
 
   return (
     <div className="app-shell">
+      <ReadOnlyBanner />
       <Browse />
 
       {overlayOpen && activeOverlay !== "none" && (

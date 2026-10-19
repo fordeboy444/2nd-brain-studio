@@ -214,6 +214,11 @@ export interface AppState {
   openOverlay: (name: Exclude<OverlayName, "none">) => void;
   closeOverlay: () => void;
 
+  // Screen tab model used by Search/Graph to navigate back to Browse.
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+  setSelectedFile: (path: string) => void;
+
   // Right panel: which of the four tabs is showing, and whether the panel is
   // out at all. The panel is a pop-out over the editor, so these are two facts.
   rightPanelTab: RightPanelTab;
@@ -225,6 +230,7 @@ export interface AppState {
   // Health slice — one source for the settings overlay and the header indicator.
   health: HealthPayload | null;
   healthError: string | null;
+  isReadOnly: boolean;
   loadHealth: () => Promise<void>;
 
   // Vault selection. No vault open means the Browse vault list is the screen.
@@ -263,6 +269,11 @@ export interface AppState {
   pendingRevealLine: number | null;
   requestReveal: (line: number) => void;
   consumeReveal: () => number | null;
+  /** A search hit asks Browse to reveal this 1-based line in the open file. */
+  targetLine: number | null;
+  jumpToLine: number | null;
+  setTargetLine: (line: number | null) => void;
+  clearTargetLine: () => void;
   /** A create asks the tree to re-read one level so the new row appears. */
   pendingTreeRefresh: string | null;
   requestTreeRefresh: (dir: string) => void;
@@ -431,6 +442,23 @@ export const useStore = create<AppState>((set, get) => {
     editor: "browse",
     activeOverlay: "none",
     overlayOpen: false,
+    activeTab: "browse",
+    setActiveTab: (tab) =>
+      set((_s) => {
+        // `browse` and `edit` are theBrowse screen's local view modes; a
+        // surface that wants the editor region should validate through editor.
+        return {
+          activeTab: tab,
+          ...(tab === "browse" ? { editor: "browse" as const } : {}),
+          ...(tab === "write" ? { editor: "edit" as const } : {}),
+          ...(tab === "none" ? { overlayOpen: false, activeOverlay: "none" as const } : {}),
+        };
+      }),
+    setSelectedFile: (path) => {
+      const vaultId = get().currentVault?.id;
+      if (!vaultId) return;
+      get().openFile(vaultId, path);
+    },
     openOverlay: (name) => set({ activeOverlay: name, overlayOpen: true }),
     closeOverlay: () => set({ overlayOpen: false }),
 
@@ -448,10 +476,11 @@ export const useStore = create<AppState>((set, get) => {
 
     health: null,
     healthError: null,
+    isReadOnly: false,
     loadHealth: async () => {
       try {
         const health = await getHealth();
-        set({ health, healthError: null });
+        set({ health, healthError: null, isReadOnly: health.readOnly === true });
       } catch (e) {
         set({ healthError: (e as Error).message });
       }
@@ -471,6 +500,8 @@ export const useStore = create<AppState>((set, get) => {
         conflict: null,
         saveError: null,
         pendingRevealLine: null,
+        targetLine: null,
+        jumpToLine: null,
         pendingTreeRefresh: null,
         treeState: EMPTY_TREE,
       });
@@ -484,6 +515,8 @@ export const useStore = create<AppState>((set, get) => {
         conflict: null,
         saveError: null,
         pendingRevealLine: null,
+        targetLine: null,
+        jumpToLine: null,
         pendingTreeRefresh: null,
         treeState: EMPTY_TREE,
       }),
@@ -780,6 +813,10 @@ export const useStore = create<AppState>((set, get) => {
       if (line !== null) set({ pendingRevealLine: null });
       return line;
     },
+    targetLine: null,
+    jumpToLine: null,
+    setTargetLine: (line) => set({ targetLine: line, jumpToLine: line }),
+    clearTargetLine: () => set({ targetLine: null, jumpToLine: null }),
     pendingTreeRefresh: null,
     requestTreeRefresh: (dir) => set({ pendingTreeRefresh: dir }),
     consumeTreeRefresh: () => {

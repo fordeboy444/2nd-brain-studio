@@ -4627,3 +4627,39 @@ button.secondary:active:not(:disabled),
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================================
+   Read-Only Banner (OPS-06 / UI-05)
+   A persistent strip at the top of .app-shell when /api/health reports
+   readOnly. Amber/warning accent per 05-UI-SPEC.md. Inherits the
+   .global-banner full-width strip shape; this section adds the colour.
+   ============================================================ */
+.read-only-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 28%, transparent);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.read-only-banner__icon {
+  font-size: 14px;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+.read-only-banner__detail {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-weight: 400;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 640px) {
+  .read-only-banner__detail {
+    display: none;
+  }
+}
