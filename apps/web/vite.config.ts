@@ -11,6 +11,10 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3010",
         changeOrigin: true,
+        // `changeOrigin` rewrites Host to the target; the same-origin guard
+        // compares the browser's Origin against the forwarded host. Without
+        // `xfwd`, every mutating /api request 403s in `pnpm dev`.
+        xfwd: true,
       },
     },
   },
