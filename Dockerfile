@@ -44,6 +44,9 @@ RUN pnpm --filter @2nd-brain/web build
 
 # ---- server-build: the API and the job runner ------------------------------
 FROM workspace AS server-build
+# The okf package must be emitted before the server builds: its exports point at
+# `dist/index.js`+`dist/index.d.ts`, so the runtime artifact has to exist.
+RUN pnpm --filter @2nd-brain/okf build
 RUN pnpm --filter @2nd-brain/server build
 
 # ---- runtime ---------------------------------------------------------------
@@ -76,12 +79,12 @@ RUN pnpm install --frozen-lockfile --prod
 # The built output. The server resolves the SPA and the vault templates from its
 # working directory, so the layout below mirrors a local checkout at /app.
 COPY --from=server-build /repo/apps/server/dist ./apps/server/dist
-COPY --from=server-build /repo/packages/okf/src ./packages/okf/src
+COPY --from=server-build /repo/packages/okf/dist ./packages/okf/dist
 COPY --from=server-build /repo/templates ./templates
 COPY --from=web-build /repo/apps/web/dist ./apps/web/dist
 
-# The server imports @2nd-brain/okf at run time and that package's entry is a
-# TypeScript file. Fail the build here rather than on the first request.
+# The server imports @2nd-brain/okf at run time. Fail the build here rather than
+# on the first request if the emitted entry or its module wiring is broken.
 RUN cd apps/server && node -e "import('@2nd-brain/okf').then(() => console.log('@2nd-brain/okf loads'))"
 
 # Vault data lives on the volume, and the service user owns it. Creating the
