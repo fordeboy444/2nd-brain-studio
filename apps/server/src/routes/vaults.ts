@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
+import { sameOrigin } from "../http/origin.js";
 import { createVault, deleteVault, listVaults, readRegistry } from "../vaults/registry.js";
 
 const log = pino({ name: "vault-create" });
@@ -26,6 +27,19 @@ const CREATE_FAILURE_MESSAGES: Record<string, string> = {
  * name the vault, never the host path.
  */
 export const vaults = new Hono();
+
+// Create and delete write to the volume, so they get the same cross-site
+// forgery guard as the jobs and settings routers.
+vaults.use("*", async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && !sameOrigin(c)) {
+    return c.json(
+      { error: "origin_mismatch", message: "Cross-origin requests are not accepted." },
+      403,
+    );
+  }
+  await next();
+});
 
 const CreateBody = z.object({
   name: z.string().min(1, "name must not be empty"),

@@ -294,3 +294,32 @@ describe("empty path parameter (input-shape rejection boundary)", () => {
     expect(res.status).toBe(400);
   });
 });
+describe("cross-origin guard", () => {
+  it("refuses a cross-origin PUT and writes nothing", async () => {
+    const { app } = await reloadApp();
+    const vaultId = await createVaultViaApi(app, "Guarded Put");
+    const res = await app.request("/api/file", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        Origin: "http://evil.example",
+        "X-Forwarded-Host": "localhost:3010",
+      },
+      body: JSON.stringify({ vault: vaultId, path: "note.md", content: "x", baseHash: null }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("origin_mismatch");
+  });
+
+  it("still serves a cross-origin GET (only mutations are guarded)", async () => {
+    const { app } = await reloadApp();
+    const vaultId = await createVaultViaApi(app, "Guarded Get");
+    const res = await app.request(`/api/file?vault=${vaultId}&path=index.md`, {
+      headers: {
+        Origin: "http://evil.example",
+        "X-Forwarded-Host": "localhost:3010",
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+});

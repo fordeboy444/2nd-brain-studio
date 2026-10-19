@@ -248,3 +248,32 @@ describe("DELETE /api/vaults/:id", () => {
     expect(existsSync(join(root, vaultId))).toBe(false);
   });
 });
+describe("cross-origin guard", () => {
+  const EVIL = {
+    Origin: "http://evil.example",
+    "X-Forwarded-Host": "localhost:3010",
+  };
+
+  it("refuses a cross-origin create", async () => {
+    const { vaults } = await reload();
+    const res = await vaults.request("/", {
+      method: "POST",
+      headers: { ...EVIL, "content-type": "application/json" },
+      body: JSON.stringify({ name: "Forged" }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("origin_mismatch");
+  });
+
+  it("refuses a cross-origin delete and leaves the vault in place", async () => {
+    const { vaults } = await reload();
+    const id = await createVault(vaults, "Guarded");
+    const res = await vaults.request(`/${id}`, {
+      method: "DELETE",
+      headers: { ...EVIL, "content-type": "application/json" },
+      body: JSON.stringify({ confirmName: "Guarded" }),
+    });
+    expect(res.status).toBe(403);
+    expect(existsSync(join(root, id))).toBe(true);
+  });
+});

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, rename, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { sameOrigin } from "../http/origin.js";
 import { PathJailError, decodePathParam, resolveInVault } from "../paths/jail.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 
@@ -57,6 +58,19 @@ function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export const files = new Hono();
+
+// A PUT writes into the vault, so it carries the same cross-site forgery guard
+// as the other mutating routers.
+files.use("*", async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && !sameOrigin(c)) {
+    return c.json(
+      { error: "origin_mismatch", message: "Cross-origin requests are not accepted." },
+      403,
+    );
+  }
+  await next();
+});
 
 interface VaultRecord {
   id: string;
