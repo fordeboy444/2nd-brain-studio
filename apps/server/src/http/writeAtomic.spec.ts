@@ -42,14 +42,16 @@ describe("writeTextAtomic (T-03-02, T-03-25)", () => {
     const target = join(root, "youtube-cookie.txt");
     await writeTextAtomic(target, "session=secret\n", 0o600);
 
-    expect(openModes).toEqual([0o600]);
+    // The first open is the temp file at the final mode; the second is the
+    // parent directory, opened read-only to fsync the rename (WR-03).
+    expect(openModes).toEqual([0o600, undefined]);
     expect((await stat(target)).mode & 0o777).toBe(0o600);
   });
 
   it("uses the default creation mode for ordinary artifacts", async () => {
     await writeTextAtomic(join(root, "artifact.md"), "public\n");
 
-    expect(openModes).toEqual([0o644]);
+    expect(openModes).toEqual([0o644, undefined]);
     expect((await stat(join(root, "artifact.md"))).mode & 0o777).toBe(0o644);
   });
 });
