@@ -636,6 +636,28 @@ it("drops a save failure that lands after a vault switch", async () => {
   expect(useStore.getState().tabs[0]!.buffer).toBe("b unsaved");
 });
 
+it("keeps a cancel failure visible instead of refreshing it away", async () => {
+  const running = makeJob({ status: "running", stage: "S1" });
+  useStore.setState({
+    ...INITIAL,
+    selectedJobId: "j1",
+    selectedJob: running,
+    jobs: [running],
+    jobsError: null,
+  });
+  const calls: string[] = [];
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push(`${init?.method ?? "GET"} ${String(input)}`);
+    return json({ error: "cancel_failed", message: "Could not cancel." }, 500);
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().cancelSelectedJob();
+
+  // The failure survives: no list refresh runs after it.
+  expect(useStore.getState().jobsError).toContain("Could not cancel");
+  expect(calls).toEqual(["DELETE /api/jobs/j1"]);
+});
+
 it("retries the selected job, refreshes the list and reselects the reset record", async () => {
   const terminal = makeJob({
     status: "completed",

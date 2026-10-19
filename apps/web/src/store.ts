@@ -1158,6 +1158,9 @@ export const useStore = create<AppState>((set, get) => {
         }));
       } catch (e) {
         set({ jobsError: (e as Error).message });
+        // The list is unchanged, so there is nothing fresher to fetch; a
+        // refresh would clear `jobsError` before the user can read it.
+        return;
       }
       // The runner's own record is the authority on the status that follows the
       // cancel flag, so refresh the list rather than inventing one here.
