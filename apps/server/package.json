@@ -5,9 +5,11 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "prebuild": "pnpm --filter @2nd-brain/okf build",
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
+    "pretest": "pnpm --filter @2nd-brain/okf build",
     "test": "vitest run"
   },
   "dependencies": {
