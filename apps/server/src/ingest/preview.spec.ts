@@ -1,8 +1,25 @@
-import { watch } from "node:fs";
+import * as fs from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Every mutating filesystem function the preview path could reach is wrapped,
+// so "preview writes nothing" is an assertion about calls, not about timing.
+// The wrappers pass through, so the spec's own mkdtemp/rm still work.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    writeFile: vi.fn(actual.writeFile),
+    appendFile: vi.fn(actual.appendFile),
+    mkdir: vi.fn(actual.mkdir),
+    rename: vi.fn(actual.rename),
+    unlink: vi.fn(actual.unlink),
+    rm: vi.fn(actual.rm),
+    open: vi.fn(actual.open),
+  };
+});
 import type { VideoCandidate } from "../jobs/types.js";
 import type { EnumerateResult } from "./enumerate.js";
 import { previewJob, type PreviewDeps } from "./preview.js";
@@ -146,21 +163,18 @@ describe("previewJob (INGEST-03)", () => {
     expect(urls).toEqual([]);
   });
 
-  it("writes nothing: a filesystem watcher observes no change", async () => {
-    const events: string[] = [];
-    const watcher = watch(root, { recursive: true }, (_event, filename) => {
-      events.push(String(filename));
-    });
-    try {
-      await previewJob(
-        { channelUrl: "https://www.youtube.com/@demo", maxVideos: 5 },
-        depsFor([candidate(1), candidate(2)]).deps,
-      );
-      // Give the watcher a turn before asserting the absence of events.
-      await new Promise((resolve) => setTimeout(resolve, 60));
-    } finally {
-      watcher.close();
+  it("writes nothing: no mutating filesystem function is called", async () => {
+    // The spy must not count the spec's own setup or teardown.
+    vi.clearAllMocks();
+
+    const { deps } = depsFor([candidate(1), candidate(2)]);
+    await previewJob(
+      { channelUrl: "https://www.youtube.com/@demo", maxVideos: 5 },
+      deps,
+    );
+
+    for (const name of ["writeFile", "appendFile", "mkdir", "rename", "unlink", "rm", "open"] as const) {
+      expect(vi.mocked(fs[name])).not.toHaveBeenCalled();
     }
-    expect(events).toEqual([]);
   });
 });

@@ -140,6 +140,9 @@ describe("stage-granular resume (PIPE-11)", () => {
     // because the killed run never reached S2.
     expect(second.stdout()).toContain("llm_calls=2");
     // Candidate 1's adapter is not called again: the matching capture skipped it.
+    // The fixture prints ADAPTER_CALLED in both modes, so this can fail.
+    expect(second.stdout()).toContain("ADAPTER_CALLED:vid_second_2");
+    expect(second.stdout()).not.toContain("ADAPTER_CALLED:vid_first_01");
     expect(second.stdout()).not.toContain("CAPTURE_WRITTEN");
     expect(second.stdout()).toContain("JOB_COMPLETE");
 

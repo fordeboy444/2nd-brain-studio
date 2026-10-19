@@ -83,6 +83,10 @@ const deps: StageDeps = {
     return candidates;
   },
   async fetchTranscript(candidate) {
+    // Unconditional: the resume spec asserts candidate 2 was called and
+    // candidate 1 was not. Printing only in `hang` mode made that assertion
+    // vacuous (WR-19).
+    writeSync(1, `ADAPTER_CALLED:${candidate.youtubeId}\n`);
     const segments = [
       { startSec: 0, text: `${candidate.youtubeId} says hello` },
       { startSec: 30, text: "and goodbye" },
