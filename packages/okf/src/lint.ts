@@ -170,7 +170,10 @@ function sourceBullets(text: string): string[] {
   for (const rawLine of text.split("\n")) {
     // A CRLF page leaves a trailing carriage return on every line.
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (line.replace(/\s+$/, "") === "## Sources") {
+    // CommonMark ATX headings may be indented up to three spaces and may end
+    // with an optional closing `#` sequence, so accept both forms. Missing the
+    // heading would leave `inSources` false and silently disable E6 and E8.
+    if (/^\s{0,3}##\s+Sources(?:\s+#+)?\s*$/.test(line)) {
       inSources = true;
       continue;
     }

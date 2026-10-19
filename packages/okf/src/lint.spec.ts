@@ -784,6 +784,26 @@ describe("source section grammar (WR-01)", () => {
       "E8 quote not found near cited timestamp: concepts/subject.md",
     ]);
   });
+
+  it("still emits E8 when the heading is indented up to three spaces (WR-01)", () => {
+    const pages = e8Set({ bullet: outOfWindow, rawText: E8_TWO_SEGMENTS });
+    const subject = pages.find((page) => page.path === "concepts/subject.md");
+    expect(subject).toBeDefined();
+    subject!.text = subject!.text.replace("## Sources\n", " ## Sources\n");
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("still emits E8 when the heading has a closing hash sequence (WR-01)", () => {
+    const pages = e8Set({ bullet: outOfWindow, rawText: E8_TWO_SEGMENTS });
+    const subject = pages.find((page) => page.path === "concepts/subject.md");
+    expect(subject).toBeDefined();
+    subject!.text = subject!.text.replace("## Sources\n", "## Sources ##\n");
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
 });
 
 describe("E7 wikilink boundaries", () => {
