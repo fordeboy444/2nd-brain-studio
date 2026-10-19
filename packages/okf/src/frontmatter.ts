@@ -261,7 +261,10 @@ function parseScalar(raw: string): FrontmatterValue {
   }
   if (value === "true") return true;
   if (value === "false") return false;
-  if (INTEGER_RE.test(value)) return Number(value);
+  if (INTEGER_RE.test(value)) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) ? n : value;
+}
   // Bare ISO dates and every other bare scalar stay strings.
   return value;
 }

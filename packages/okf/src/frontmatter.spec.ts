@@ -467,3 +467,21 @@ describe("WR-07/WR-08 regression", () => {
     }
   });
 });
+
+describe("WR-17 parse side rejects unsafe integers", () => {
+  it("keeps an unsafe integer as a string (WR-17)", () => {
+    const parsed = parseFrontmatter("---\nx: 9007199254740993\n---\n");
+    expect(parsed?.data.x).toBe("9007199254740993");
+  });
+
+  it("keeps a 400-digit integer literal as a string (WR-17)", () => {
+    const literal = "9".repeat(400);
+    const parsed = parseFrontmatter(`---\nx: ${literal}\n---\n`);
+    expect(parsed?.data.x).toBe(literal);
+  });
+
+  it("parses a safe integer as a number (WR-17)", () => {
+    const parsed = parseFrontmatter("---\nx: 42\n---\n");
+    expect(parsed?.data.x).toBe(42);
+  });
+});
