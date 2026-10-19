@@ -749,6 +749,30 @@ describe("E6 web citation boundaries", () => {
   });
 });
 
+describe("source section grammar (WR-01)", () => {
+  const outOfWindow = '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"';
+
+  it("still emits E8 when the heading has trailing whitespace", () => {
+    const pages = e8Set({ bullet: outOfWindow, rawText: E8_TWO_SEGMENTS });
+    const subject = pages.find((page) => page.path === "concepts/subject.md");
+    expect(subject).toBeDefined();
+    subject!.text = subject!.text.replace("## Sources\n", "## Sources \n");
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("still emits E8 for an indented star-marker bullet", () => {
+    const pages = e8Set({
+      bullet: `  * ${outOfWindow}`,
+      rawText: E8_TWO_SEGMENTS,
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
+});
+
 describe("E7 wikilink boundaries", () => {
   it("finds one wikilink and embeds the matched text", () => {
     const pages = conceptPair(

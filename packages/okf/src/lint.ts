@@ -160,9 +160,11 @@ function hasProvenance(data: OkfFrontmatter): boolean {
 /**
  * The bullet lines of the `## Sources` section, in document order.
  *
- * The section starts at a line that is exactly `## Sources` and ends before the
- * next `## ` heading or at the end of the page. Only column-zero `- ` lines are
- * bullets.
+ * The section starts at a `## Sources` heading, allowing trailing whitespace,
+ * and ends before the next `## ` heading or at the end of the page. A bullet is
+ * any line whose marker is `-` or `*`, indented or not: the section must stay
+ * analyzable even when a hand-authored or imported page differs from the
+ * generated form. Missing bullets would silently disable E6 and E8.
  */
 function sourceBullets(text: string): string[] {
   const bullets: string[] = [];
@@ -170,13 +172,13 @@ function sourceBullets(text: string): string[] {
   for (const rawLine of text.split("\n")) {
     // A CRLF page leaves a trailing carriage return on every line.
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    if (line === "## Sources") {
+    if (line.replace(/\s+$/, "") === "## Sources") {
       inSources = true;
       continue;
     }
     if (!inSources) continue;
     if (line.startsWith("## ")) break;
-    if (line.startsWith("- ")) bullets.push(line);
+    if (/^\s*[-*]\s+/.test(line)) bullets.push(line);
   }
   return bullets;
 }
