@@ -120,6 +120,50 @@ describe("probeFirstCandidate", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not fail the job when only a per-video tier times out", async () => {
+    const tierTwoTimesOut: PythonRun = async () => ({
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      timedOut: true,
+    });
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneMissing,
+      runPython: tierTwoTimesOut,
+      supadataKey: null,
+    });
+
+    // Candidate 0 times out in tier 2 while candidate 1 would succeed; the
+    // preflight must let S1 record candidate 0 as a skip and continue.
+    const second: VideoCandidate = {
+      youtubeId: "lmnopqrstuv",
+      title: "Second Talk",
+      url: "https://www.youtube.com/watch?v=lmnopqrstuv",
+    };
+    await expect(
+      probeFirstCandidate([CANDIDATE, second], cascade, ctx()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails the job when the tier-1 watchdog times out", async () => {
+    const tierOneTimesOut: YtDlpRun = async () => ({
+      exitCode: null,
+      stdout: "",
+      stderr: "",
+      timedOut: true,
+      isCanceled: false,
+    });
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneTimesOut,
+      runPython: tierTwoFails,
+      supadataKey: null,
+    });
+
+    await expect(
+      probeFirstCandidate([CANDIDATE], cascade, ctx()),
+    ).rejects.toMatchObject({ name: "PreflightFailedError", reason: "timeout" });
+  });
+
   it("does not fail the job when the first video is private", async () => {
     const run: YtDlpRun = async () => ({
       exitCode: 1,

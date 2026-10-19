@@ -44,7 +44,14 @@ function isChannelWideFailure(
   result: TierResult,
 ): result is Extract<TierResult, { ok: false }> {
   if (result.ok) return false;
-  if (result.reason === "timeout") return true;
+  if (result.reason === "timeout") {
+    // A tier-1 watchdog timeout means yt-dlp itself is stuck, so every video
+    // would pay the same 120 s. A tier-2 or tier-3 timeout is per-video unless
+    // the detail names a network-level cause; killing a 200-video job for one
+    // slow Supadata call is the CR-03 failure class again.
+    if (result.detail === undefined) return false;
+    return /tier1=timeout/.test(result.detail) || CHANNEL_WIDE_DETAIL.test(result.detail);
+  }
   if (result.reason === "blocked") {
     return result.detail === undefined || !PER_VIDEO_DETAIL.test(result.detail);
   }
