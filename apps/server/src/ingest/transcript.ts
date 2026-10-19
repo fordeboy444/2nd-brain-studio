@@ -90,6 +90,9 @@ export interface TranscriptCascadeDeps {
 /** Tier 2 accepts exactly the 11-character YouTube id alphabet. */
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
+/** Upper bound on cached probe results in one long-lived cascade. */
+const PROBE_CACHE_LIMIT = 64;
+
 /** `youtube-transcript-api --format json` emits an array of timed lines. */
 const Tier2Document = z.array(
   z.object({
@@ -304,7 +307,23 @@ export function createTranscriptCascade(
   const http = deps.fetch ?? globalThis.fetch;
   const supadataKey =
     deps.supadataKey === null ? undefined : (deps.supadataKey ?? config.supadataApiKey);
+  // The cascade may outlive a job, so an entry is only valid for the language
+  // it was fetched in. The bound stops a long-lived process from growing the
+  // map without limit when a probed unit is never fetched (existing capture,
+  // cancel after preflight).
   const probed = new Map<string, TierResult>();
+
+  function probeKey(candidate: VideoCandidate, ctx: UnitContext): string {
+    return `${candidate.youtubeId}\u0000${ctx.language}`;
+  }
+
+  function remember(key: string, result: TierResult): void {
+    if (probed.size >= PROBE_CACHE_LIMIT) {
+      const oldest = probed.keys().next();
+      if (oldest.done !== true) probed.delete(oldest.value);
+    }
+    probed.set(key, result);
+  }
 
   async function runTiers(
     candidate: VideoCandidate,
@@ -342,14 +361,15 @@ export function createTranscriptCascade(
   return {
     async probe(candidate, ctx) {
       const result = await runTiers(candidate, ctx);
-      if (result.ok) probed.set(candidate.youtubeId, result);
+      if (result.ok) remember(probeKey(candidate, ctx), result);
       return result;
     },
 
     async fetch(candidate, ctx) {
-      const cached = probed.get(candidate.youtubeId);
+      const key = probeKey(candidate, ctx);
+      const cached = probed.get(key);
       if (cached !== undefined) {
-        probed.delete(candidate.youtubeId);
+        probed.delete(key);
         return cached;
       }
       return runTiers(candidate, ctx);

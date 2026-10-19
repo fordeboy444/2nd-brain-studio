@@ -305,6 +305,33 @@ describe("probe cache", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("keys the probe by language, so a different language is fetched again", async () => {
+    const langs: string[] = [];
+    const run: YtDlpRun = async (args) => {
+      const language = args[args.indexOf("--sub-langs") + 1] ?? "?";
+      langs.push(language);
+      const template = args[args.indexOf("--output") + 1];
+      if (template === undefined) throw new Error("argv carries no --output");
+      await writeFile(
+        join(dirname(template), "abcdefghijk.json3"),
+        JSON.stringify({ events: [{ tStartMs: 0, segs: [{ utf8: language }] }] }),
+      );
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false, isCanceled: false };
+    };
+    const cascade = createTranscriptCascade({
+      runYtDlp: run,
+      runPython: NEVER_PYTHON,
+      supadataKey: null,
+    });
+
+    const english = await cascade.probe(CANDIDATE, ctx({ language: "en" }));
+    const german = await cascade.fetch(CANDIDATE, ctx({ language: "de" }));
+
+    expect(english).toMatchObject({ ok: true, segments: [{ text: "en" }] });
+    expect(german).toMatchObject({ ok: true, segments: [{ text: "de" }] });
+    expect(langs).toEqual(["en", "de"]);
+  });
+
   it("does not cache a probe failure", async () => {
     const run = vi.fn(tierOneMissing);
     const cascade = createTranscriptCascade({
