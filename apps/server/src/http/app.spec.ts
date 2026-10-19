@@ -77,6 +77,43 @@ describe("http app", () => {
     expect(res.status).toBe(404);
   });
 
+  it("rejects an oversized declared content-length with 413 before parsing (WR-11)", async () => {
+    const { app } = await reload();
+    const res = await app.request("/api/nope", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(2 * 1024 * 1024),
+      },
+      body: "{}",
+    });
+
+    expect(res.status).toBe(413);
+    const body = await res.json();
+    expect(body.error).toBe("payload_too_large");
+  });
+
+  it("rejects an oversized chunked body while reading it (WR-11)", async () => {
+    const { app } = await reload();
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // 17 * 64 KiB is just over the 1 MiB cap and has no content-length.
+        for (let i = 0; i < 17; i += 1) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+
+    const res = await app.request("/api/nope", {
+      method: "POST",
+      body: stream,
+      duplex: "half",
+    } as RequestInit);
+
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe("payload_too_large");
+  });
+
   it("contains no CORS middleware (grep-verifiable here by behaviour)", async () => {
     const src = readFileSync(APP_SRC, "utf8");
     expect(src.toLowerCase()).not.toContain("cors");

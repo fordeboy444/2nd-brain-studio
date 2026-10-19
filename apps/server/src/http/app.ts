@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -30,6 +31,26 @@ app.use("*", async (c, next) => {
   const ms = Date.now() - start;
   log.info({ method: c.req.method, path: c.req.path, status: c.res.status, ms });
 });
+
+/**
+ * One body cap for every API request, applied while the body is read.
+ *
+ * The cookie routes also check their own cap, but only after `c.req.text()`
+ * has buffered the whole body: a chunked multi-gigabyte request could exhaust
+ * the one process that also runs every job. `bodyLimit` rejects on the
+ * declared `content-length` or while streaming, before any route parses.
+ */
+app.use(
+  "/api/*",
+  bodyLimit({
+    maxSize: 1024 * 1024,
+    onError: (c) =>
+      c.json(
+        { error: "payload_too_large", message: "Request body exceeds 1 MiB." },
+        413,
+      ),
+  }),
+);
 
 // API routes.
 app.route("/api/health", health);
