@@ -350,6 +350,36 @@ describe("cross-reader round-trip over the fixture", () => {
 });
 
 
+describe("CR-01 quoted first array item and escaped single quotes", () => {
+  it("round-trips a quoted first item containing a hash", () => {
+    const tags = ["a # b", "c"];
+    expect(parseFrontmatter(renderFrontmatter({ tags }))?.data.tags).toEqual(
+      tags,
+    );
+  });
+
+  it("parses a quoted first item containing a hash", () => {
+    expect(parseFrontmatter('---\ntags: ["a # b", c]\n---\n')?.data.tags).toEqual(
+      ["a # b", "c"],
+    );
+    expect(parseFrontmatter('---\ntags: ["the #1 tool"]\n---\n')?.data.tags).toEqual(
+      ["the #1 tool"],
+    );
+  });
+
+  it("keeps a # in a single-quoted scalar with an escaped quote", () => {
+    expect(
+      parseFrontmatter("---\ntitle: 'it''s a # test'\n---\n")?.data.title,
+    ).toBe("it's a # test");
+  });
+
+  it("keeps a # in a single-quoted array item with an escaped quote", () => {
+    expect(
+      parseFrontmatter("---\ntags: ['a''b # c', 'd']\n---\n")?.data.tags,
+    ).toEqual(["a'b # c", "d"]);
+  });
+});
+
 describe("WR-07/WR-08 regression", () => {
   it("parses array items containing apostrophes as separate items (WR-07)", () => {
     const parsed = parseFrontmatter('---\ntype: concept\ntags: [don\'t, demo]\n---\n')!;

@@ -165,7 +165,8 @@ function splitArrayItems(inner: string): string[] {
  * comment. Comment-only values therefore become empty rather than text.
  */
 function stripComment(raw: string): string {
-  const first = raw.trimStart().charAt(0);
+  const start = raw.length - raw.trimStart().length;
+  const first = raw.charAt(start);
   const structuralQuotes = first === '"' || first === "'" || first === "[";
   let quote: '"' | "'" | null = null;
   let escaped = false;
@@ -173,7 +174,7 @@ function stripComment(raw: string): string {
   // quote is structural only at the start of an item; an apostrophe mid-scalar
   // stays literal.
   let atItemStart = first === "[";
-  let seenContent = first !== '"' && first !== "'" && first !== "[";
+  let seenContent = false;
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw[i] as string;
     if (quote === '"') {
@@ -183,19 +184,19 @@ function stripComment(raw: string): string {
       continue;
     }
     if (quote === "'") {
-      if (ch === "'") quote = null;
+      if (ch === "'") {
+        // Two single quotes are YAML's escaped quote, not a close.
+        if (raw[i + 1] === "'") i += 1;
+        else quote = null;
+      }
       continue;
     }
     if (ch === "#" && (i === 0 || /\s/.test(raw[i - 1] as string))) {
       return raw.slice(0, i);
     }
     if (structuralQuotes && (ch === '"' || ch === "'")) {
-      let canOpen = false;
-      if (first === '"' || first === "'") {
-        if (!seenContent) canOpen = true;
-      } else if (first === "[") {
-        if (atItemStart) canOpen = true;
-      }
+      const canOpen =
+        first === '"' || first === "'" ? !seenContent : atItemStart;
       if (canOpen) {
         quote = ch;
         atItemStart = false;
@@ -203,9 +204,12 @@ function stripComment(raw: string): string {
         continue;
       }
     }
+    // The array opener is not item content, so it must not clear the flag that
+    // lets the first item's quote open.
+    if (i === start && first === "[") continue;
     if (ch === ",") {
       atItemStart = true;
-    } else if (ch !== " " && ch !== "\t" && ch !== "\r" && ch !== "\n") {
+    } else if (!/\s/.test(ch)) {
       atItemStart = false;
       seenContent = true;
     }
