@@ -76,6 +76,12 @@ export interface Tab {
 
 /** A save the server refused because the file moved on disk (D-07). */
 export interface PendingConflict {
+  /**
+   * The vault that raised the conflict. A late response from a save can land
+   * after a vault switch; without this, its banner would show on a same-path tab
+   * in the vault now open, and "reload" would write the old vault's bytes.
+   */
+  vaultId: string;
   path: string;
   /**
    * What is on disk now, verbatim — shown only if the user asks for it.
@@ -94,6 +100,8 @@ export interface PendingConflict {
 
 /** A save that failed for any other reason. The buffer is untouched. */
 export interface SaveFailure {
+  /** The vault that raised the failure, for the same reason as `PendingConflict`. */
+  vaultId: string;
   path: string;
   message: string;
 }
@@ -504,8 +512,14 @@ export const useStore = create<AppState>((set, get) => {
         tabs: next,
         activeTabPath: nextActive,
         // A conflict belongs to the tab it was raised on.
-        conflict: s.conflict?.path === path ? null : s.conflict,
-        saveError: s.saveError?.path === path ? null : s.saveError,
+        conflict:
+          s.conflict?.vaultId === vaultId && s.conflict.path === path
+            ? null
+            : s.conflict,
+        saveError:
+          s.saveError?.vaultId === vaultId && s.saveError.path === path
+            ? null
+            : s.saveError,
       }));
     },
 
@@ -518,7 +532,13 @@ export const useStore = create<AppState>((set, get) => {
       // Editing is the answer to a save failure: what the banner was reporting
       // ("your edit is still here") is still true, but the user has moved on.
       const failed = get().saveError;
-      if (failed && failed.path === activeTabPath) set({ saveError: null });
+      if (
+        failed &&
+        failed.vaultId === currentVault.id &&
+        failed.path === activeTabPath
+      ) {
+        set({ saveError: null });
+      }
     },
 
     saveActive: async () => {
@@ -528,7 +548,13 @@ export const useStore = create<AppState>((set, get) => {
       if (!tab) return;
       // A conflict is resolved by the user's choice, never by another save: a
       // second banner stacked on an unanswered one answers nothing (D-07).
-      if (conflict && conflict.path === tab.path) return;
+      if (
+        conflict &&
+        conflict.vaultId === tab.vaultId &&
+        conflict.path === tab.path
+      ) {
+        return;
+      }
       if (tab.saving || tab.loading || tab.serverContent === null) return;
       if (!isDirty(tab)) return;
 
@@ -546,7 +572,10 @@ export const useStore = create<AppState>((set, get) => {
             baseHash: res.baseHash,
             serverContent: sending,
           }),
-          saveError: s.saveError?.path === tab.path ? null : s.saveError,
+          saveError:
+            s.saveError?.vaultId === tab.vaultId && s.saveError.path === tab.path
+              ? null
+              : s.saveError,
           // A file the server did not know about now exists, and the tree is
           // the only place that shows it. One level is re-read — the directory
           // the file landed in — rather than the whole tree: the sidebar shows
@@ -559,12 +588,23 @@ export const useStore = create<AppState>((set, get) => {
         // store, and only an explicit choice replaces it.
         set((s) => {
           const tabsNow = patchTabs(s.tabs, tab.vaultId, tab.path, { saving: false });
+          // The response can land after a vault switch. A banner from the old
+          // vault would be meaningless in the new one (and could replace a
+          // banner the new vault raised), so record only the tab state change.
+          if (get().currentVault?.id !== tab.vaultId) return { tabs: tabsNow };
           if (e instanceof ConflictError) {
             // One banner at a time: an unresolved conflict keeps the first one.
-            if (s.conflict && s.conflict.path === tab.path) return { tabs: tabsNow };
+            if (
+              s.conflict &&
+              s.conflict.vaultId === tab.vaultId &&
+              s.conflict.path === tab.path
+            ) {
+              return { tabs: tabsNow };
+            }
             return {
               tabs: tabsNow,
               conflict: {
+                vaultId: tab.vaultId,
                 path: tab.path,
                 currentContent: e.currentContent,
                 currentHash: e.currentHash,
@@ -573,7 +613,11 @@ export const useStore = create<AppState>((set, get) => {
           }
           return {
             tabs: tabsNow,
-            saveError: { path: tab.path, message: (e as Error).message },
+            saveError: {
+              vaultId: tab.vaultId,
+              path: tab.path,
+              message: (e as Error).message,
+            },
           };
         });
       }
@@ -585,6 +629,10 @@ export const useStore = create<AppState>((set, get) => {
     reloadFromDisk: () => {
       const { conflict, currentVault } = get();
       if (!conflict || currentVault === null) return;
+      // The conflict must belong to the vault that is open NOW. A save that
+      // resolved after a switch carries the old vault's bytes and hash; writing
+      // them into a same-path tab here would replace this vault's unsaved text.
+      if (conflict.vaultId !== currentVault.id) return;
       // A create conflict carries no server-side bytes — the file was deleted,
       // so there is nothing to reload. Letting this run would assign `null` to
       // both the buffer and the base hash, blanking the editor and marking the
@@ -613,13 +661,18 @@ export const useStore = create<AppState>((set, get) => {
         conflict: null,
         // The file is clean now: a banner about a failed save for this path
         // describes a state that no longer exists.
-        saveError: s.saveError?.path === path ? null : s.saveError,
+        saveError:
+          s.saveError?.vaultId === currentVault.id && s.saveError.path === path
+            ? null
+            : s.saveError,
       }));
     },
 
     keepMine: async () => {
       const { conflict, tabs, currentVault } = get();
       if (!conflict || currentVault === null) return;
+      // Same rule as reloadFromDisk: the banner must belong to the open vault.
+      if (conflict.vaultId !== currentVault.id) return;
       const tab = tabs.find((t) => sameTab(t, currentVault.id, conflict.path));
       if (!tab || tab.saving) return;
       const sending = tab.buffer;
@@ -631,25 +684,39 @@ export const useStore = create<AppState>((set, get) => {
         // is the hash that recreates it.
         const res = await writeFile(tab.vaultId, conflict.path, sending, conflict.currentHash);
         set((s) => ({
-          tabs: patchTabs(s.tabs, currentVault.id, conflict.path, {
+          tabs: patchTabs(s.tabs, conflict.vaultId, conflict.path, {
             saving: false,
             baseHash: res.baseHash,
             serverContent: sending,
           }),
-          conflict: null,
+          // A response that lands after a vault switch must not clear the new
+          // vault's banner.
+          conflict:
+            s.conflict?.vaultId === conflict.vaultId &&
+            s.conflict.path === conflict.path
+              ? null
+              : s.conflict,
           // The overwrite landed, so a previous failure banner for this path
           // would now be false.
-          saveError: s.saveError?.path === conflict.path ? null : s.saveError,
+          saveError:
+            s.saveError?.vaultId === conflict.vaultId &&
+            s.saveError.path === conflict.path
+              ? null
+              : s.saveError,
         }));
       } catch (e) {
         set((s) => {
-          const tabsNow = patchTabs(s.tabs, currentVault.id, conflict.path, { saving: false });
+          const tabsNow = patchTabs(s.tabs, conflict.vaultId, conflict.path, {
+            saving: false,
+          });
+          if (get().currentVault?.id !== conflict.vaultId) return { tabs: tabsNow };
           if (e instanceof ConflictError) {
             // It moved again while the user was deciding. One banner carrying
             // the fresher server state — not a second banner stacked on it.
             return {
               tabs: tabsNow,
               conflict: {
+                vaultId: conflict.vaultId,
                 path: conflict.path,
                 currentContent: e.currentContent,
                 currentHash: e.currentHash,
@@ -661,7 +728,11 @@ export const useStore = create<AppState>((set, get) => {
           // beside it.
           return {
             tabs: tabsNow,
-            saveError: { path: conflict.path, message: (e as Error).message },
+            saveError: {
+              vaultId: conflict.vaultId,
+              path: conflict.path,
+              message: (e as Error).message,
+            },
           };
         });
       }

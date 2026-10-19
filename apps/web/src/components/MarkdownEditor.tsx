@@ -105,13 +105,18 @@ export function MarkdownEditor() {
   const saveActive = useStore((s) => s.saveActive);
   const saveError = useStore((s) => s.saveError);
   const conflict = useStore((s) => s.conflict);
+  const currentVaultId = useStore((s) => s.currentVault?.id ?? null);
   const reloadFromDisk = useStore((s) => s.reloadFromDisk);
   const keepMine = useStore((s) => s.keepMine);
   // A conflict the server answered with no hash is a create conflict: the file
   // was deleted on disk while the tab held a hash for it. There is no server
   // version to reload, so the banner offers only the recreating action.
   const conflictHere =
-    conflict !== null && conflict.path === tab?.path ? conflict : null;
+    conflict !== null &&
+    conflict.vaultId === currentVaultId &&
+    conflict.path === tab?.path
+      ? conflict
+      : null;
   const isCreateConflict = conflictHere !== null && conflictHere.currentHash === null;
   const revealRequest = useStore((s) => s.pendingRevealLine);
   const consumeReveal = useStore((s) => s.consumeReveal);
@@ -170,6 +175,14 @@ export function MarkdownEditor() {
 
   if (!tab) return null;
 
+  // A failure from a save that resolved after a vault switch belongs to the
+  // old vault; the same-path tab here is a different file.
+  const saveErrorHere =
+    saveError !== null &&
+    saveError.vaultId === currentVaultId &&
+    saveError.path === tab.path
+      ? saveError
+      : null;
   const dirty = isDirty(tab);
   // The hash the SERVER gave us for this content — from the read, or from the
   // last successful write. Until one of those has landed the tab has no base:
@@ -248,11 +261,11 @@ export function MarkdownEditor() {
           still on screen and trying again is all that is needed. The server's
           own sentence follows the fixed one — the fixed one says the edit is
           safe, this one says what refused it. */}
-      <Banner show={saveError !== null && saveError.path === tab.path} role="alert">
+      <Banner show={saveErrorHere !== null} role="alert">
         <span>Save failed. Your edit is still here — try again.</span>
-        {saveError && saveError.path === tab.path ? (
+        {saveErrorHere !== null ? (
           <span style={{ color: "var(--text-tertiary)", fontSize: "var(--fs-sm)" }}>
-            {saveError.message}
+            {saveErrorHere.message}
           </span>
         ) : null}
       </Banner>

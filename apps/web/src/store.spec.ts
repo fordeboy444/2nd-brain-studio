@@ -486,8 +486,13 @@ function conflictedState() {
       },
     ],
     activeTabPath: "a.md",
-    conflict: { path: "a.md", currentContent: "disk", currentHash: "disk-hash" },
-    saveError: { path: "a.md", message: "save failed" },
+    conflict: {
+      vaultId: VAULT_FOR_TABS.id,
+      path: "a.md",
+      currentContent: "disk",
+      currentHash: "disk-hash",
+    },
+    saveError: { vaultId: VAULT_FOR_TABS.id, path: "a.md", message: "save failed" },
   });
 }
 
@@ -508,6 +513,97 @@ it("clears the save-failure banner when keep mine lands", async () => {
 
   expect(useStore.getState().conflict).toBeNull();
   expect(useStore.getState().saveError).toBeNull();
+});
+
+it("ignores a conflict that belongs to a vault no longer open", () => {
+  const vaultB: Vault = { ...VAULT_FOR_TABS, id: "v2", name: "Other", path: "v2" };
+  useStore.setState({
+    ...INITIAL,
+    currentVault: vaultB,
+    tabs: [
+      {
+        path: "a.md",
+        vaultId: vaultB.id,
+        baseHash: "b-old",
+        serverContent: "b old",
+        buffer: "b unsaved",
+        loading: false,
+        error: null,
+        saving: false,
+      },
+    ],
+    activeTabPath: "a.md",
+    conflict: {
+      vaultId: VAULT_FOR_TABS.id,
+      path: "a.md",
+      currentContent: "A disk",
+      currentHash: "a-hash",
+    },
+    saveError: null,
+  });
+
+  useStore.getState().reloadFromDisk();
+
+  const tab = useStore.getState().tabs[0]!;
+  // B's unsaved text and its base hash are untouched: A's bytes never land.
+  expect(tab.buffer).toBe("b unsaved");
+  expect(tab.baseHash).toBe("b-old");
+});
+
+it("drops a save failure that lands after a vault switch", async () => {
+  const vaultB: Vault = { ...VAULT_FOR_TABS, id: "v2", name: "Other", path: "v2" };
+  useStore.setState({
+    ...INITIAL,
+    currentVault: VAULT_FOR_TABS,
+    tabs: [
+      {
+        path: "a.md",
+        vaultId: VAULT_FOR_TABS.id,
+        baseHash: "a-old",
+        serverContent: "a old",
+        buffer: "a unsaved",
+        loading: false,
+        error: null,
+        saving: false,
+      },
+    ],
+    activeTabPath: "a.md",
+    conflict: null,
+    saveError: null,
+  });
+
+  let release = () => {};
+  const heldWrite = new Promise<Response>((_, reject) => {
+    release = () => reject(new Error("network down"));
+  });
+  globalThis.fetch = vi.fn(() => heldWrite) as unknown as typeof fetch;
+
+  const saving = useStore.getState().saveActive();
+  // The vault switch clears the tab set; open the same path in B with unsaved
+  // text while A's write is still in flight.
+  useStore.getState().openVault(vaultB);
+  useStore.setState({
+    tabs: [
+      {
+        path: "a.md",
+        vaultId: vaultB.id,
+        baseHash: "b-old",
+        serverContent: "b old",
+        buffer: "b unsaved",
+        loading: false,
+        error: null,
+        saving: false,
+      },
+    ],
+    activeTabPath: "a.md",
+  });
+
+  release();
+  await saving;
+
+  expect(useStore.getState().conflict).toBeNull();
+  expect(useStore.getState().saveError).toBeNull();
+  expect(useStore.getState().tabs[0]!.buffer).toBe("b unsaved");
 });
 
 it("retries the selected job, refreshes the list and reselects the reset record", async () => {
