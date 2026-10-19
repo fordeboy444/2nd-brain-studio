@@ -610,15 +610,20 @@ it("gives every failed row its own secondary Retry button in a Retry column", as
   await selectRow(host, 0, render);
 
   const headers = [...host.querySelectorAll(".job-failed-table th")].map((th) => th.textContent);
-  expect(headers).toEqual(["Unit", "Stage", "Reason", "Retry"]);
+  expect(headers).toEqual(["Unit", "Stage", "Reason", "Retry all"]);
 
   const rowButtons = [
     ...host.querySelectorAll<HTMLButtonElement>(".job-failed-table tbody button"),
   ];
   expect(rowButtons.length).toBe(2);
   expect(rowButtons.map((button) => button.getAttribute("aria-label"))).toEqual([
-    "Retry video-a",
-    "Retry video-b",
+    "Retry all failed units",
+    "Retry all failed units",
+  ]);
+  // The button text names all failed units, never one slug.
+  expect(rowButtons.map((button) => button.textContent?.trim())).toEqual([
+    "Retry all failed units",
+    "Retry all failed units",
   ]);
   // Secondary by definition: the default surface, never accent and never danger.
   for (const button of rowButtons) {
@@ -626,6 +631,31 @@ it("gives every failed row its own secondary Retry button in a Retry column", as
     expect(button.className).not.toContain("primary");
     expect(button.className).not.toContain("danger");
     expect(button.disabled).toBe(false);
+  }
+});
+
+it("labels each row button as retrying all failed units, not one slug", async () => {
+  serverJobs = [
+    makeJob({
+      status: "failed",
+      stage: "done",
+      skipped: [
+        { slug: "video-a", stage: "S4", reason: "timeout" },
+        { slug: "video-b", stage: "S2", reason: "validator" },
+      ],
+    }),
+  ];
+  const { host, render } = await mountJobs();
+  await selectRow(host, 0, render);
+
+  const rowButtons = [
+    ...host.querySelectorAll<HTMLButtonElement>(".job-failed-table tbody button"),
+  ];
+  for (const button of rowButtons) {
+    expect(button.textContent?.trim()).toBe("Retry all failed units");
+    expect(button.textContent?.trim()).not.toContain("video-a");
+    expect(button.textContent?.trim()).not.toMatch(/^Retry (video-)/);
+    expect(button.getAttribute("aria-label")).toBe("Retry all failed units");
   }
 });
 

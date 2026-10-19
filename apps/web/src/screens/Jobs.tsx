@@ -604,7 +604,7 @@ function FailedUnitTable({
               <th scope="col">Unit</th>
               <th scope="col">Stage</th>
               <th scope="col">Reason</th>
-              <th scope="col">Retry</th>
+              <th scope="col">Retry all</th>
             </tr>
           </thead>
           <tbody>
@@ -621,11 +621,11 @@ function FailedUnitTable({
                     // Secondary by definition: the default surface, never accent
                     // and never danger. It shares the primary action's guards.
                     className="ghost-pill"
-                    aria-label={`Retry ${row.slug}`}
+                    aria-label="Retry all failed units"
                     disabled={retryBlockedReason !== null || retryPending}
                     onClick={onRetry}
                   >
-                    Retry
+                    Retry all failed units
                   </button>
                 </td>
               </tr>
