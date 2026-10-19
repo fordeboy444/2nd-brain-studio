@@ -171,8 +171,42 @@ export function defaultRun(
   });
 }
 
+/** Hosts a YouTube video URL may name. Anything else is not trusted. */
+const YOUTUBE_HOSTS: ReadonlySet<string> = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "music.youtube.com",
+  "youtu.be",
+]);
+
+/** The canonical watch URL for a video id. */
+export function canonicalYoutubeUrl(youtubeId: string): string {
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(youtubeId)}`;
+}
+
+/**
+ * True iff `value` is an http(s) URL on a YouTube host with no credentials.
+ * A third-party `webpage_url` is data, so a `file:`, a credential-bearing URL,
+ * or a value that could be read as an option is never trusted.
+ */
+export function isYouTubeVideoUrl(value: string): boolean {
+  if (value === "" || value.startsWith("-")) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  return YOUTUBE_HOSTS.has(parsed.hostname.toLowerCase());
+}
+
 const RawLine = z.object({
-  id: z.string().min(1),
+  // The YouTube id alphabet. A path segment, a space or a leading `-` never
+  // reaches a URL or an argv element.
+  id: z.string().min(1).max(64).regex(/^[A-Za-z0-9_-]+$/),
   title: z.string().optional(),
   url: z.string().optional(),
   webpage_url: z.string().optional(),
@@ -234,15 +268,19 @@ export function parseYtDlpLine(line: string): VideoCandidate | null {
 
   const entry = parsed.data;
   const youtubeId = entry.id;
+  // Both URLs come from third-party JSON. Only a YouTube-hosted http(s) URL
+  // is copied; everything else falls back to the URL built from the id.
+  const suppliedUrl =
+    entry.webpage_url !== undefined && entry.webpage_url !== ""
+      ? entry.webpage_url
+      : entry.url;
   const candidate: VideoCandidate = {
     youtubeId,
     title: entry.title !== undefined && entry.title.trim() !== "" ? entry.title : youtubeId,
     url:
-      entry.webpage_url !== undefined && entry.webpage_url !== ""
-        ? entry.webpage_url
-        : entry.url !== undefined && entry.url !== ""
-          ? entry.url
-          : `https://www.youtube.com/watch?v=${youtubeId}`,
+      suppliedUrl !== undefined && isYouTubeVideoUrl(suppliedUrl)
+        ? suppliedUrl
+        : canonicalYoutubeUrl(youtubeId),
   };
 
   const published = normalizeUploadDate(entry.upload_date);

@@ -7,6 +7,7 @@ import { runJob, slugForCandidate, type StageDeps } from "../jobs/runner.js";
 import { readJob } from "../jobs/store.js";
 import type { JobSettings, VideoCandidate } from "../jobs/types.js";
 import {
+  canonicalYoutubeUrl,
   defaultRun,
   EnumerateError,
   enumerateChannel,
@@ -216,6 +217,27 @@ describe("parseYtDlpLine", () => {
     expect(parseYtDlpLine("   ")).toBeNull();
     expect(parseYtDlpLine("{oops")).toBeNull();
     expect(parseYtDlpLine(JSON.stringify({ title: "no id" }))).toBeNull();
+  });
+
+  it("returns null for an id outside the YouTube alphabet", () => {
+    expect(parseYtDlpLine(JSON.stringify({ id: "$(rm -rf /)" }))).toBeNull();
+    expect(parseYtDlpLine(JSON.stringify({ id: "a/b" }))).toBeNull();
+    expect(parseYtDlpLine(JSON.stringify({ id: "has space" }))).toBeNull();
+  });
+
+  it("ignores a third-party URL that is not a YouTube http(s) URL", () => {
+    const unsafe = [
+      "file:///etc/passwd",
+      "--output=/tmp/x",
+      "https://evil.example/watch?v=abc123",
+      "https://youtu.be.evil.example/abc123",
+      "https://user:secret@youtu.be/abc123",
+      "javascript:alert(1)",
+    ];
+    for (const url of unsafe) {
+      const candidate = parseYtDlpLine(JSON.stringify({ id: "abc123", webpage_url: url }));
+      expect(candidate?.url, url).toBe(canonicalYoutubeUrl("abc123"));
+    }
   });
 });
 

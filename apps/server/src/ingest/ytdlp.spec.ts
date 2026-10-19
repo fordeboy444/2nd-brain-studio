@@ -228,6 +228,40 @@ describe("fetchJson3Transcript", () => {
     expect(argv[argv.length - 1]).toBe(CANDIDATE.url);
   });
 
+  it("terminates options before the candidate URL", async () => {
+    const calls: string[][] = [];
+    await fetchJson3Transcript(
+      CANDIDATE,
+      { language: "en", signal: new AbortController().signal },
+      { run: writingRun(JSON3_FIXTURE, (args) => calls.push([...args])) },
+    );
+
+    const argv = calls[0]!;
+    expect(argv[argv.length - 2]).toBe("--");
+    expect(argv[argv.length - 1]).toBe(CANDIDATE.url);
+  });
+
+  it("refuses a non-YouTube candidate URL before any spawn", async () => {
+    let called = false;
+    const run: YtDlpRun = async () => {
+      called = true;
+      return { exitCode: 0, stdout: "", stderr: "", timedOut: false, isCanceled: false };
+    };
+
+    const result = await fetchJson3Transcript(
+      { ...CANDIDATE, url: "file:///etc/passwd" },
+      { language: "en", signal: new AbortController().signal },
+      { run },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "fetch_error",
+      detail: "invalid candidate url",
+    });
+    expect(called).toBe(false);
+  });
+
   it("returns no_captions when yt-dlp writes no subtitle file", async () => {
     const result = await fetchJson3Transcript(
       CANDIDATE,

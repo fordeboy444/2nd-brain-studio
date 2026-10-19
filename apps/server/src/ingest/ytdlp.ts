@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
 import type { SkipReason, TranscriptSegment, VideoCandidate } from "../jobs/types.js";
+import { isYouTubeVideoUrl } from "./enumerate.js";
 
 /** What one subprocess run returns. A failure is a value, never a throw. */
 export interface YtDlpResult {
@@ -194,6 +195,12 @@ export async function fetchJson3Transcript(
   ctx: TierContext,
   deps: FetchJson3Deps = {},
 ): Promise<TierResult> {
+  // A URL read back from `01-enumerate.json` is user-editable, so it is checked
+  // again here. `--` below stops a value from ever being parsed as an option.
+  if (!isYouTubeVideoUrl(candidate.url)) {
+    return { ok: false, reason: "fetch_error", detail: "invalid candidate url" };
+  }
+
   const dir = await mkdtemp(join(deps.tmpRoot ?? tmpdir(), "2nd-brain-tier1-"));
   try {
     const argv = [
@@ -207,6 +214,8 @@ export async function fetchJson3Transcript(
       "--output",
       join(dir, "%(id)s.%(ext)s"),
       ...(ctx.cookiePath !== undefined ? ["--cookies", ctx.cookiePath] : []),
+      // Option terminator: the URL is data even if it starts with `-`.
+      "--",
       candidate.url,
     ];
 
