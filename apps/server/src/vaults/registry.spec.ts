@@ -58,6 +58,19 @@ describe("registry", () => {
     });
   });
 
+  it("malformed JSON fails with registry_invalid and leaves the bytes alone", async () => {
+    const { readRegistry } = await reload();
+    const raw = '{"version":1,"vaults":[';
+    await writeFile(join(root, "vaults.json"), raw, "utf8");
+
+    // A SyntaxError carries no code; without its own catch the outer rethrow
+    // would bypass the routes' typed `registry_invalid` answer.
+    await expect(readRegistry()).rejects.toMatchObject({
+      code: "registry_invalid",
+    });
+    expect(await readFile(join(root, "vaults.json"), "utf8")).toBe(raw);
+  });
+
   it("writeRegistryAtomic writes and leaves no tmp file behind", async () => {
     const { writeRegistryAtomic, readRegistry } = await reload();
     await writeRegistryAtomic({ version: 1, vaults: [] });

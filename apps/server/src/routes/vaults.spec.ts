@@ -291,6 +291,20 @@ describe("unreadable registry", () => {
     expect((await res.json()).error).toBe("registry_invalid");
   });
 
+  it("GET answers typed JSON for malformed JSON, not a plain-text 500", async () => {
+    const raw = '{"version":1,"vaults":[';
+    await writeFile(join(root, "vaults.json"), raw, "utf8");
+    const { vaults } = await reload();
+    const res = await vaults.request("/");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      error: "registry_invalid",
+      message: "The vault registry is unreadable.",
+    });
+    expect(await readFile(join(root, "vaults.json"), "utf8")).toBe(raw);
+  });
+
   it("POST refuses rather than overwriting the unreadable file", async () => {
     const raw = JSON.stringify({ version: 2, vaults: [] });
     await writeFile(join(root, "vaults.json"), raw, "utf8");

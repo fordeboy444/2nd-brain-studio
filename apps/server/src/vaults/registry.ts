@@ -88,7 +88,19 @@ function nowIso(): string {
 export async function readRegistry(): Promise<Registry> {
   try {
     const raw = await readFile(REGISTRY_PATH(), "utf8");
-    const parsed = JSON.parse(raw) as Registry;
+    // Malformed JSON is the same failure as a wrong shape: a hand-edited or
+    // truncated file. Give it the typed code too, so the routes answer their
+    // fixed `registry_invalid` JSON instead of a generic plain-text 500. This
+    // catch must stay separate — a `SyntaxError` carries no `code`, so the
+    // outer catch would rethrow it untyped.
+    let parsed: Registry;
+    try {
+      parsed = JSON.parse(raw) as Registry;
+    } catch {
+      const err = new Error("vaults.json is not valid JSON");
+      (err as Error & { code?: string }).code = "registry_invalid";
+      throw err;
+    }
     if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.vaults)) {
       const err = new Error("vaults.json has an unsupported shape");
       (err as Error & { code?: string }).code = "registry_invalid";
