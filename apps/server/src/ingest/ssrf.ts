@@ -214,18 +214,48 @@ export function isPrivateAddress(ip: string): boolean {
     const groups = ipv6Groups(ip);
     if (groups === null) return true;
 
-    // IPv4-mapped (`::ffff:a.b.c.d`) and IPv4-compatible (`::a.b.c.d`) carry an
-    // IPv4 address in the final 32 bits; classify that address, not the shell.
+    // A translation prefix carries an IPv4 address that a translator will dial.
+    // Classify that embedded address, never the IPv6 shell: a URL such as
+    // `http://[64:ff9b::a9fe:a9fe]/` reaches 169.254.169.254 through NAT64.
+    const embedded = (high: number, low: number): boolean =>
+      isPrivateIpv4((((groups[high] as number) << 16) | (groups[low] as number)) >>> 0);
+
+    // IPv4-mapped (`::ffff:a.b.c.d`) and IPv4-compatible (`::a.b.c.d`).
     const highZero = groups.slice(0, 5).every((group) => group === 0);
-    if (highZero && groups[5] === 0xffff) {
-      const value = (((groups[6] as number) << 16) | (groups[7] as number)) >>> 0;
-      return isPrivateIpv4(value);
-    }
+    if (highZero && groups[5] === 0xffff) return embedded(6, 7);
     if (highZero && groups[5] === 0) {
       const value = (((groups[6] as number) << 16) | (groups[7] as number)) >>> 0;
       // `::` is unspecified and `::1` is loopback; both are private anyway.
       return value === 0 ? true : isPrivateIpv4(value);
     }
+
+    // IPv4-translated `::ffff:0:a.b.c.d` (RFC 2765).
+    if (
+      groups[0] === 0 &&
+      groups[1] === 0 &&
+      groups[2] === 0 &&
+      groups[3] === 0 &&
+      groups[4] === 0xffff &&
+      groups[5] === 0
+    ) {
+      return embedded(6, 7);
+    }
+
+    // NAT64 well-known prefix `64:ff9b::/96` (RFC 6052). The local-use
+    // `64:ff9b:1::/48` prefix has no single embedded address, so fail closed.
+    if (groups[0] === 0x0064 && groups[1] === 0xff9b) {
+      const restZero = groups.slice(2, 6).every((group) => group === 0);
+      return restZero ? embedded(6, 7) : true;
+    }
+
+    // 6to4 `2002::/16` embeds the IPv4 relay endpoint in groups 1 and 2.
+    if (groups[0] === 0x2002) return embedded(1, 2);
+
+    // Teredo `2001:0::/32` and deprecated site-local `fec0::/10`: no
+    // legitimate direct use here, so fail closed.
+    if (groups[0] === 0x2001 && groups[1] === 0) return true;
+    if (((groups[0] as number) & 0xffc0) === 0xfec0) return true;
+
     if (((groups[0] as number) & 0xfe00) === 0xfc00) return true; // fc00::/7
     if (((groups[0] as number) & 0xffc0) === 0xfe80) return true; // fe80::/10
     if (((groups[0] as number) & 0xff00) === 0xff00) return true; // ff00::/8

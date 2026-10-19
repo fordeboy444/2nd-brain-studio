@@ -100,6 +100,18 @@ describe("isPrivateAddress", () => {
     "::ffff:127.0.0.1",
     "::ffff:10.0.0.1",
     "::ffff:192.168.1.1",
+    // Translation prefixes: the embedded IPv4 decides.
+    "64:ff9b::a9fe:a9fe",
+    "64:ff9b::7f00:1",
+    "64:ff9b::a00:1",
+    "64:ff9b:1::1",
+    "2002:a9fe:a9fe::",
+    "2002:7f00:1::",
+    "2001:0::1",
+    "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+    "::ffff:0:127.0.0.1",
+    "::ffff:0:10.0.0.1",
+    "fec0::1",
   ])("treats %s as private", (address) => {
     expect(isPrivateAddress(address)).toBe(true);
   });
@@ -119,6 +131,10 @@ describe("isPrivateAddress", () => {
     "2606:4700:4700::1111",
     "2001:db8::1",
     "::ffff:8.8.8.8",
+    // Translation prefixes whose embedded IPv4 is public stay reachable.
+    "64:ff9b::808:808",
+    "2002:808:808::",
+    "::ffff:0:8.8.8.8",
   ])("treats %s as public", (address) => {
     expect(isPrivateAddress(address)).toBe(false);
   });
