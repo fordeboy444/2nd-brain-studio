@@ -280,7 +280,11 @@ export function lintBundle(
     } catch (cause) {
       if (!(cause instanceof FrontmatterError)) throw cause;
       parsed.set(page.path, null);
-      error("E1", `E1 unsupported YAML in frontmatter: ${page.path}`);
+      // Reserved pages still parse, so `okf_version` reaches consumers, but
+      // E1 is documented for non-reserved pages: the reference skips them.
+      if (!isReserved(page.path)) {
+        error("E1", `E1 unsupported YAML in frontmatter: ${page.path}`);
+      }
     }
   }
 

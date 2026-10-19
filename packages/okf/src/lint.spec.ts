@@ -329,6 +329,19 @@ describe("E1 unsupported frontmatter (CR-01)", () => {
       "E1 unsupported YAML in frontmatter: concepts/subject.md",
     ]);
   });
+
+  it("suppresses E1 for a reserved page the reference skips (WR-02)", () => {
+    const pages: BundlePage[] = [
+      {
+        path: "index.md",
+        text:
+          '---\nokf_version: "0.1"\nmeta:\n  nested: true\n---\n\n# Bundle\n',
+      },
+    ];
+    const result = lintBundle(pages, "edge");
+    expect(result.findings).toEqual([]);
+    expect(result.exitCode).toBe(0);
+  });
 });
 
 describe("E2 link boundaries", () => {
