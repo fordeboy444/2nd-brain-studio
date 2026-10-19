@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   FrontmatterError,
+  normalizeSourceKind,
   parseFrontmatter,
   parseFrontmatterSafe,
   readIndexMeta,
@@ -112,6 +113,31 @@ describe("parseFrontmatter", () => {
 
   it("rejects a duplicate key instead of letting the last one win", () => {
     expectUnsupported("---\ntype: concept\ntype: raw-transcript\n---\n");
+  });
+
+  it("skips full-line comments, indented or not (WR-07)", () => {
+    const parsed = parseFrontmatter(
+      "---\n" +
+        "# generated index: do not edit\n" +
+        "  # an indented comment\n" +
+        "type: concept\n" +
+        "---\n\nBody.\n",
+    );
+    expect(Object.keys(parsed!.data)).toEqual(["type"]);
+    expect(parsed?.data.type).toBe("concept");
+  });
+
+  it("strips an inline comment from a bare scalar (WR-07)", () => {
+    const parsed = parseFrontmatter(
+      "---\ntype: source\nsource_kind: web # captured page\n---\n",
+    );
+    expect(parsed?.data.source_kind).toBe("web");
+    expect(normalizeSourceKind(parsed!.data)).toBe("web");
+  });
+
+  it("keeps a # inside a quoted value (WR-07)", () => {
+    const parsed = parseFrontmatter('---\ntitle: "C# notes"\n---\n');
+    expect(parsed?.data.title).toBe("C# notes");
   });
 
   it.each(["__proto__", "constructor", "prototype"])(

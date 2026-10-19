@@ -164,11 +164,14 @@ function parseScalar(raw: string): FrontmatterValue {
     }
     return items as FrontmatterValue;
   }
-  if (value === "true") return true;
-  if (value === "false") return false;
-  if (INTEGER_RE.test(value)) return Number(value);
+  // In a bare scalar, ` #` starts a YAML comment. Quoted values above keep
+  // their `#`; only the unquoted branch strips one.
+  const bare = value.replace(/\s+#.*$/, "").trim();
+  if (bare === "true") return true;
+  if (bare === "false") return false;
+  if (INTEGER_RE.test(bare)) return Number(bare);
   // Bare ISO dates and every other bare scalar stay strings.
-  return value;
+  return bare;
 }
 
 /**
@@ -193,10 +196,13 @@ export function parseFrontmatter(
 
   for (const line of block.split("\n")) {
     if (line.trim() === "") continue;
+    // A full-line comment carries no data. It may be indented and may contain
+    // a colon, neither of which makes it a key.
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#")) continue;
     // An indented line is a nested map or a continuation. Both are unsupported.
     if (/^[ \t]/.test(line)) throw new FrontmatterError();
 
-    const trimmed = line.trim();
     // A document separator inside the block starts a second document.
     if (trimmed === "---" || trimmed === "...") throw new FrontmatterError();
 
