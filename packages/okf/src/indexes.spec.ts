@@ -22,6 +22,7 @@ import {
   renderRootBanner,
 } from "./indexes.js";
 import type { IndexBuildResult, Taxonomy } from "./indexes.js";
+import { collectSourceFiles } from "../tests/helpers/source-files.js";
 
 /** Build a page with the frontmatter subset the index reader consumes. */
 function page(
@@ -412,14 +413,22 @@ describe("root index rebuild", () => {
 });
 
 describe("determinism source assertion", () => {
-  it("contains no locale, clock or Intl reference", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("./indexes.ts", import.meta.url)),
-      "utf8",
+  /** Locale-dependent calls make bytes depend on the host's locale data. */
+  const LOCALE_RE =
+    /\blocaleCompare\b|\btoLocale(?:String|LowerCase|UpperCase)\b|\bIntl\b/;
+
+  it("covers every non-spec source module (WR-08)", () => {
+    const files = collectSourceFiles(
+      fileURLToPath(new URL(".", import.meta.url)),
     );
-    expect(source).not.toContain("localeCompare");
-    expect(source).not.toContain("toLocaleString");
-    expect(source).not.toMatch(/\bDate\b/);
-    expect(source).not.toMatch(/\bIntl\b/);
+    expect(files.length).toBeGreaterThanOrEqual(6);
+    for (const name of files) {
+      const source = readFileSync(
+        fileURLToPath(new URL(name, import.meta.url)),
+        "utf8",
+      );
+      expect(source, `${name}: locale API`).not.toMatch(LOCALE_RE);
+      expect(source, `${name}: clock API`).not.toMatch(/\bDate\b/);
+    }
   });
 });

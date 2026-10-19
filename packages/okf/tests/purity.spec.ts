@@ -16,7 +16,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -24,6 +23,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as okf from "../src/index.js";
+import { collectSourceFiles } from "./helpers/source-files.js";
 
 const SRC_DIR = fileURLToPath(new URL("../src", import.meta.url));
 const PACKAGE_JSON = fileURLToPath(new URL("../package.json", import.meta.url));
@@ -85,30 +85,16 @@ function scanSource(file: string, source: string): string[] {
     ["setTimeout call", /\bsetTimeout\s*\(/],
     ["setInterval call", /\bsetInterval\s*\(/],
     ["import.meta.url", /\bimport\s*\.\s*meta\s*\.\s*url\b/],
+    // Locale-dependent comparison and formatting would make output host
+    // dependent; `compareCodepoint` exists precisely to avoid them.
+    ["localeCompare call", /\blocaleCompare\b/],
+    ["toLocale* call", /\btoLocale(?:String|LowerCase|UpperCase)\b/],
+    ["Intl access", /\bIntl\b/],
   ];
   for (const [label, re] of checks) {
     if (re.test(source)) violations.push(`${file}: ${label} is not allowed`);
   }
   return violations;
-}
-
-/**
- * Collect source modules below `dir` as POSIX-relative paths, recursively.
- *
- * The tsconfig includes every `.ts` file under `src`, so a nested module is
- * part of the package and must not escape the gate.
- */
-function collectSourceFiles(dir: string, prefix = ""): string[] {
-  const files: string[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) {
-      files.push(...collectSourceFiles(`${dir}/${entry.name}`, relative));
-    } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".spec.ts")) {
-      files.push(relative);
-    }
-  }
-  return files.sort();
 }
 
 /** The source modules the gate covers: every `.ts` file, specs excluded. */
@@ -164,6 +150,19 @@ describe("purity gate", () => {
         'import { Worker } from "worker_threads";\n',
         'import specifier "worker_threads" is not allowed',
       ],
+    ];
+    for (const [source, expected] of cases) {
+      expect(scanSource("scratch.ts", source), source).toContain(
+        `scratch.ts: ${expected}`,
+      );
+    }
+  });
+
+  it("flags locale-dependent APIs by file and construct (WR-08)", () => {
+    const cases: Array<[string, string]> = [
+      ['a.localeCompare(b);\n', "localeCompare call is not allowed"],
+      ["x.toLocaleLowerCase();\n", "toLocale* call is not allowed"],
+      ["new Intl.DateTimeFormat();\n", "Intl access is not allowed"],
     ];
     for (const [source, expected] of cases) {
       expect(scanSource("scratch.ts", source), source).toContain(
