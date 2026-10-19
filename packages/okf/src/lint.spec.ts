@@ -1606,3 +1606,40 @@ describe("package surface", () => {
     expect(severity).toBe("warning");
   });
 });
+
+
+describe("WR-04/WR-05/WR-06 regression", () => {
+  const pagesFor = (sourceText: string) => [
+    { path: "concepts/x.md", text: sourceText },
+    { path: "sources/src.md", text: "---\ntype: source\nsource_kind: video\nraw: raw/src.md\nyoutube_id: abc\n---\n" },
+    { path: "raw/src.md", text: "[0:00:00] hi there" },
+  ];
+
+  it("WR-04 ends the Sources section on an indented h2", () => {
+    const src = "---\ntype: concept\nsources:\n---\n## Sources\n- [S](../sources/src.md) - \"[0:00:00] hi\"\n  ## Related\n- unrelated note here\n";
+    const result = lintBundle(pagesFor(src), "b");
+    const msgs = result.errors.map((f) => f.message);
+    expect(msgs).not.toContain("E8 citation has no source link: concepts/x.md");
+  });
+
+  it("WR-05 ignores fenced code inside Sources", () => {
+    const src = "---\ntype: concept\nsources:\n---\n## Sources\n```md\n- [Example](../sources/example.md) - \"text\"\n```\n- [S](../sources/src.md) - \"[0:00:00] hi\"\n";
+    const result = lintBundle(pagesFor(src), "b");
+    const msgs = result.errors.map((f) => f.message);
+    expect(msgs).not.toContain("E8 cited source is missing: sources/example.md");
+  });
+
+  it("WR-06 treats plus bullets as citations", () => {
+    const src = "---\ntype: concept\nsources:\n---\n## Sources\n+ no link here at all\n";
+    const result = lintBundle(pagesFor(src), "b");
+    const msgs = result.errors.map((f) => f.message);
+    expect(msgs).toContain("E8 citation has no source link: concepts/x.md");
+  });
+
+  it("WR-06 ignores nested notes under citations", () => {
+    const src = "---\ntype: concept\nsources:\n---\n## Sources\n- [S](../sources/src.md) - \"[0:00:00] hi\"\n  - see also the appendix\n";
+    const result = lintBundle(pagesFor(src), "b");
+    const msgs = result.errors.map((f) => f.message);
+    expect(msgs).not.toContain("E8 citation has no source link: concepts/x.md");
+  });
+});

@@ -167,22 +167,49 @@ function hasProvenance(data: OkfFrontmatter): boolean {
 function sourceBullets(text: string): string[] {
   const bullets: string[] = [];
   let inSources = false;
+  let fence: string | null = null;
+  let baseIndent: number | null = null;
   for (const rawLine of text.split("\n")) {
     // A CRLF page leaves a trailing carriage return on every line.
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    // CommonMark ATX headings may be indented up to three spaces and may end
-    // with an optional closing `#` sequence, so accept both forms. Missing the
-    // heading would leave `inSources` false and silently disable E6 and E8.
-    if (/^\s{0,3}##\s+Sources(?:\s+#+)?\s*$/.test(line)) {
-      inSources = true;
+
+    // Track fenced code blocks (backticks or tildes) and skip their contents.
+    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch !== null) {
+      if (fence === null) fence = fenceMatch[1]![0] as string;
+      else if (fence === (fenceMatch[1]![0] as string)) fence = null;
       continue;
     }
+    if (fence !== null) continue;
+
+    // CommonMark ATX headings may be indented up to three spaces, may use a
+    // tab after the marker, and may end with an optional closing `#` sequence.
+    // Use one parser for both the section start and the section end.
+    const heading = /^\s{0,3}##\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+    if (heading !== null) {
+      const title = heading[1]!.trim();
+      if (!inSources) {
+        inSources = title === "Sources";
+      } else {
+        break;
+      }
+      if (inSources) {
+        baseIndent = null;
+      }
+      continue;
+    }
+
     if (!inSources) continue;
-    if (line.startsWith("## ")) break;
-    // A thematic break (`* * *`, `- - -`, `___`) is not a citation bullet.
-    // Without this, the widened bullet match below reports a false E8.
+
+    // A thematic break is not a citation bullet.
     if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) continue;
-    if (/^\s*[-*]\s+/.test(line)) bullets.push(line);
+
+    const bullet = /^(\s*)[-*+]\s+/.exec(line);
+    if (bullet !== null) {
+      const indent = bullet[1]!.length;
+      if (baseIndent === null) baseIndent = indent;
+      if (indent <= baseIndent) bullets.push(line);
+    }
   }
   return bullets;
 }
@@ -205,6 +232,22 @@ const WIKILINK_RE = /\[\[[^\]]+\]\]/g;
  * It contains every kept page, every ancestor directory of a kept page, and
  * any extra path the caller supplies.
  */
+
+/** Linear scan for wikilinks, avoiding quadratic regex backtracking. */
+function findWikilinks(text: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (true) {
+    const start = text.indexOf("[[", i);
+    if (start === -1) break;
+    const close = text.indexOf("]]", start + 2);
+    if (close === -1) break;
+    out.push(text.slice(start, close + 2));
+    i = close + 2;
+  }
+  return out;
+}
+
 function bundlePathSet(
   pages: readonly BundlePage[],
   extra: readonly string[] | undefined,
@@ -431,11 +474,8 @@ export function lintBundle(
   for (const page of kept) {
     if (isReserved(page.path)) continue;
     const prose = stripCode(page.text);
-    WIKILINK_RE.lastIndex = 0;
-    let match = WIKILINK_RE.exec(prose);
-    while (match !== null) {
-      error("E7", `E7 wikilink \`${match[0]}\` in ${page.path}`);
-      match = WIKILINK_RE.exec(prose);
+    for (const wikilink of findWikilinks(prose)) {
+      error("E7", `E7 wikilink \`${wikilink}\` in ${page.path}`);
     }
   }
 
