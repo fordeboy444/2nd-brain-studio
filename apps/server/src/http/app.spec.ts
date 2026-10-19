@@ -63,6 +63,20 @@ describe("http app", () => {
     expect(body.error).toBe("not_found");
   });
 
+  it("a missing /assets/* file returns 404, not the SPA HTML", async () => {
+    const { app } = await reload();
+    const res = await app.request("/assets/missing.js");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type") ?? "").toContain("application/json");
+    expect((await res.json()).error).toBe("not_found");
+  });
+
+  it("a missing favicon returns 404, not the SPA HTML", async () => {
+    const { app } = await reload();
+    const res = await app.request("/favicon.ico");
+    expect(res.status).toBe(404);
+  });
+
   it("contains no CORS middleware (grep-verifiable here by behaviour)", async () => {
     const src = readFileSync(APP_SRC, "utf8");
     expect(src.toLowerCase()).not.toContain("cors");

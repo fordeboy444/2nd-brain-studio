@@ -60,7 +60,14 @@ if (existsSync(indexHtmlPath)) {
   app.get("/favicon.ico", serveStatic({ root: webDist, path: "favicon.ico" }));
   // SPA fallback: any non-API GET returns index.html.
   app.get("*", (c) => {
-    if (c.req.path.startsWith("/api/")) {
+    // Assets and the favicon are files, not SPA routes. Handing a missing one
+    // index.html with 200 makes the browser report a MIME/parse failure and
+    // caches the wrong body; a 404 is the honest answer.
+    if (
+      c.req.path.startsWith("/api/") ||
+      c.req.path.startsWith("/assets/") ||
+      c.req.path === "/favicon.ico"
+    ) {
       return c.json({ error: "not_found", path: c.req.path }, 404);
     }
     return c.html(getIndex());
