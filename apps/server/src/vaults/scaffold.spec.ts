@@ -3,6 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// `cp` is the one call a rollback test needs to fail on demand; every other
+// filesystem call stays real.
+vi.mock("node:fs/promises", async (importActual) => {
+  const actual = (await importActual()) as typeof import("node:fs/promises");
+  return {
+    ...actual,
+    cp: vi.fn(async (...args: Parameters<typeof actual.cp>) => actual.cp(...args)),
+  };
+});
+
 async function reload() {
   vi.resetModules();
   return (await import("./scaffold.js")) as typeof import("./scaffold.js");
@@ -74,5 +84,50 @@ describe("scaffoldVault", () => {
     expect(idx.size).toBeGreaterThan(0);
     const schema = await stat(join(dir, "SCHEMA.md"));
     expect(schema.size).toBeGreaterThan(0);
+  });
+
+  it("removes a partial scaffold when a copy fails, so a retry is possible", async () => {
+    const { scaffoldVault } = await reload();
+    const fsMod = await import("node:fs/promises");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+    const cpMock = vi.mocked(fsMod.cp);
+    cpMock.mockClear();
+    cpMock.mockImplementationOnce(async (src, dest, opts) =>
+      actual.cp(src, dest, opts),
+    );
+    cpMock.mockImplementationOnce(async () => {
+      throw new Error("disk full");
+    });
+
+    const dir = join(base, "vault-partial");
+    await expect(scaffoldVault(dir)).rejects.toThrow("disk full");
+
+    // The directory this call created is gone, not left half-scaffolded.
+    await expect(stat(dir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("empties a pre-existing directory it was filling after a failure", async () => {
+    const { scaffoldVault } = await reload();
+    const fsMod = await import("node:fs/promises");
+    const actual = await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+    const cpMock = vi.mocked(fsMod.cp);
+    cpMock.mockClear();
+    cpMock.mockImplementationOnce(async (src, dest, opts) =>
+      actual.cp(src, dest, opts),
+    );
+    cpMock.mockImplementationOnce(async () => {
+      throw new Error("disk full");
+    });
+
+    const dir = join(base, "vault-empty-before");
+    await mkdir(dir, { recursive: true });
+    await expect(scaffoldVault(dir)).rejects.toThrow("disk full");
+
+    // The directory the caller owned stays; only this call's output is undone.
+    expect(await readdir(dir)).toEqual([]);
   });
 });

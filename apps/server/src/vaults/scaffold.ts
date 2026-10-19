@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -115,16 +115,35 @@ export async function scaffoldVault(dir: string): Promise<void> {
     }
   }
 
-  await mkdir(dir, { recursive: true });
-  // Copy the four template markdown files into the vault root.
-  const tmpl = TEMPLATE_DIR();
-  for (const file of SCAFFOLD_FILES) {
-    await cp(resolve(tmpl, file), resolve(dir, file)).catch((e) => {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-    });
-  }
-  // Create the directory skeleton.
-  for (const sub of SCAFFOLD_DIRS) {
-    await mkdir(resolve(dir, sub), { recursive: true });
+  try {
+    await mkdir(dir, { recursive: true });
+    // Copy the four template markdown files into the vault root.
+    const tmpl = TEMPLATE_DIR();
+    for (const file of SCAFFOLD_FILES) {
+      await cp(resolve(tmpl, file), resolve(dir, file)).catch((e) => {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      });
+    }
+    // Create the directory skeleton.
+    for (const sub of SCAFFOLD_DIRS) {
+      await mkdir(resolve(dir, sub), { recursive: true });
+    }
+  } catch (err) {
+    // A partial scaffold is neither retryable (`looksLikeScaffold` is false, so
+    // the next create answers `non_empty`) nor in the registry (so delete
+    // cannot target it). Undo this call's work before rethrowing.
+    if (!exists) {
+      await rm(dir, { recursive: true, force: true });
+    } else {
+      // The pre-existing directory was empty, so everything inside it now is
+      // this call's output. Remove that, but leave the directory itself.
+      for (const file of SCAFFOLD_FILES) {
+        await rm(resolve(dir, file), { force: true });
+      }
+      for (const sub of SCAFFOLD_DIRS) {
+        await rm(resolve(dir, sub), { recursive: true, force: true });
+      }
+    }
+    throw err;
   }
 }
