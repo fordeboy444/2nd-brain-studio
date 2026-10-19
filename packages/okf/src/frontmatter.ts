@@ -287,9 +287,11 @@ export function renderFrontmatter(data: OkfFrontmatter): string {
   for (const key of Object.keys(data)) {
     const value = data[key] as FrontmatterValue;
     if (Array.isArray(value)) {
-      // A bare comma would split one item into two when the block is parsed.
+      // A flow indicator anywhere in a bare item is invalid YAML inside `[...]`:
+      // a comma separates items, and brackets/braces end or nest the sequence.
+      // `renderScalar` only protects a *leading* indicator, so quote here.
       const items = value.map((item) =>
-        typeof item === "string" && item.includes(",")
+        typeof item === "string" && /[,\[\]{}]/.test(item)
           ? quoteString(item)
           : renderScalar(item),
       );

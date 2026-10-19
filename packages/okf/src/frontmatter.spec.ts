@@ -202,6 +202,16 @@ describe("renderFrontmatter", () => {
     ).toBe(rendered);
   });
 
+  it("quotes array items containing a flow indicator (WR-05)", () => {
+    const rendered = renderFrontmatter({ tags: ["a]b", "c}d", "e[f"] });
+    expect(rendered).toBe('---\ntags: ["a]b", "c}d", "e[f"]\n---\n');
+    const parsed = parseFrontmatter(rendered);
+    expect(parsed?.data.tags).toEqual(["a]b", "c}d", "e[f"]);
+    expect(
+      renderFrontmatter((parsed as { data: OkfFrontmatter }).data),
+    ).toBe(rendered);
+  });
+
   it("is a fixed point when its own output is parsed and rendered again", () => {
     const first = renderFrontmatter({
       type: "concept",
