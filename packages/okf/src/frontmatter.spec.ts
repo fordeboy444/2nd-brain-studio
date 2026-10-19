@@ -140,6 +140,36 @@ describe("parseFrontmatter", () => {
     expect(parsed?.data.title).toBe("C# notes");
   });
 
+  it("strips a trailing comment after a quoted scalar (WR-03)", () => {
+    const parsed = parseFrontmatter(
+      '---\ntitle: "C# notes" # trailing\n---\n',
+    );
+    expect(parsed?.data.title).toBe("C# notes");
+  });
+
+  it("keeps a whitespace-preceded # inside a quoted scalar (WR-03)", () => {
+    const parsed = parseFrontmatter(
+      '---\ntitle: "value # kept" # trailing\n---\n',
+    );
+    expect(parsed?.data.title).toBe("value # kept");
+  });
+
+  it("strips a trailing comment after an inline array (WR-03)", () => {
+    const parsed = parseFrontmatter("---\ntags: [a, b] # trailing\n---\n");
+    expect(parsed?.data.tags).toEqual(["a", "b"]);
+  });
+
+  it("treats a comment-only value as empty, not as text (WR-03)", () => {
+    const parsed = parseFrontmatter("---\nsource_kind: # web\n---\n");
+    expect(parsed?.data.source_kind).toBe("");
+    expect(normalizeSourceKind(parsed!.data)).toBe("");
+  });
+
+  it("does not treat an apostrophe in a plain scalar as a quote (WR-03)", () => {
+    const parsed = parseFrontmatter("---\ntitle: don't panic # note\n---\n");
+    expect(parsed?.data.title).toBe("don't panic");
+  });
+
   it.each(["__proto__", "constructor", "prototype"])(
     "rejects the prototype-reaching key %s",
     (key) => {

@@ -143,9 +143,43 @@ function splitArrayItems(inner: string): string[] {
   return items.map((item) => item.trim()).filter((item) => item !== "");
 }
 
+/**
+ * Strip a top-level YAML comment from a value before its shape is dispatched.
+ *
+ * A `#` starts a comment only at the start of the value or after whitespace,
+ * and never inside a quoted scalar or a quoted flow-sequence item. A quote is
+ * structural only when it opens the value or appears inside an inline array;
+ * in a plain scalar an apostrophe is literal, so it must not hide a later
+ * comment. Comment-only values therefore become empty rather than text.
+ */
+function stripComment(raw: string): string {
+  const first = raw.trimStart().charAt(0);
+  const structuralQuotes = first === '"' || first === "'" || first === "[";
+  let quote: '"' | "'" | null = null;
+  let escaped = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i] as string;
+    if (quote === '"') {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') quote = null;
+    } else if (quote === "'") {
+      if (ch === "'") quote = null;
+    } else if (ch === "#" && (i === 0 || /\s/.test(raw[i - 1] as string))) {
+      return raw.slice(0, i);
+    } else if (structuralQuotes && (ch === '"' || ch === "'")) {
+      quote = ch;
+    }
+  }
+  return raw;
+}
+
 /** Parse one scalar or inline array from its raw source text. */
 function parseScalar(raw: string): FrontmatterValue {
-  const value = raw.trim();
+  // The comment is removed before the value shape is inspected: a trailing
+  // comment may follow a quoted scalar or an inline array, not just a bare
+  // scalar, and a comment-only value means empty.
+  const value = stripComment(raw).trim();
   if (value.startsWith('"')) {
     if (value.length < 2 || !value.endsWith('"')) throw new FrontmatterError();
     return unquoteDouble(value);
@@ -164,14 +198,11 @@ function parseScalar(raw: string): FrontmatterValue {
     }
     return items as FrontmatterValue;
   }
-  // In a bare scalar, ` #` starts a YAML comment. Quoted values above keep
-  // their `#`; only the unquoted branch strips one.
-  const bare = value.replace(/\s+#.*$/, "").trim();
-  if (bare === "true") return true;
-  if (bare === "false") return false;
-  if (INTEGER_RE.test(bare)) return Number(bare);
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (INTEGER_RE.test(value)) return Number(value);
   // Bare ISO dates and every other bare scalar stay strings.
-  return bare;
+  return value;
 }
 
 /**
@@ -215,8 +246,11 @@ export function parseFrontmatter(
     if (seen.has(key)) throw new FrontmatterError();
     seen.add(key);
 
-    if (BLOCK_SCALAR_RE.test(rawValue)) throw new FrontmatterError();
-    if (rawValue.startsWith("&") || rawValue.startsWith("*")) {
+    // Inspect the value with its trailing comment removed, so `| # note` is
+    // still rejected as a block scalar instead of parsing as the string `|`.
+    const valueText = stripComment(rawValue).trim();
+    if (BLOCK_SCALAR_RE.test(valueText)) throw new FrontmatterError();
+    if (valueText.startsWith("&") || valueText.startsWith("*")) {
       throw new FrontmatterError();
     }
 
