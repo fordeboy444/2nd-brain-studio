@@ -1046,3 +1046,138 @@ describe("Browse, the index.md catalog view (UI-08)", () => {
     expect(host.querySelector('[data-section]')).toBeNull();
   });
 });
+
+describe("Browse, the Lint and Reindex toolbar (API-01, API-02, T-05-13)", () => {
+  /** A lint response with two errors and one warning, matching the server's
+   *  `LintFinding` shape (no `file` field — the modal extracts the path). */
+  const LINT_REPORT = {
+    ok: false,
+    scanned: 14,
+    errors: [
+      { rule: "E1", severity: "error", message: "E1 missing type: concepts/alpha.md" },
+      { rule: "E2", severity: "error", message: "E2 broken link `x.md` in concepts/beta.md" },
+    ],
+    warnings: [{ rule: "W1", severity: "warning", message: "W1 theme not found: concepts/gamma.md" }],
+  };
+
+  /** Open a vault with a file so the toolbar renders. */
+  async function mountWithVault() {
+    useStore.setState({
+      currentVault: VAULT,
+      tabs: [
+        {
+          path: "Alpha.md",
+          vaultId: VAULT.id,
+          generation: 1,
+          baseHash: READ_HASH,
+          serverContent: READ_CONTENT,
+          buffer: READ_CONTENT,
+          loading: false,
+          error: null,
+          saving: false,
+        },
+      ],
+      activeTabPath: "Alpha.md",
+      isReadOnly: false,
+    });
+    const host = await mount();
+    await settle();
+    return host;
+  }
+
+  /** Route the lint and reindex endpoints in the shared fetch stub. */
+  function stubLintAndReindex() {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      calls.push({ url, method, body: typeof init?.body === "string" ? init.body : "" });
+      if (url.includes("/lint")) return json(LINT_REPORT);
+      if (url.includes("/reindex")) return json({ ok: true, updated: ["index.md", "concepts/index.md"] });
+      return route(url, method);
+    }) as unknown as typeof fetch;
+  }
+
+  it("renders Lint and Reindex buttons in the toolbar", async () => {
+    const host = await mountWithVault();
+    expect(findButton(host, "Lint")).toBeTruthy();
+    expect(findButton(host, "Reindex")).toBeTruthy();
+  });
+
+  it("clicking Lint calls the API and opens the modal with the report", async () => {
+    stubLintAndReindex();
+    const host = await mountWithVault();
+
+    await click(findButton(host, "Lint"));
+    await settle();
+
+    // The lint endpoint was hit.
+    const lintCalls = callsTo("/api/vaults/v1/lint");
+    expect(lintCalls.length).toBe(1);
+    expect(lintCalls[0]!.method).toBe("GET");
+
+    // The modal is open and shows the report's summary.
+    const modal = host.querySelector("[data-lint-modal]");
+    expect(modal).toBeTruthy();
+    expect(modal!.textContent).toContain("Failed");
+    expect(modal!.textContent).toContain("2 errors");
+    expect(modal!.textContent).toContain("1 warning");
+  });
+
+  it("clicking a file link in the lint modal opens that file in Browse", async () => {
+    stubLintAndReindex();
+    const host = await mountWithVault();
+
+    await click(findButton(host, "Lint"));
+    await settle();
+
+    const link = host.querySelector<HTMLButtonElement>("[data-lint-file-link]");
+    expect(link).toBeTruthy();
+    const target = link!.getAttribute("data-path");
+    expect(target).toBeTruthy();
+    await click(link!);
+
+    // The click opened the file through the store's openFile — a tab for the
+    // target path now exists.
+    const tabs = useStore.getState().tabs;
+    expect(tabs.some((t) => t.path === target)).toBe(true);
+  });
+
+  it("clicking Reindex calls the API, toasts success, and refreshes the tree", async () => {
+    stubLintAndReindex();
+    const host = await mountWithVault();
+    const before = callsTo("/api/vaults/v1/tree").length;
+
+    await click(findButton(host, "Reindex"));
+    await settle();
+
+    // The reindex endpoint was hit with POST.
+    const reindexCalls = callsTo("/api/vaults/v1/reindex");
+    expect(reindexCalls.length).toBe(1);
+    expect(reindexCalls[0]!.method).toBe("POST");
+
+    // A success toast was emitted.
+    expect(host.textContent).toContain("Reindexed");
+
+    // The tree was refreshed — at least one more root-level read than before.
+    const after = callsTo("/api/vaults/v1/tree").length;
+    expect(after).toBeGreaterThan(before);
+  });
+
+  it("disables Reindex when the instance is read-only (T-05-13)", async () => {
+    useStore.setState({ isReadOnly: true });
+    const host = await mountWithVault();
+
+    const reindexBtn = host.querySelector<HTMLButtonElement>(
+      'button[aria-label="Reindex"]',
+    );
+    expect(reindexBtn).toBeTruthy();
+    expect(reindexBtn!.disabled).toBe(true);
+    // The tooltip explains why.
+    expect(reindexBtn!.getAttribute("title")).toContain("read-only");
+
+    // Lint is still enabled — lint is a read-only operation.
+    const lintBtn = host.querySelector<HTMLButtonElement>('button[aria-label="Lint"]');
+    expect(lintBtn).toBeTruthy();
+    expect(lintBtn!.disabled).toBe(false);
+  });
+});

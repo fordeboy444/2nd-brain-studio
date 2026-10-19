@@ -511,3 +511,50 @@ export interface GraphResult {
 export function getGraph(vaultId: string): Promise<GraphResult> {
   return request<GraphResult>(`/vaults/${encodeURIComponent(vaultId)}/graph`);
 }
+
+/* -------------------------------------------------------------------------
+   Lint and Reindex (Phase 5)
+   ------------------------------------------------------------------------- */
+
+/** One lint finding, mirroring the server's `LintFinding` shape exactly
+ *  (`packages/okf/src/lint.ts`). The `message` embeds the file path (e.g.
+ *  `E2 broken link \`x.md\` in concepts/alpha.md`); the LintModal extracts it. */
+export interface LintFinding {
+  rule: string;
+  severity: "error" | "warning";
+  message: string;
+}
+
+/** The lint route's response: a pass/fail flag plus the findings, split by
+ *  severity, and the count of files scanned. */
+export interface LintReport {
+  ok: boolean;
+  errors: LintFinding[];
+  warnings: LintFinding[];
+  scanned: number;
+}
+
+/** The reindex route's response: the list of vault-relative paths that were
+ *  rewritten. Empty when nothing changed. */
+export interface ReindexResult {
+  ok: boolean;
+  updated: string[];
+}
+
+/** GET /api/vaults/:id/lint — the server reads every markdown file in the vault
+ *  and returns the structured lint report. GET and POST share the same handler
+ *  on the server; GET is used here because the call reads state and writes
+ *  nothing. */
+export function lintVault(vaultId: string): Promise<LintReport> {
+  return request<LintReport>(`/vaults/${encodeURIComponent(vaultId)}/lint`);
+}
+
+/** POST /api/vaults/:id/reindex — rebuild every index.md and log.md from the
+ *  vault's current pages. The server's read-only middleware rejects this with
+ *  403 when the instance is secondary (T-05-13 server-side enforcement); the
+ *  Browse toolbar disables the button client-side too. */
+export function reindexVault(vaultId: string): Promise<ReindexResult> {
+  return request<ReindexResult>(`/vaults/${encodeURIComponent(vaultId)}/reindex`, {
+    method: "POST",
+  });
+}
