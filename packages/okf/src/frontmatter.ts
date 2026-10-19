@@ -329,7 +329,7 @@ const RESERVED_SCALAR_RE = /^(null|~|yes|no|on|off)$/i;
 
 /** Scalars a standard YAML reader changes type for. */
 const YAML_TYPED_RE =
-  /^(?:~|null|true|false|yes|no|on|off|[-+]?(?:0x[0-9a-f]+|0o[0-7]+|\d+(?:\.\d*)?(?:e[-+]?\d+)?)|[-+]?(?:\.inf|\.nan)|\d{4}-\d{2}-\d{2}(?:[Tt ].*)?|\d+(?::\d+)+)$/i;
+  /^(?:~|null|true|false|yes|no|on|off|y|n|[-+]?(?:0x[0-9a-f]+|0o[0-7]+|0b[01]+|\d[\d_]*(?:\.\d*)?(?:e[-+]?\d+)?|\.\d+(?:e[-+]?\d+)?)|[-+]?(?:\.inf|\.nan)|\d{4}-\d{2}-\d{2}(?:[Tt ].*)?|\d+(?::\d+)+)$/i;
 
 /** Quote a string and escape what the parser reads back. */
 function quoteString(value: string): string {

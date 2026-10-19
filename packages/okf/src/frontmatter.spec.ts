@@ -396,8 +396,20 @@ describe("WR-07/WR-08 regression", () => {
     expect(parseFrontmatter(rendered)!.data.tags).toEqual(["don't", "demo"]);
   });
 
-  it("quotes YAML-typed scalars when rendering (WR-08)", () => {
-    for (const value of ["True", "FALSE", "1.5", "0x10", ".inf", "2024-01-01"]) {
+  it("quotes YAML-typed scalars when rendering (WR-08/WR-11)", () => {
+    for (const value of [
+      "True",
+      "FALSE",
+      "1.5",
+      "0x10",
+      ".inf",
+      "2024-01-01",
+      ".5",
+      "1_000",
+      "0b101",
+      "y",
+      "n",
+    ]) {
       const rendered = renderFrontmatter({ title: value });
       expect(rendered).toContain(`title: "${value}"`);
       expect(parseFrontmatter(rendered)!.data.title).toBe(value);
