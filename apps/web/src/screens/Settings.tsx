@@ -218,6 +218,20 @@ export function Settings() {
     return body;
   };
 
+  /**
+   * The server accepts `maxVideos` only as an integer from 1 to 2000, and the
+   * create body omits a blank value. Refuse an unusable value here: the shared
+   * failure copy names the source URL and would mislead for a numeric field.
+   * A web job has no `maxVideos` field and is always valid on this rule.
+   */
+  const maxVideosValue = Number(maxVideos);
+  const maxVideosValid =
+    kind === "web" ||
+    (maxVideos.trim() !== "" &&
+      Number.isInteger(maxVideosValue) &&
+      maxVideosValue >= 1 &&
+      maxVideosValue <= 2000);
+
   const onPreview = () => runPreview({ kind, ...filters() });
 
   const onStart = () => {
@@ -378,9 +392,24 @@ export function Settings() {
                     id="ingest-max-videos"
                     type="number"
                     min={1}
+                    max={2000}
                     value={maxVideos}
+                    aria-invalid={!maxVideosValid}
+                    aria-describedby={
+                      maxVideosValid ? undefined : "ingest-max-videos-error"
+                    }
                     onChange={(e) => setMaxVideos(e.target.value)}
                   />
+                  {!maxVideosValid && (
+                    <p
+                      id="ingest-max-videos-error"
+                      className="muted"
+                      role="alert"
+                      style={{ margin: 0 }}
+                    >
+                      Max videos must be a whole number from 1 to 2000.
+                    </p>
+                  )}
                 </div>
                 <div className="settings-field">
                   <label className="field-label" htmlFor="ingest-date-from">
@@ -435,7 +464,7 @@ export function Settings() {
             <div className="settings-actions">
               <AsyncButton
                 onClick={onPreview}
-                disabled={previewLoading}
+                disabled={previewLoading || !maxVideosValid}
                 spinnerTone="neutral"
               >
                 Preview selection
@@ -502,7 +531,7 @@ export function Settings() {
               <AsyncButton
                 className="primary"
                 onClick={onStart}
-                disabled={vaultId === "" || ingestStarting}
+                disabled={vaultId === "" || ingestStarting || !maxVideosValid}
               >
                 Start ingest
               </AsyncButton>

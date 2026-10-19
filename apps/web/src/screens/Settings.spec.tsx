@@ -503,6 +503,31 @@ it("keeps every value and shows the exact copy when a preview fails", async () =
   expect(host.textContent).not.toContain("Estimated");
 });
 
+it("disables Preview and Start when maxVideos is blank or out of range (WR-17)", async () => {
+  const { host, render } = await mountSettings();
+  expect(buttonByText(host, "Preview selection").disabled).toBe(false);
+  expect(buttonByText(host, "Start ingest").disabled).toBe(false);
+
+  await typeInto(render, host, "ingest-max-videos", "");
+  expect(buttonByText(host, "Preview selection").disabled).toBe(true);
+  expect(buttonByText(host, "Start ingest").disabled).toBe(true);
+  expect(host.textContent).toContain(
+    "Max videos must be a whole number from 1 to 2000.",
+  );
+  expect(field(host, "ingest-max-videos").getAttribute("aria-invalid")).toBe("true");
+
+  await typeInto(render, host, "ingest-max-videos", "2001");
+  expect(buttonByText(host, "Preview selection").disabled).toBe(true);
+  expect(buttonByText(host, "Start ingest").disabled).toBe(true);
+
+  await typeInto(render, host, "ingest-max-videos", "2000");
+  expect(buttonByText(host, "Preview selection").disabled).toBe(false);
+  expect(buttonByText(host, "Start ingest").disabled).toBe(false);
+  expect(host.textContent).not.toContain(
+    "Max videos must be a whole number from 1 to 2000.",
+  );
+});
+
 it("disables Start ingest while a submit is in flight and starts one job", async () => {
   holdStart();
   const { host, render } = await mountSettings();
