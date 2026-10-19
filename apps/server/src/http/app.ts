@@ -5,12 +5,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pino from "pino";
 import { config } from "../config.js";
+import { getLockState } from "../lock.js";
 import { health } from "../routes/health.js";
 import { vaults } from "../routes/vaults.js";
 import { files } from "../routes/file.js";
 import { jobs } from "../routes/jobs.js";
 import { settings } from "../routes/settings.js";
 import { tree } from "../routes/tree.js";
+import { search } from "../routes/search.js";
+import { graph } from "../routes/graph.js";
+import { backlinks } from "../routes/backlinks.js";
+import { frontmatter } from "../routes/frontmatter.js";
+import { lint } from "../routes/lint.js";
+import { reindex } from "../routes/reindex.js";
 
 // The log level is its own setting. It must NOT follow `llmConfigured`: the
 // live deployment has no OLLAMA_API_KEY, so tying the two silenced every
@@ -52,6 +59,32 @@ app.use(
   }),
 );
 
+/**
+ * Read-only gate (OPS-06).
+ * When another instance holds the single-writer lock, this secondary instance
+ * runs in read-only mode: all mutating HTTP methods (POST, PUT, DELETE, PATCH)
+ * on `/api/*` are rejected with 403 Forbidden, except `/api/health`.
+ */
+app.use("/api/*", async (c, next) => {
+  const method = c.req.method;
+  if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+    if (c.req.path !== "/api/health" && c.req.path !== "/api/health/") {
+      const { isReadOnly } = getLockState();
+      if (isReadOnly) {
+        return c.json(
+          {
+            error: "read_only",
+            message:
+              "This instance is read-only — another instance holds the write lock.",
+          },
+          403,
+        );
+      }
+    }
+  }
+  await next();
+});
+
 // API routes.
 app.route("/api/health", health);
 app.route("/api/vaults", vaults);
@@ -62,6 +95,12 @@ app.route("/api/settings", settings);
 // GET /api/vaults/:id/tree lives on its own router mounted at the same prefix;
 // its `:id/tree` path is distinct from the vaults router's `/` and `/:id` routes.
 app.route("/api/vaults", tree);
+app.route("/api/vaults", search);
+app.route("/api/vaults", graph);
+app.route("/api/vaults", backlinks);
+app.route("/api/vaults", frontmatter);
+app.route("/api/vaults", lint);
+app.route("/api/vaults", reindex);
 
 // SPA static assets + SPA fallback. Only mounted when the build exists.
 // `WEB_DIST_DIR` lets a spec point at its own temporary directory, so tests
