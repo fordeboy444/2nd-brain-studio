@@ -85,9 +85,16 @@ describe("probeFirstCandidate", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("throws PreflightFailedError with the reason only when every tier fails", async () => {
+  it("throws PreflightFailedError for a channel-wide block", async () => {
+    const run: YtDlpRun = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ERROR: Sign in to confirm you're not a bot",
+      timedOut: false,
+      isCanceled: false,
+    });
     const cascade = createTranscriptCascade({
-      runYtDlp: tierOneMissing,
+      runYtDlp: run,
       runPython: tierTwoFails,
       supadataKey: null,
     });
@@ -97,7 +104,38 @@ describe("probeFirstCandidate", () => {
     );
 
     expect(error).toBeInstanceOf(PreflightFailedError);
-    expect((error as PreflightFailedError).reason).toBe("fetch_error");
-    expect((error as Error).message).toBe("all transcript tiers failed: fetch_error");
+    expect((error as PreflightFailedError).reason).toBe("blocked");
+    expect((error as Error).message).toBe("all transcript tiers failed: blocked");
+  });
+
+  it("does not fail the job when the first video has no captions", async () => {
+    const cascade = createTranscriptCascade({
+      runYtDlp: tierOneMissing,
+      runPython: tierTwoFails,
+      supadataKey: null,
+    });
+
+    await expect(
+      probeFirstCandidate([CANDIDATE], cascade, ctx()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not fail the job when the first video is private", async () => {
+    const run: YtDlpRun = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ERROR: Private video. Sign in if you've been granted access",
+      timedOut: false,
+      isCanceled: false,
+    });
+    const cascade = createTranscriptCascade({
+      runYtDlp: run,
+      runPython: tierTwoFails,
+      supadataKey: null,
+    });
+
+    await expect(
+      probeFirstCandidate([CANDIDATE], cascade, ctx()),
+    ).resolves.toBeUndefined();
   });
 });

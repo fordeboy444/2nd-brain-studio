@@ -283,11 +283,27 @@ export function onEventAppended(
   };
 }
 
+/**
+ * Run `fn` under the per-job directory lock. Every read-modify-write of
+ * `job.json` goes through here: a cancel and a runner persist can then never
+ * interleave (read A, read B, write B, write A) and silently drop a flag.
+ * The same chain serializes event appends for the directory.
+ */
+export function withJobLock<T>(
+  vaultDir: string,
+  id: string,
+  fn: () => Promise<T> | T,
+): Promise<T> {
+  return serialize(jobDir(vaultDir, id), () => Promise.resolve(fn()));
+}
+
 /** Set the cancel flag atomically. The runner reads it between units. */
 export async function requestCancel(vaultDir: string, id: string): Promise<JobRecord> {
-  const job = await readJob(vaultDir, id);
-  job.cancelRequested = true;
-  job.updatedAt = new Date().toISOString();
-  await writeJob(vaultDir, job);
-  return job;
+  return withJobLock(vaultDir, id, async () => {
+    const job = await readJob(vaultDir, id);
+    job.cancelRequested = true;
+    job.updatedAt = new Date().toISOString();
+    await writeJob(vaultDir, job);
+    return job;
+  });
 }

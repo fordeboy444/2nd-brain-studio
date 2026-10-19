@@ -127,6 +127,40 @@ function failed(reason: SkipReason, detail?: string): TierResult {
   return detail === undefined ? { ok: false, reason } : { ok: false, reason, detail };
 }
 
+/**
+ * A channel verdict outranks a per-video reason, which outranks nothing.
+ * Other reasons tie, so the later real attempt supplies the explanation.
+ */
+const REASON_SPECIFICITY: Partial<Record<SkipReason, number>> = {
+  blocked: 2,
+  timeout: 2,
+};
+
+function mostSpecificReason(
+  attempts: readonly { tier: number; result: TierResult }[],
+): SkipReason {
+  // The key-absent entry is synthetic: no request ran, so it cannot explain
+  // the failure. Use it only when no real tier produced a reason.
+  const real = attempts.filter(
+    (attempt) => !(attempt.result.ok === false && attempt.result.detail === "supadata key absent"),
+  );
+  const pool = real.length > 0 ? real : attempts;
+  let chosen: { tier: number; result: TierResult } | undefined;
+  for (const attempt of pool) {
+    if (attempt.result.ok) continue;
+    if (chosen === undefined || chosen.result.ok) {
+      chosen = attempt;
+      continue;
+    }
+    const rank = REASON_SPECIFICITY[attempt.result.reason] ?? 1;
+    const chosenRank = REASON_SPECIFICITY[chosen.result.reason] ?? 1;
+    if (rank >= chosenRank) chosen = attempt;
+  }
+  return chosen !== undefined && chosen.result.ok === false
+    ? chosen.result.reason
+    : "fetch_error";
+}
+
 /** One line per attempted tier, so a final failure names what was tried. */
 function summary(attempts: readonly { tier: number; result: TierResult }[]): string {
   const parts = attempts.map(({ tier, result }) => {
@@ -282,11 +316,11 @@ export function createTranscriptCascade(
       attempts.push({ tier: 3, result: failed("fetch_error", "supadata key absent") });
     }
 
-    // The last attempted tier's reason is the honest summary: a blocked tier 1
-    // stays `blocked` because tier 2 would classify it the same way, and a
-    // missing key only adds a reason of its own when nothing else ran.
-    const last = attempts[attempts.length - 1] as { result: TierResult };
-    const reason = last.result.ok ? "fetch_error" : last.result.reason;
+    // Report the most specific real failure. Taking the last attempt let the
+    // synthetic "supadata key absent" entry mask a `blocked` tier 1 as
+    // `fetch_error` (CR-03), which also hides a channel-wide block from the
+    // preflight decision.
+    const reason = mostSpecificReason(attempts);
     return failed(reason, summary(attempts));
   }
 

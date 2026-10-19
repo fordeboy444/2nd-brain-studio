@@ -33,7 +33,14 @@ import {
   readCapture,
   writeCapture,
 } from "./capture.js";
-import { appendEvent, jobDir, readJob, requestCancel, writeJob } from "./store.js";
+import {
+  appendEvent,
+  jobDir,
+  readJob,
+  requestCancel,
+  withJobLock,
+  writeJob,
+} from "./store.js";
 import { createS2Stage } from "./stages/s2.js";
 import { createS3Stage } from "./stages/s3.js";
 import { createS4Stage } from "./stages/s4.js";
@@ -325,6 +332,15 @@ function makeCtx(
   };
 }
 
+/** The on-disk cancel flag, or false when the record cannot be read. */
+async function cancelRequestedOnDisk(vaultDir: string, id: string): Promise<boolean> {
+  try {
+    return (await readJob(vaultDir, id)).cancelRequested === true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Persist the record, first merging a cancel flag another process wrote. A
  * cancel that lands while a unit runs is therefore never erased by the unit's
@@ -332,14 +348,19 @@ function makeCtx(
  */
 function makePersist(job: JobRecord, vaultDir: string, deps: StageDeps) {
   return async (): Promise<void> => {
-    try {
-      const disk = await readJob(vaultDir, job.id);
-      if (disk.cancelRequested) job.cancelRequested = true;
-    } catch {
-      // The record may not exist yet on the very first write.
-    }
-    job.updatedAt = iso(deps.now);
-    await writeJob(vaultDir, job);
+    // The merge and the write share the job lock with `requestCancel`, so a
+    // cancel that lands mid-persist is either merged before the write or
+    // applied after it — never overwritten by a stale in-memory copy.
+    await withJobLock(vaultDir, job.id, async () => {
+      try {
+        const disk = await readJob(vaultDir, job.id);
+        if (disk.cancelRequested) job.cancelRequested = true;
+      } catch {
+        // The record may not exist yet on the very first write.
+      }
+      job.updatedAt = iso(deps.now);
+      await writeJob(vaultDir, job);
+    });
   };
 }
 
@@ -405,6 +426,17 @@ export async function runJob(
           cancelled = await createS2Stage(deps)(job, ctx, dir, persist);
         }
       } catch (error) {
+        // Cancellation is authoritative. A stage that saw the abort signal (or
+        // whose in-flight write lost to a cancel on disk) must finish as
+        // `cancelled`, never as `failed`: the user asked to stop, and the
+        // error is only the mechanism the stop used.
+        if (controller.signal.aborted || (await cancelRequestedOnDisk(vaultDir, job.id))) {
+          job.cancelRequested = true;
+          job.status = "cancelled";
+          await persist();
+          await appendEvent(dir, "done", { status: "cancelled" });
+          return job;
+        }
         job.status = "failed";
         job.error = errorCode(error);
         await persist();
@@ -521,6 +553,9 @@ async function runS1(
         ctx,
       );
     } catch (error) {
+      // An aborted preflight is a cancellation, not a channel verdict. Leave
+      // the original abort intact so the stage catch recognises it.
+      if (ctx.signal.aborted) throw error;
       const failure = new Error(`preflight failed: ${messageOf(error)}`);
       (failure as Error & { code?: string }).code = "preflight_failed";
       throw failure;

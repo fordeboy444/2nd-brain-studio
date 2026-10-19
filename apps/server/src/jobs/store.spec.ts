@@ -13,6 +13,7 @@ import {
   readEvents,
   readJob,
   requestCancel,
+  withJobLock,
   writeJob,
 } from "./store.js";
 import type { JobSettings } from "./types.js";
@@ -189,6 +190,45 @@ describe("job records", () => {
     });
     await writeJob(root, job);
     await requestCancel(root, job.id);
+    expect((await readJob(root, job.id)).cancelRequested).toBe(true);
+  });
+});
+
+describe("cancel serialization (CR-04)", () => {
+  it("never loses a cancel behind a concurrent read-modify-write", async () => {
+    const job = createJobRecord({
+      id: "j_20261018_000006",
+      vaultId: "v",
+      kind: "youtube",
+      input: { url: "https://youtube.com/@x" },
+      settings: SETTINGS,
+    });
+    await writeJob(root, job);
+
+    let snapshotTaken: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      snapshotTaken = resolve;
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    // The runner's persist shape: read the record, pause, write it back.
+    const runnerWrite = withJobLock(root, job.id, async () => {
+      const snapshot = await readJob(root, job.id);
+      snapshotTaken();
+      await gate;
+      await writeJob(root, { ...snapshot, updatedAt: "2026-10-18T10:00:01.000Z" });
+    });
+
+    await reached;
+    const cancel = requestCancel(root, job.id);
+    // Let the cancel reach the lock and queue behind the paused writer.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    release();
+    await Promise.all([runnerWrite, cancel]);
+
     expect((await readJob(root, job.id)).cancelRequested).toBe(true);
   });
 });

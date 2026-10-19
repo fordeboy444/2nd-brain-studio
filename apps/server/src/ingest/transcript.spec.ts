@@ -156,6 +156,32 @@ describe("tier 2 (youtube-transcript-api)", () => {
     });
   });
 
+  it("reports the channel block instead of the synthetic key-absent error", async () => {
+    const blocked: YtDlpRun = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ERROR: Sign in to confirm you're not a bot",
+      timedOut: false,
+      isCanceled: false,
+    });
+    const blockedPython: PythonRun = async () => ({
+      exitCode: 1,
+      stdout: "",
+      stderr: "ERROR: Sign in to confirm you're not a bot",
+      timedOut: false,
+    });
+    const cascade = createTranscriptCascade({
+      runYtDlp: blocked,
+      runPython: blockedPython,
+      supadataKey: null,
+    });
+
+    const result = await cascade.fetch(CANDIDATE, ctx());
+
+    expect(result).toMatchObject({ ok: false, reason: "blocked" });
+    expect((result as { detail?: string }).detail).toContain("supadata key absent");
+  });
+
   it("refuses to invoke python for an id that is not 11 characters", async () => {
     const python = pythonReturning("[]");
     const cascade = createTranscriptCascade({

@@ -4,7 +4,9 @@ import { dirname, join } from "node:path";
 import { parseFrontmatter } from "@2nd-brain/okf";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeTextAtomic } from "../http/writeAtomic.js";
+import { probeFirstCandidate } from "../ingest/preflight.js";
 import { previewJob } from "../ingest/preview.js";
+import type { TranscriptCascade } from "../ingest/transcript.js";
 import type { LlmChatOptions, LlmClient, LlmMessage } from "../llm/ollama.js";
 import {
   CaptureMismatchError,
@@ -565,6 +567,52 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(onDisk.status).toBe("failed");
     expect(onDisk.error).toBe("preflight_failed");
     expect(await rawCaptures()).toEqual([]);
+  });
+
+  it("completes when the first candidate has no captions", async () => {
+    // Real preflight: a per-video failure must not be a channel verdict.
+    const cascade: TranscriptCascade = {
+      async probe() {
+        return { ok: false, reason: "no_captions" };
+      },
+      async fetch() {
+        return { ok: false, reason: "no_captions" };
+      },
+    };
+    const second: VideoCandidate = {
+      ...VIDEO_A,
+      youtubeId: "def456",
+      title: "Second Talk",
+      url: "https://www.youtube.com/watch?v=def456",
+    };
+    const deps = makeDeps({
+      llm: workingLlm().client,
+      async enumerate() {
+        return [VIDEO_A, second];
+      },
+      async preflight(candidates, ctx) {
+        await probeFirstCandidate(candidates, cascade, ctx);
+      },
+      async fetchTranscript(candidate) {
+        if (candidate.youtubeId === VIDEO_A.youtubeId) {
+          throw new SkipError("no_captions", "no subtitle file");
+        }
+        return videoCapture(second);
+      },
+    });
+
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("completed");
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.skipped).toHaveLength(1);
+    expect(onDisk.skipped[0]).toMatchObject({
+      slug: "first-talk",
+      stage: "S1",
+      reason: "no_captions",
+    });
   });
 
   it("continues the job when one unit fails, recording the injected reason", async () => {
@@ -1523,6 +1571,55 @@ describe("one-job FIFO", () => {
 });
 
 describe("cancel", () => {
+  it("records a cancel that lands during S0 as cancelled, not failed", async () => {
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const deps = makeDeps({
+      async enumerate() {
+        await requestCancel(root, job.id);
+        throw new DOMException("The operation was aborted.", "AbortError");
+      },
+    });
+
+    await runJob(job, deps);
+
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("cancelled");
+    expect(onDisk.error).toBeNull();
+    const events = await readEvents(join(root, ".okf", "jobs", job.id), 0);
+    expect(events.some((event) => event.type === "error")).toBe(false);
+    expect(events.find((event) => event.type === "done")?.data.status).toBe("cancelled");
+  });
+
+  it("does not record a failure when the queue aborts the active job", async () => {
+    let signalEntered: () => void = () => undefined;
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const deps = makeDeps({
+      async enumerate(_url, _options, signal) {
+        signalEntered();
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("The operation was aborted.", "AbortError")),
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const queue = createJobQueue(deps);
+    const run = queue.enqueue(job);
+    await entered;
+    await queue.cancel(root, job.id);
+    await run;
+
+    expect((await readJob(root, job.id)).status).toBe("cancelled");
+  });
+
   it("stops between units, keeps the first capture and never calls the second adapter", async () => {
     let secondCalled = false;
     let job: JobRecord = makeVideoJob();
