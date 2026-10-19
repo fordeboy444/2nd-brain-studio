@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { config } from "../config.js";
+import { getLockState } from "../lock.js";
 
 /**
  * GET /api/health — synchronous over in-memory config only. Reads no filesystem
@@ -12,6 +13,7 @@ const startedAt = Date.now();
 
 health.get("/", (c) => {
   const ok = config.llmConfigured;
+  const lockState = getLockState();
   const payload = {
     ok,
     status: ok ? ("healthy" as const) : ("degraded" as const),
@@ -19,6 +21,7 @@ health.get("/", (c) => {
     version: config.version,
     uptimeSec: Math.floor((Date.now() - startedAt) / 1000),
     time: new Date().toISOString(),
+    readOnly: lockState.isReadOnly,
   };
   return c.json(payload, 200);
 });

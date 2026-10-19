@@ -390,6 +390,7 @@ export interface HealthPayload {
   version: string;
   uptimeSec: number;
   time: string;
+  readOnly?: boolean;
 }
 
 /** GET /api/health — the boot/status probe. Resolves to the parsed payload. */
@@ -483,4 +484,30 @@ export async function writeFile(
     }
     throw e;
   }
+}
+/* -------------------------------------------------------------------------
+   Graph (Phase 5)
+   ------------------------------------------------------------------------- */
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  type: string;
+  path: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  kind: string;
+}
+
+export interface GraphResult {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** GET /api/vaults/:id/graph */
+export function getGraph(vaultId: string): Promise<GraphResult> {
+  return request<GraphResult>(`/vaults/${encodeURIComponent(vaultId)}/graph`);
 }

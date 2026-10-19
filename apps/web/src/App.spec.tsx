@@ -202,11 +202,11 @@ it("renders the settings and jobs overlays, and the reserved ones as an empty sl
     host.querySelector('.overlay-slot[data-overlay="jobs"] .jobs-screen'),
   ).toBeTruthy();
 
-  // The still-reserved values stay empty, and they never mount the Jobs screen.
+  // `graph` is a real screen now; it renders inside its own overlay value.
   await render(() => useStore.getState().openOverlay("graph"));
   const slot = host.querySelector('.overlay-slot[data-overlay="graph"]');
   expect(slot).toBeTruthy();
-  expect(slot?.textContent?.trim()).toBe("");
+  expect(host.querySelector(".graph-screen")).toBeTruthy();
   expect(host.querySelector(".jobs-screen")).toBeNull();
 
   await render(() => useStore.getState().closeOverlay());

@@ -923,3 +923,71 @@ it("caps the feed at the last 500 units and shows the cap line", async () => {
   expect(host.querySelectorAll(".job-feed-row").length).toBe(500);
   expect(host.textContent).toContain("Showing the last 500 units.");
 });
+
+it("falls back to polling after 45 s without stream events and toasts notification", async () => {
+  vi.useFakeTimers();
+  serverJobs = [makeJob({ id: "j1", status: "running", stage: "S2" })];
+  const { host, render, unmount } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  expect(source.closed).toBe(false);
+  expect(getToasts().length).toBe(0);
+
+  // Advance time past 45 seconds without any stream frames
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(45_000);
+  });
+
+  expect(source.closed).toBe(true);
+  const toasts = getToasts();
+  expect(toasts.some((t) => t.text === "Live progress paused; polling for updates." && t.tone === "neutral")).toBe(true);
+
+  // The server advances job to S3
+  serverJobs = [makeJob({ id: "j1", status: "running", stage: "S3" })];
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  expect(useStore.getState().selectedJob?.stage).toBe("S3");
+
+  // Job completes
+  serverJobs = [makeJob({ id: "j1", status: "completed", stage: "done" })];
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+
+  expect(useStore.getState().selectedJob?.status).toBe("completed");
+  await unmount();
+});
+
+it("does not fall back to polling if stream events keep arriving", async () => {
+  vi.useFakeTimers();
+  serverJobs = [makeJob({ id: "j1", status: "running", stage: "S2" })];
+  const { host, render, unmount } = await mountJobs();
+  await selectRow(host, 0, render);
+  const source = lastSource();
+  await render(() => source.open());
+
+  // Advance 30s
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  // Emit event at 30s
+  await render(() => {
+    source.emit("unit", { slug: "u1", stage: "S2", status: "written" }, 1);
+  });
+
+  // Advance another 30s (total 60s, but only 30s since last event)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000);
+  });
+
+  expect(source.closed).toBe(false);
+  expect(getToasts().filter((t) => t.text === "Live progress paused; polling for updates.").length).toBe(0);
+
+  await unmount();
+});
+

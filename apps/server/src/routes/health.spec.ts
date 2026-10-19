@@ -59,4 +59,59 @@ describe("GET / (health router, mounted at /api/health by app)", () => {
     expect(body).not.toHaveProperty("ollamaApiKey");
     expect(body).not.toHaveProperty("supadataApiKey");
   });
+
+  it("reports readOnly:false by default and readOnly:true when secondary instance", async () => {
+    const { health } = await reload();
+    const res = await health.request("/");
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.readOnly).toBe(false);
+
+    // Simulate secondary instance
+    const { InstanceLockManager, setLockManagerForTesting } = await import("../lock.js");
+    const mockManager = {
+      getLockState: () => ({
+        isReadOnly: true,
+        lockHolder: { pid: 12345, host: "primary", startedAt: 1000, heartbeatAt: 2000 },
+      }),
+    } as unknown as InstanceLockManager;
+    setLockManagerForTesting(mockManager);
+
+    const resLocked = await health.request("/");
+    const bodyLocked = await resLocked.json();
+    expect(bodyLocked.readOnly).toBe(true);
+
+    // Reset default
+    setLockManagerForTesting(new InstanceLockManager());
+  });
+
+  it("blocks mutating API requests with 403 when readOnly is true", async () => {
+    const { InstanceLockManager, setLockManagerForTesting } = await import("../lock.js");
+    const mockManager = {
+      getLockState: () => ({
+        isReadOnly: true,
+        lockHolder: { pid: 12345, host: "primary", startedAt: 1000, heartbeatAt: 2000 },
+      }),
+    } as unknown as InstanceLockManager;
+    setLockManagerForTesting(mockManager);
+
+    const { app } = await import("../http/app.js");
+
+    // POST /api/vaults should be blocked
+    const postRes = await app.request("/api/vaults", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Blocked Vault" }),
+    });
+    expect(postRes.status).toBe(403);
+    const postBody = await postRes.json();
+    expect(postBody.error).toBe("read_only");
+
+    // GET /api/health should still succeed with 200
+    const healthRes = await app.request("/api/health");
+    expect(healthRes.status).toBe(200);
+
+    // Reset default
+    setLockManagerForTesting(new InstanceLockManager());
+  });
 });

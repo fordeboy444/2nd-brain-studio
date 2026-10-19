@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Banner } from "../components/Banner.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { Spinner } from "../components/Spinner.js";
-import { jobEventsUrl, type JobStage, type JobSummary } from "../lib/api.js";
+import { getJob, jobEventsUrl, type JobStage, type JobSummary } from "../lib/api.js";
+import { toast } from "../lib/toast.js";
 import { useAsyncAction } from "../lib/useAsyncAction.js";
-import { liveStagesFor, useStore, type UnitFeedRow } from "../store.js";
+import { liveStagesFor, seedStages, useStore, type UnitFeedRow } from "../store.js";
 
 /**
  * Jobs: a polling list beside one live detail stream.
@@ -176,9 +177,17 @@ export function Jobs() {
 
     const source = new EventSource(jobEventsUrl(selectedJobId));
     const frames: Array<[string, (event: Event) => void]> = [];
+    let watchdogTimer: number | null = null;
+    let pollTimer: number | null = null;
+    let lastActivity = Date.now();
+    let isPolling = false;
+
+    const stallTimeout =
+      (globalThis as unknown as { __SSE_TIMEOUT_MS__?: number }).__SSE_TIMEOUT_MS__ ?? 45_000;
 
     for (const type of ["job", "stage", "unit", "error"] as const) {
       const handler = (event: Event) => {
+        lastActivity = Date.now();
         const frame = parseFrame(event);
         if (frame !== null) applyJobEvent(frame.seq, type, frame.data);
       };
@@ -190,8 +199,17 @@ export function Jobs() {
     // what stops `EventSource` from reconnecting to a stream with no more
     // frames; the store's own state is set by `applyJobEvent`.
     const onDone = (event: Event) => {
+      lastActivity = Date.now();
       const frame = parseFrame(event);
       if (frame !== null) applyJobEvent(frame.seq, "done", frame.data);
+      if (watchdogTimer !== null) {
+        window.clearInterval(watchdogTimer);
+        watchdogTimer = null;
+      }
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
       source.close();
       useStore.setState({ sseState: "idle" });
     };
@@ -215,10 +233,67 @@ export function Jobs() {
       useStore.setState({ sseState: "reconnecting" });
     };
 
+    const startPollingFallback = () => {
+      if (isPolling) return;
+      isPolling = true;
+      if (watchdogTimer !== null) {
+        window.clearInterval(watchdogTimer);
+        watchdogTimer = null;
+      }
+      source.close();
+      useStore.setState({ sseState: "idle" });
+      toast("Live progress paused; polling for updates.", "neutral");
+
+      const poll = async () => {
+        try {
+          const job = await getJob(selectedJobId);
+          const s = useStore.getState();
+          if (s.selectedJobId !== selectedJobId) return;
+          const changed =
+            s.selectedJob === null ||
+            s.selectedJob.status !== job.status ||
+            s.selectedJob.stage !== job.stage;
+          const seeded = changed ? seedStages(job) : null;
+          useStore.setState({
+            selectedJob: job,
+            jobs: s.jobs.map((row) => (row.id === job.id ? { ...row, ...job } : row)),
+            ...(seeded ?? {}),
+          });
+          if (isTerminal(job.status)) {
+            if (pollTimer !== null) {
+              window.clearInterval(pollTimer);
+              pollTimer = null;
+            }
+          }
+        } catch {
+          // Keep polling on next interval
+        }
+      };
+
+      void poll();
+      pollTimer = window.setInterval(() => {
+        void poll();
+      }, 2000);
+    };
+
+    watchdogTimer = window.setInterval(() => {
+      if (Date.now() - lastActivity >= stallTimeout) {
+        startPollingFallback();
+      }
+    }, 1000);
+
     return () => {
       for (const [type, handler] of frames) source.removeEventListener(type, handler);
       source.removeEventListener("done", onDone);
       source.close();
+      if (watchdogTimer !== null) {
+        window.clearInterval(watchdogTimer);
+        watchdogTimer = null;
+      }
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
       if (resumeTimer.current !== null) {
         window.clearTimeout(resumeTimer.current);
         resumeTimer.current = null;
