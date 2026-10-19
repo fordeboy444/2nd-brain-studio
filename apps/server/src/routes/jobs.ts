@@ -14,6 +14,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Hono } from "hono";
+import pino from "pino";
 import { z } from "zod";
 import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
@@ -45,6 +46,21 @@ import { readSettings } from "../settings/store.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 
 export const jobs = new Hono();
+
+const log = pino({ name: "jobs-route" });
+
+/**
+ * Enqueue without awaiting: the response means "accepted", not "finished".
+ * The runner records its own failure on the job, but a rejection before that
+ * point must not be silent.
+ */
+function enqueueJob(record: JobRecord): void {
+  void getJobQueue()
+    .enqueue(record)
+    .catch((error: unknown) => {
+      log.error({ jobId: record.id, err: error }, "enqueue_failed");
+    });
+}
 
 /**
  * Stream intervals. Production never writes this object; a spec sets short
@@ -346,9 +362,7 @@ jobs.post("/", async (c) => {
     });
 
     await writeJob(vaultDir, record);
-    void getJobQueue()
-      .enqueue(record)
-      .catch(() => undefined);
+    enqueueJob(record);
 
     return c.json({ id: record.id, status: "queued" }, 202);
   }
@@ -416,11 +430,7 @@ jobs.post("/", async (c) => {
   // Persist first: a queued job that exists on disk survives a crash, and boot
   // resume re-enqueues it.
   await writeJob(vaultDir, record);
-  // Not awaited: the response means "accepted", not "finished". A rejection is
-  // already recorded on the job by the runner.
-  void getJobQueue()
-    .enqueue(record)
-    .catch(() => undefined);
+  enqueueJob(record);
 
   return c.json({ id: record.id, status: "queued" }, 202);
 });
@@ -585,14 +595,13 @@ jobs.post("/:id/retry", async (c) => {
       );
     }
 
-    // Persist first, exactly like create: boot resume can recover the reset job.
-    await writeJob(found.vaultDir, found.job);
-    // Start a fresh event log, so a client that reconnects at seq 0 does not
-    // replay the prior run's `done` frame and pin itself terminal (CR-01).
+    // Start a fresh event log before writing the `queued` record: if the reset
+    // throws, the on-disk record is still terminal and can be retried, instead
+    // of a `queued` record with no runner and a stale event log.
     await resetJobEvents(jobDir(found.vaultDir, id));
-    void getJobQueue()
-      .enqueue(found.job)
-      .catch(() => undefined);
+    // Persist next, exactly like create: boot resume can recover the reset job.
+    await writeJob(found.vaultDir, found.job);
+    enqueueJob(found.job);
 
     return c.json({ id, status: "queued" }, 202);
   } finally {

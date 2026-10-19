@@ -1570,6 +1570,45 @@ describe("one-job FIFO", () => {
   });
 });
 
+describe("setup failure", () => {
+  it("returns a failed record when vaultDirFor throws before the stage try", async () => {
+    const job = makeVideoJob();
+    await writeJob(root, job);
+    const deps = makeDeps({
+      vaultDirFor() {
+        throw new Error("vault is not registered");
+      },
+    });
+
+    const finished = await runJob(job, deps);
+
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toBe("stage_failed");
+  });
+
+  it("persists failed and a done event when a malformed record throws in makeCtx", async () => {
+    const job = makeVideoJob();
+    // A parseable but malformed record: `filters` is absent, so `makeCtx`
+    // cannot read the language. Setup must fail closed, not reject silently.
+    // Assign a new object; the shared SETTINGS fixture must stay intact.
+    job.settings = {
+      ...job.settings,
+      filters: undefined as unknown as JobSettings["filters"],
+    };
+    await writeJob(root, job);
+
+    const finished = await runJob(job, makeDeps());
+
+    expect(finished.status).toBe("failed");
+    const onDisk = await readJob(root, job.id);
+    expect(onDisk.status).toBe("failed");
+    expect(onDisk.error).toBe("stage_failed");
+    const events = await readEvents(join(root, ".okf", "jobs", job.id), 0);
+    expect(events.find((event) => event.type === "error")?.data.code).toBe("stage_failed");
+    expect(events.find((event) => event.type === "done")?.data.status).toBe("failed");
+  });
+});
+
 describe("cancel", () => {
   it("records a cancel that lands during S0 as cancelled, not failed", async () => {
     const job = makeVideoJob();

@@ -371,15 +371,23 @@ export async function runJob(
 ): Promise<JobRecord> {
   if (TERMINAL.has(job.status)) return job;
 
-  const vaultDir = deps.vaultDirFor(job.vaultId);
-  const dir = jobDir(vaultDir, job.id);
-  const persist = makePersist(job, vaultDir, deps);
   const controller = new AbortController();
   activeControllers.set(job.id, controller);
-  const ctx = makeCtx(job, vaultDir, controller.signal, deps);
-  const table = stagesFor(job);
+
+  // Setup runs inside a `try`: an unregistered vault, a malformed record or an
+  // unknown job kind must leave a terminal `failed` record, never a `queued`
+  // record with no runner and no error.
+  let vaultDir: string | undefined;
+  let dir: string | undefined;
+  let persist: (() => Promise<void>) | undefined;
 
   try {
+    vaultDir = deps.vaultDirFor(job.vaultId);
+    dir = jobDir(vaultDir, job.id);
+    persist = makePersist(job, vaultDir, deps);
+    const ctx = makeCtx(job, vaultDir, controller.signal, deps);
+    const table = stagesFor(job);
+
     job.status = "running";
 
     // Persist first: `makePersist` merges the on-disk `cancelRequested`, which
@@ -471,6 +479,26 @@ export async function runJob(
     job.status = "completed";
     await persist();
     await appendEvent(dir, "done", { status: "completed" });
+    return job;
+  } catch (error) {
+    // Setup or first-persist failure. Record the failure when a job directory
+    // exists; a failing `vaultDirFor` leaves nowhere to write, so the caller's
+    // enqueue rejection log is the only evidence.
+    job.status = "failed";
+    job.error = errorCode(error);
+    if (persist !== undefined && dir !== undefined) {
+      try {
+        await persist();
+        await appendEvent(dir, "error", {
+          stage: job.stage ?? "S0",
+          code: job.error,
+          message: messageOf(error),
+        });
+        await appendEvent(dir, "done", { status: "failed" });
+      } catch {
+        // The record cannot be written; keep the in-memory terminal status.
+      }
+    }
     return job;
   } finally {
     activeControllers.delete(job.id);
