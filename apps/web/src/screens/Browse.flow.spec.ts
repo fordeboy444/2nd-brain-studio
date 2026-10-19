@@ -534,6 +534,7 @@ describe("Browse, the 409 conflict (D-07)", () => {
     await mountAndConflict(host);
 
     expect(useStore.getState().conflict).toEqual({
+      vaultId: "v1",
       path: "Alpha.md",
       currentContent: DISK_CONTENT,
       currentHash: DISK_HASH,
