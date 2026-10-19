@@ -207,6 +207,36 @@ it("reseeds the stepper when a poll ends the selected job while the stream is do
   expect(useStore.getState().stagesDone).toEqual(["S0", "S1", "S2", "S3", "S4", "S5"]);
 });
 
+it("reseeds the stepper when a poll advances the stage with the status unchanged", async () => {
+  const atS1 = makeJob({
+    status: "running",
+    stage: "S1",
+    updatedAt: "2026-10-18T12:00:00Z",
+  });
+  const atS2 = makeJob({
+    status: "running",
+    stage: "S2",
+    updatedAt: "2026-10-18T12:05:00Z",
+  });
+  useStore.setState({
+    selectedJobId: "j1",
+    selectedJob: atS1,
+    jobs: [atS1],
+    sseState: "idle",
+    stagesDone: ["S0"],
+    activeStage: "S1",
+  });
+  globalThis.fetch = vi.fn(async () =>
+    json({ jobs: [atS2] }),
+  ) as unknown as typeof fetch;
+
+  await useStore.getState().loadJobs();
+
+  expect(useStore.getState().selectedJob?.stage).toBe("S2");
+  expect(useStore.getState().activeStage).toBe("S2");
+  expect(useStore.getState().stagesDone).toEqual(["S0", "S1"]);
+});
+
 it("does not let a slow poll reopen a job the stream already finished", async () => {
   const completed = makeJob({ status: "completed", stage: "done" });
   const stale = makeJob({ status: "running", stage: "S1" });

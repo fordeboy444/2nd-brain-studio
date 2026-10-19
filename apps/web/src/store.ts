@@ -994,8 +994,13 @@ export const useStore = create<AppState>((set, get) => {
           // selected job to a terminal state must reseed it too. Without this,
           // a job that ends while the stream is down shows "Completed" beside a
           // stage that is still marked active.
-          const statusChanged = selected.status !== selectedJob.status;
-          const seeded = statusChanged ? seedStages(selectedJob) : null;
+          // Either field can advance the stepper. While the stream is closed,
+          // the poll is the only source that reports `stage` moving between
+          // statuses, so reseed when the stage changed too.
+          const changed =
+            selected.status !== selectedJob.status ||
+            selected.stage !== selectedJob.stage;
+          const seeded = changed ? seedStages(selectedJob) : null;
           // The list and the detail are one job by id: a row kept from the
           // stream must not disagree with the detail that won above.
           const nextJobs =
