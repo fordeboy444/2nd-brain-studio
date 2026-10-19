@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { parseFrontmatter, slugify } from "@2nd-brain/okf";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeCapture } from "../jobs/capture.js";
@@ -9,8 +11,10 @@ import type { UnitContext } from "../jobs/runner.js";
 import { createWebFetcher } from "../jobs/stages/web.js";
 import {
   countWords,
+  createPinnedLookup,
   extractReadable,
   numberParagraphs,
+  pinnedFetch,
   WebContentError,
   webSlug,
 } from "./web.js";
@@ -247,6 +251,65 @@ describe("createWebFetcher (S1w)", () => {
     });
     expect(second.status).toBe("skipped");
     expect(await readFile(join(root, "raw", `${capture.slug}.md`), "utf8")).toBe(text);
+  });
+
+  it("pins each hop to the addresses the DNS guard validated", async () => {
+    const lookup: LookupFn = async (hostname) => [
+      { address: hostname === "final.example" ? "93.184.216.35" : "93.184.216.34", family: 4 },
+    ];
+    const calls: Array<{ url: string; addresses: readonly string[] | undefined }> = [];
+    const fetchImpl = vi.fn(async (input: URL | string, init?: { pinnedAddresses?: readonly string[] }) => {
+      calls.push({ url: String(input), addresses: init?.pinnedAddresses });
+      if (String(input) === REQUESTED_URL) {
+        return new Response(null, { status: 302, headers: { location: FINAL_URL } });
+      }
+      return new Response(articleHtml(30, "Pinned Page"), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    });
+
+    const fetcher = createWebFetcher({ fetch: fetchImpl as never, lookup });
+    await fetcher({ url: REQUESTED_URL }, ctxIn(root));
+
+    expect(calls).toEqual([
+      { url: REQUESTED_URL, addresses: ["93.184.216.34"] },
+      { url: FINAL_URL, addresses: ["93.184.216.35"] },
+    ]);
+  });
+
+  it("builds a lookup that answers only with the guarded addresses", () => {
+    const lookup = createPinnedLookup(["93.184.216.34"]);
+    const calls: unknown[][] = [];
+    lookup("rebind.example", { all: true }, (...args) => calls.push(args));
+
+    expect(calls).toEqual([[null, [{ address: "93.184.216.34", family: 4 }]]]);
+  });
+
+  it("dials the pinned address without resolving the hostname again", async () => {
+    const server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(`pinned:${req.headers.host}`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      // `.invalid` never resolves; the only way this connects is the pin.
+      const response = await pinnedFetch(
+        new URL(`http://unresolvable.invalid:${port}/page`),
+        { pinnedAddresses: ["127.0.0.1"] },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(`pinned:unresolvable.invalid:${port}`);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("refuses to connect with no validated address", async () => {
+    await expect(
+      pinnedFetch(new URL("https://example.com/"), { pinnedAddresses: [] }),
+    ).rejects.toMatchObject({ reason: "private_address" });
   });
 
   it("produces the same slug on a resumed run", async () => {

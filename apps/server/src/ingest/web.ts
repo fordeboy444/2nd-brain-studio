@@ -8,6 +8,10 @@
  * the runner, which is also what makes it immutable.
  */
 import { createHash } from "node:crypto";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP } from "node:net";
+import { Readable } from "node:stream";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import TurndownService from "turndown";
@@ -59,10 +63,139 @@ export interface WebFetchContext {
   signal: AbortSignal;
 }
 
+/**
+ * A fetch init that also carries the exact addresses the SSRF guard validated.
+ * The guard resolves a hostname, then the connection is pinned to that result:
+ * the OS resolver never runs again, so a DNS rebind between the check and the
+ * connect cannot swap in a private address.
+ */
+export interface WebFetchInit extends RequestInit {
+  pinnedAddresses?: readonly string[];
+}
+
+export type WebFetch = (input: URL | string, init?: WebFetchInit) => Promise<Response>;
+
 export interface WebFetchDeps {
-  fetch?: typeof globalThis.fetch;
+  fetch?: WebFetch;
   lookup?: LookupFn;
 }
+
+/** Strip brackets from an IPv6 literal; DNS answers never carry them. */
+function bareAddress(address: string): string {
+  return address.replace(/^\[/, "").replace(/\]$/, "");
+}
+
+/** `::ffff:127.0.0.1` and `127.0.0.1` name the same peer on a dual-stack socket. */
+function comparableAddress(address: string): string {
+  const bare = bareAddress(address).toLowerCase();
+  return bare.startsWith("::ffff:") ? bare.slice(7) : bare;
+}
+
+/**
+ * Build a `net`-style lookup that ignores the hostname and answers only from
+ * the addresses the guard validated. Node calls it at connect time, so the
+ * value it returns is the address actually dialed.
+ */
+export function createPinnedLookup(
+  addresses: readonly string[],
+): (hostname: string, options: { all?: boolean; family?: number | string }, callback: (...args: unknown[]) => void) => void {
+  const pins = addresses.map((address) => {
+    const bare = bareAddress(address);
+    return { address: bare, family: isIP(bare) };
+  });
+
+  return (_hostname, options, callback) => {
+    const requestedFamily =
+      typeof options.family === "number" ? options.family : Number(options.family ?? 0);
+    const candidates =
+      requestedFamily === 4 || requestedFamily === 6
+        ? pins.filter((pin) => pin.family === requestedFamily)
+        : pins;
+    if (candidates.length === 0) {
+      callback(Object.assign(new Error("No validated address for this host."), { code: "ENOTFOUND" }));
+      return;
+    }
+    if (options.all === true) {
+      callback(null, candidates);
+      return;
+    }
+    const first = candidates[0] as { address: string; family: number };
+    callback(null, first.address, first.family);
+  };
+}
+
+function responseHeaders(res: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(res.headers)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const one of value) headers.append(name, one);
+    } else {
+      headers.set(name, value);
+    }
+  }
+  return headers;
+}
+
+/**
+ * The production fetch. It speaks HTTP directly so the validated addresses are
+ * the only ones the socket may use, and it re-checks the connected peer after
+ * the response headers arrive as a second line of defence.
+ */
+export const pinnedFetch: WebFetch = (input, init = {}) => {
+  const url = input instanceof URL ? input : new URL(input);
+  const addresses = (init.pinnedAddresses ?? []).map(bareAddress);
+  if (addresses.length === 0) {
+    return Promise.reject(
+      new SsrfError("private_address", "No validated address is available for this host."),
+    );
+  }
+
+  return new Promise<Response>((resolve, reject) => {
+    let settled = false;
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    const requestFn = url.protocol === "https:" ? httpsRequest : httpRequest;
+    const request = requestFn(
+      url,
+      {
+        method: init.method ?? "GET",
+        headers: Object.fromEntries(new Headers(init.headers).entries()),
+        lookup: createPinnedLookup(addresses) as never,
+        signal: init.signal ?? undefined,
+        servername: url.hostname,
+      },
+      (res) => {
+        const peer = comparableAddress(res.socket.remoteAddress ?? "");
+        if (!addresses.some((address) => comparableAddress(address) === peer)) {
+          res.destroy();
+          fail(new SsrfError("private_address", "The connection did not use a validated address."));
+          return;
+        }
+
+        const status = res.statusCode ?? 502;
+        const headers = responseHeaders(res);
+        // Response forbids a body for these statuses.
+        if (status === 204 || status === 205 || status === 304) {
+          res.resume();
+          settled = true;
+          resolve(new Response(null, { status, headers }));
+          return;
+        }
+
+        const body = Readable.toWeb(res) as ReadableStream<Uint8Array>;
+        settled = true;
+        resolve(new Response(body, { status, statusText: res.statusMessage ?? "", headers }));
+      },
+    );
+    request.on("error", fail);
+    request.end();
+  });
+};
 
 export interface FetchedPage {
   /** The URL that actually served the page, after every followed redirect. */
@@ -160,11 +293,14 @@ export async function fetchWebPage(
   ctx: WebFetchContext,
   deps: WebFetchDeps = {},
 ): Promise<FetchedPage> {
-  const fetchImpl = deps.fetch ?? globalThis.fetch;
+  const fetchImpl = deps.fetch ?? pinnedFetch;
   const first = parseWebUrl(typeof input === "string" ? input : input.toString());
-  await assertPublicHttpUrl(first, { lookup: deps.lookup });
+  const firstValidated = await assertPublicHttpUrl(first, { lookup: deps.lookup });
 
   let current = first;
+  // The guard's answer is the connection's allow-list; it travels with the
+  // request so the resolver cannot answer differently a second time.
+  let currentAddresses = firstValidated.addresses;
   for (let redirects = 0; ; redirects += 1) {
     const hop = hopSignal(ctx.signal);
     try {
@@ -174,6 +310,7 @@ export async function fetchWebPage(
           redirect: "manual",
           signal: hop.signal,
           headers: { "user-agent": USER_AGENT, accept: "text/html,application/xhtml+xml" },
+          pinnedAddresses: currentAddresses,
         });
       } catch (error) {
         if (isAbortError(error) || hop.signal.aborted) {
@@ -200,8 +337,10 @@ export async function fetchWebPage(
         }
         // `parseWebUrl` rejects a non-http(s) target with reason `scheme`.
         current = parseWebUrl(target.toString());
-        // Every hop re-runs the full address check, not just the syntax check.
-        await assertPublicHttpUrl(current, { lookup: deps.lookup });
+        // Every hop re-runs the full address check, not just the syntax check,
+        // and the new answer replaces the pin for the next connection.
+        const validated = await assertPublicHttpUrl(current, { lookup: deps.lookup });
+        currentAddresses = validated.addresses;
         continue;
       }
 
