@@ -167,17 +167,32 @@ function hasProvenance(data: OkfFrontmatter): boolean {
 function sourceBullets(text: string): string[] {
   const bullets: string[] = [];
   let inSources = false;
-  let fence: string | null = null;
+  let fence: { char: string; length: number } | null = null;
   let baseIndent: number | null = null;
   for (const rawLine of text.split("\n")) {
     // A CRLF page leaves a trailing carriage return on every line.
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
 
     // Track fenced code blocks (backticks or tildes) and skip their contents.
-    const fenceMatch = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
+    // A backtick info string that itself contains a backtick is an inline code
+    // span, not an opener. A closer must use the same marker character, carry
+    // at least as many markers as the opener, and hold only whitespace after
+    // them. Without these checks one malformed line silently disables E6/E8.
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fenceMatch !== null) {
-      if (fence === null) fence = fenceMatch[1]![0] as string;
-      else if (fence === (fenceMatch[1]![0] as string)) fence = null;
+      const marker = fenceMatch[1] as string;
+      const info = fenceMatch[2] ?? "";
+      if (fence === null) {
+        if (!(marker[0] === "`" && info.includes("`"))) {
+          fence = { char: marker[0] as string, length: marker.length };
+        }
+      } else if (
+        marker[0] === fence.char &&
+        marker.length >= fence.length &&
+        /^\s*$/.test(info)
+      ) {
+        fence = null;
+      }
       continue;
     }
     if (fence !== null) continue;

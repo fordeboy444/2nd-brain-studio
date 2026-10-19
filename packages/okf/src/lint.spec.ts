@@ -1655,3 +1655,39 @@ describe("WR-04/WR-05/WR-06 regression", () => {
     expect(msgs).not.toContain("E8 citation has no source link: concepts/x.md");
   });
 });
+
+describe("WR-12 fence validation", () => {
+  const outOfWindow =
+    '- [Video A](../sources/video-a.md) - "[0:10:00] alpha beta gamma delta"';
+  const insideFence = "- a bullet without any link";
+
+  it("does not open a fence on a backtick info string with a backtick", () => {
+    const pages = e8Set({
+      bullet: `\`\`\`code\`\`\` is inline\n${outOfWindow}`,
+      rawText: E8_TWO_SEGMENTS,
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("does not close a four-backtick fence on a three-backtick line", () => {
+    const pages = e8Set({
+      bullet:
+        "````\n```\n" + `${insideFence}\n` + "````\n" + outOfWindow,
+      rawText: E8_TWO_SEGMENTS,
+    });
+    expect(findingMessages(pages)).toEqual([
+      "E8 quote not found near cited timestamp: concepts/subject.md",
+    ]);
+  });
+
+  it("does not close a fence on a line with trailing non-space text", () => {
+    const pages = e8Set({
+      bullet:
+        "```\n" + `${insideFence}\n` + "``` not-a-closer\n" + outOfWindow,
+      rawText: E8_TWO_SEGMENTS,
+    });
+    expect(findingMessages(pages)).toEqual([]);
+  });
+});
