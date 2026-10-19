@@ -806,6 +806,23 @@ describe("source section grammar (WR-01)", () => {
   });
 });
 
+describe("thematic breaks in the Sources section (WR-02)", () => {
+  it.each(["* * *", "- - -"])(
+    "does not treat %s as a citation bullet",
+    (breakLine) => {
+      const pages = e8Set({
+        bullet:
+          '- [Video A](../sources/video-a.md) - "[0:00:00] alpha beta gamma delta"',
+      });
+      const subject = pages.find((page) => page.path === "concepts/subject.md");
+      expect(subject).toBeDefined();
+      // No `## ` heading follows, so the break is still inside the section.
+      subject!.text += `\n${breakLine}\n`;
+      expect(findingMessages(pages)).toEqual([]);
+    },
+  );
+});
+
 describe("E7 wikilink boundaries", () => {
   it("finds one wikilink and embeds the matched text", () => {
     const pages = conceptPair(

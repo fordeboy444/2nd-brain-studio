@@ -179,6 +179,9 @@ function sourceBullets(text: string): string[] {
     }
     if (!inSources) continue;
     if (line.startsWith("## ")) break;
+    // A thematic break (`* * *`, `- - -`, `___`) is not a citation bullet.
+    // Without this, the widened bullet match below reports a false E8.
+    if (/^\s*([-*_])(?:\s*\1){2,}\s*$/.test(line)) continue;
     if (/^\s*[-*]\s+/.test(line)) bullets.push(line);
   }
   return bullets;
