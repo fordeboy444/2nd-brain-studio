@@ -32,11 +32,24 @@ export function stripCode(text: string): string {
  */
 export function extractLinks(text: string): string[] {
   const links: string[] = [];
-  const pattern = new RegExp(LINK_RE.source, "g");
-  let match = pattern.exec(text);
-  while (match !== null) {
-    links.push(match[1] as string);
-    match = pattern.exec(text);
+  let i = 0;
+  while (true) {
+    const openBracket = text.indexOf("[", i);
+    if (openBracket === -1) break;
+    const closeBracket = text.indexOf("]", openBracket + 1);
+    if (closeBracket === -1) break;
+    if (text[closeBracket + 1] !== "(") {
+      i = openBracket + 1;
+      continue;
+    }
+    const openParen = closeBracket + 1;
+    const closeParen = text.indexOf(")", openParen + 1);
+    if (closeParen === -1) {
+      i = openBracket + 1;
+      continue;
+    }
+    links.push(text.slice(openParen + 1, closeParen));
+    i = closeParen + 1;
   }
   return links;
 }

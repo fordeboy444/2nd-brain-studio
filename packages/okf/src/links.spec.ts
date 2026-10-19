@@ -146,3 +146,14 @@ describe("adversarial input (T-02-04)", () => {
     expect(extractLinks(body)).toEqual(["x.md"]);
   });
 });
+
+
+describe("WR-09 regression", () => {
+  it("extractLinks handles many opening brackets without quadratic blowup", () => {
+    const text = "[".repeat(20000);
+    const started = Date.now();
+    const links = extractLinks(text);
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(links).toEqual([]);
+  });
+});
