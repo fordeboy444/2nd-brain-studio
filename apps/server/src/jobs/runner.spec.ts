@@ -22,7 +22,7 @@ import {
   slugForCandidate,
   type StageDeps,
 } from "./runner.js";
-import { readEvents, readJob, requestCancel, writeJob } from "./store.js";
+import { jobDir, readEvents, readJob, requestCancel, writeJob } from "./store.js";
 import {
   createJobRecord,
   newJobId,
@@ -1600,11 +1600,15 @@ describe("setup failure", () => {
     const finished = await runJob(job, makeDeps());
 
     expect(finished.status).toBe("failed");
-    const onDisk = await readJob(root, job.id);
+    expect(finished.error).toBe("job_invalid");
+    // `readJob` validates by design; read the raw file to see the terminal record.
+    const onDisk = JSON.parse(
+      await readFile(join(jobDir(root, job.id), "job.json"), "utf8"),
+    ) as JobRecord;
     expect(onDisk.status).toBe("failed");
-    expect(onDisk.error).toBe("stage_failed");
+    expect(onDisk.error).toBe("job_invalid");
     const events = await readEvents(join(root, ".okf", "jobs", job.id), 0);
-    expect(events.find((event) => event.type === "error")?.data.code).toBe("stage_failed");
+    expect(events.find((event) => event.type === "error")?.data.code).toBe("job_invalid");
     expect(events.find((event) => event.type === "done")?.data.status).toBe("failed");
   });
 });

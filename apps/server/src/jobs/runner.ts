@@ -35,6 +35,7 @@ import {
 } from "./capture.js";
 import {
   appendEvent,
+  JobRecordSchema,
   jobDir,
   readJob,
   requestCancel,
@@ -385,6 +386,24 @@ export async function runJob(
     vaultDir = deps.vaultDirFor(job.vaultId);
     dir = jobDir(vaultDir, job.id);
     persist = makePersist(job, vaultDir, deps);
+
+    // A record read by the loose boot scan can be parseable but malformed.
+    // Validate before `makeCtx` dereferences it, and finish it as `job_invalid`
+    // so it cannot stay queued forever.
+    const valid = JobRecordSchema.safeParse(job);
+    if (!valid.success) {
+      job.status = "failed";
+      job.error = "job_invalid";
+      await persist();
+      await appendEvent(dir, "error", {
+        stage: job.stage ?? "S0",
+        code: "job_invalid",
+        message: "job.json is not a valid job record",
+      });
+      await appendEvent(dir, "done", { status: "failed" });
+      return job;
+    }
+
     const ctx = makeCtx(job, vaultDir, controller.signal, deps);
     const table = stagesFor(job);
 

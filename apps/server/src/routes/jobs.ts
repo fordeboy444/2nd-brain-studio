@@ -31,6 +31,7 @@ import { parseLastEventId, streamJobEvents } from "../jobs/events.js";
 import {
   createJobRecord,
   isJobId,
+  JobRecordSchema,
   jobDir,
   listJobs,
   newJobId,
@@ -448,7 +449,36 @@ jobs.get("/", async (c) => {
 
   const all: JobRecord[] = [];
   for (const vault of vaults) {
-    all.push(...(await listJobs(vaultDirPath(vault.id))));
+    const records = await listJobs(
+      vaultDirPath(vault.id),
+      (id, error) => {
+        log.warn(
+          {
+            vaultId: vault.id,
+            jobId: id,
+            reason: error instanceof Error ? error.message : String(error),
+          },
+          "job_record_unreadable",
+        );
+      },
+    );
+    for (const record of records) {
+      // The scan reads loosely so boot can report a malformed record; the API
+      // never serves one, because the UI dereferences `progress` and `skipped`.
+      const valid = JobRecordSchema.safeParse(record);
+      if (!valid.success) {
+        log.warn(
+          {
+            vaultId: vault.id,
+            jobId: (record as { id?: unknown }).id,
+            reason: "job.json is not a valid job record",
+          },
+          "job_record_invalid",
+        );
+        continue;
+      }
+      all.push(valid.data as JobRecord);
+    }
   }
 
   const filtered = status === undefined ? all : all.filter((job) => job.status === status);

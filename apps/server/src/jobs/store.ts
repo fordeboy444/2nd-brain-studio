@@ -11,6 +11,7 @@
  */
 import { appendFile, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import { writeJsonAtomic } from "../http/writeAtomic.js";
 import type {
   JobEvent,
@@ -92,10 +93,139 @@ export function createJobRecord(input: CreateJobRecordInput): JobRecord {
   };
 }
 
-/** Read one job. Throws for a missing or unparseable record; callers decide. */
+const STAGE_NAMES = [
+  "S0",
+  "S1",
+  "S1w",
+  "S2",
+  "S3",
+  "S4",
+  "S5",
+  "S6",
+  "done",
+] as const;
+
+const UNIT_STAGE_NAMES = ["S0", "S1", "S1w", "S2", "S3", "S4", "S5", "S6"] as const;
+
+const SKIP_REASONS = [
+  "no_captions",
+  "blocked",
+  "timeout",
+  "fetch_error",
+  "empty_transcript",
+  "capture_invalid",
+  "malformed_json",
+  "model_timeout",
+  "model_error",
+  "llm_not_configured",
+] as const;
+
+/**
+ * The record a reader may use. Unknown keys are preserved, so a record written
+ * by a newer build survives a read-modify-write by an older one.
+ *
+ * `readJob` validates against this schema. The list scan reads loosely and the
+ * runner turns an invalid record into a terminal `job_invalid` failure, so a
+ * parseable but malformed record can neither reach the UI nor stay queued.
+ */
+export const JobRecordSchema = z
+  .object({
+    id: z.string().regex(JOB_ID_RE),
+    vaultId: z.string().min(1),
+    kind: z.enum(["youtube", "web"]),
+    status: z.enum(["queued", "running", "completed", "failed", "cancelled"]),
+    stage: z.enum(STAGE_NAMES).optional(),
+    input: z.object({ url: z.string().min(1) }).passthrough(),
+    settings: z
+      .object({
+        maxVideos: z.number().int().min(1),
+        filters: z
+          .object({
+            publishedAfter: z.string().optional(),
+            publishedBefore: z.string().optional(),
+            minDurationSec: z.number().optional(),
+            language: z.string().optional(),
+          })
+          .passthrough(),
+        fetch: z
+          .object({
+            concurrency: z.number(),
+            delayMs: z.number().optional(),
+            language: z.string().optional(),
+          })
+          .passthrough(),
+        llm: z
+          .object({
+            model: z.string(),
+            baseUrl: z.string().optional(),
+            concurrency: z.number().optional(),
+            requestTimeoutMs: z.number().optional(),
+            maxRetries: z.number().optional(),
+          })
+          .passthrough(),
+        sweep: z.object({ enabled: z.boolean() }).passthrough().optional(),
+        ui: z.object({ theme: z.enum(["system", "light", "dark"]) }).passthrough().optional(),
+      })
+      .passthrough(),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+    progress: z.object({ done: z.number(), total: z.number() }).passthrough(),
+    skipped: z.array(
+      z
+        .object({
+          slug: z.string(),
+          youtubeId: z.string().optional(),
+          stage: z.enum(UNIT_STAGE_NAMES),
+          reason: z.enum(SKIP_REASONS),
+          detail: z.string().optional(),
+        })
+        .passthrough(),
+    ),
+    retry: z
+      .object({
+        units: z.array(
+          z
+            .object({
+              slug: z.string(),
+              stage: z.enum(UNIT_STAGE_NAMES),
+            })
+            .passthrough(),
+        ),
+      })
+      .passthrough()
+      .optional(),
+    error: z.string().nullable(),
+    cancelRequested: z.boolean(),
+  })
+  .passthrough();
+
+/** Read one job. Throws for a missing, unparseable or malformed record. */
 export async function readJob(vaultDir: string, id: string): Promise<JobRecord> {
   const raw = await readFile(jobFile(vaultDir, id), "utf8");
-  return JSON.parse(raw) as JobRecord;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("job.json is not valid JSON");
+  }
+  const result = JobRecordSchema.safeParse(parsed);
+  if (!result.success) throw new Error("job.json is not a valid job record");
+  return result.data as JobRecord;
+}
+
+/**
+ * Read a record for the boot/listing scan. Only JSON parseability is checked,
+ * so one structurally malformed record is still reported to `onError` callers
+ * and can be turned into `job_invalid` by the runner. The list route applies
+ * `JobRecordSchema` itself, so it never serves an invalid record.
+ */
+async function readJobLoosely(vaultDir: string, id: string): Promise<JobRecord> {
+  const raw = await readFile(jobFile(vaultDir, id), "utf8");
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("job.json is not an object");
+  }
+  return parsed as JobRecord;
 }
 
 /** Persist a job atomically. Creates its directory when absent. */
@@ -125,7 +255,7 @@ export async function listJobs(
   for (const entry of entries) {
     if (!entry.isDirectory() || !isJobId(entry.name)) continue;
     try {
-      jobs.push(await readJob(vaultDir, entry.name));
+      jobs.push(await readJobLoosely(vaultDir, entry.name));
     } catch (error) {
       // Corrupt or half-written record: skip it, keep scanning.
       onError?.(entry.name, error);

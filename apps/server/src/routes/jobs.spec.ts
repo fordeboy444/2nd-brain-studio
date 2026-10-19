@@ -533,6 +533,36 @@ describe("GET /api/jobs", () => {
     expect(((await one.json()) as { id: string }).id).toBe(created.id);
   });
 
+  it("omits a parseable but malformed record instead of serving it", async () => {
+    const routes = await reload();
+    const { vaultId } = await seeded(routes);
+    const created = (await (
+      await routes.jobs.request("/", jsonInit(validBody(vaultId)))
+    ).json()) as { id: string };
+
+    // The record parses as JSON but has no settings or progress, which the UI
+    // dereferences. It must not reach GET /api/jobs.
+    const invalidId = "j_20261018_00dead";
+    const invalidDir = join(routes.vaultDirPath(vaultId), ".okf", "jobs", invalidId);
+    await mkdir(invalidDir, { recursive: true });
+    await writeFile(
+      join(invalidDir, "job.json"),
+      JSON.stringify({
+        id: invalidId,
+        vaultId,
+        kind: "youtube",
+        status: "queued",
+        input: { url: "https://www.youtube.com/@x" },
+      }),
+      "utf8",
+    );
+
+    const list = await routes.jobs.request("/");
+    expect(list.status).toBe(200);
+    const { jobs: listed } = (await list.json()) as { jobs: Array<{ id: string }> };
+    expect(listed.map((job) => job.id)).toEqual([created.id]);
+  });
+
   it("returns 404 for an unknown or malformed id without touching disk", async () => {
     const routes = await reload();
     await seeded(routes);

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -348,7 +348,14 @@ describe("resumeJobs (PIPE-11)", () => {
     expect(ids).toEqual([brokenId]);
     // A rejected job must be observed: idle() resolves and the process lives.
     await expect(queue.idle()).resolves.toBeUndefined();
-    expect((await store.readJob(dirA, brokenId)).status).toBe("queued");
+    // WR-13: the runner validates the record and finishes it as `job_invalid`
+    // instead of leaving it `queued` forever. `readJob` rejects the record by
+    // design, so the assertion reads the raw file.
+    const stored = JSON.parse(
+      await readFile(join(brokenDir, "job.json"), "utf8"),
+    ) as { status: string; error: string | null };
+    expect(stored.status).toBe("failed");
+    expect(stored.error).toBe("job_invalid");
   });
 
   it("throws a clear error when the queue was never configured", async () => {

@@ -180,6 +180,16 @@ describe("job records", () => {
     expect(listed.map((job) => job.id)).toEqual([good.id]);
   });
 
+  it("rejects a parseable but malformed record on read", async () => {
+    const id = "j_20261018_000007";
+    await writeTextAtomic(
+      join(jobDir(root, id), "job.json"),
+      JSON.stringify({ id, vaultId: "v", kind: "youtube", status: "queued" }),
+    );
+
+    await expect(readJob(root, id)).rejects.toThrow("not a valid job record");
+  });
+
   it("sets cancelRequested atomically", async () => {
     const job = createJobRecord({
       id: "j_20261018_000005",
