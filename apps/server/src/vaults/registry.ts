@@ -78,15 +78,23 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** Read the registry. Returns the empty envelope when the file is absent. */
+/**
+ * Read the registry. Returns the empty envelope when the file is absent.
+ *
+ * A file that parses but has an unsupported shape is NOT treated as absent: the
+ * next create/delete would write that empty envelope back and silently erase
+ * every existing entry. Fail loudly instead, and let the route answer 500.
+ */
 export async function readRegistry(): Promise<Registry> {
   try {
     const raw = await readFile(REGISTRY_PATH(), "utf8");
     const parsed = JSON.parse(raw) as Registry;
-    if (parsed && parsed.version === 1 && Array.isArray(parsed.vaults)) {
-      return parsed;
+    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.vaults)) {
+      const err = new Error("vaults.json has an unsupported shape");
+      (err as Error & { code?: string }).code = "registry_invalid";
+      throw err;
     }
-    return emptyRegistry();
+    return parsed;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
       return emptyRegistry();

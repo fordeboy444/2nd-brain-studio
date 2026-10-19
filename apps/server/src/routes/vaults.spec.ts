@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -275,5 +275,34 @@ describe("cross-origin guard", () => {
     });
     expect(res.status).toBe(403);
     expect(existsSync(join(root, id))).toBe(true);
+  });
+});
+
+describe("unreadable registry", () => {
+  it("GET returns 500 registry_invalid instead of an empty list", async () => {
+    await writeFile(
+      join(root, "vaults.json"),
+      JSON.stringify({ version: 2, vaults: [] }),
+      "utf8",
+    );
+    const { vaults } = await reload();
+    const res = await vaults.request("/");
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe("registry_invalid");
+  });
+
+  it("POST refuses rather than overwriting the unreadable file", async () => {
+    const raw = JSON.stringify({ version: 2, vaults: [] });
+    await writeFile(join(root, "vaults.json"), raw, "utf8");
+    const { vaults } = await reload();
+    const res = await vaults.request("/", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "No Write" }),
+    });
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toBe("registry_invalid");
+    // The original bytes survive.
+    expect(await readFile(join(root, "vaults.json"), "utf8")).toBe(raw);
   });
 });

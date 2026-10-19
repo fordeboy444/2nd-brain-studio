@@ -2,7 +2,13 @@ import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
 import { sameOrigin } from "../http/origin.js";
-import { createVault, deleteVault, listVaults, readRegistry } from "../vaults/registry.js";
+import {
+  createVault,
+  deleteVault,
+  listVaults,
+  readRegistry,
+  type Registry,
+} from "../vaults/registry.js";
 
 const log = pino({ name: "vault-create" });
 
@@ -28,6 +34,9 @@ const CREATE_FAILURE_MESSAGES: Record<string, string> = {
  */
 export const vaults = new Hono();
 
+/** Fixed copy for an unreadable registry; the raw error names a host path. */
+const REGISTRY_INVALID_MESSAGE = "The vault registry is unreadable.";
+
 // Create and delete write to the volume, so they get the same cross-site
 // forgery guard as the jobs and settings routers.
 vaults.use("*", async (c, next) => {
@@ -46,8 +55,18 @@ const CreateBody = z.object({
 });
 
 vaults.get("/", async (c) => {
-  const entries = await listVaults();
-  return c.json(entries, 200);
+  try {
+    const entries = await listVaults();
+    return c.json(entries, 200);
+  } catch (err) {
+    if ((err as Error & { code?: string }).code === "registry_invalid") {
+      return c.json(
+        { error: "registry_invalid", message: REGISTRY_INVALID_MESSAGE },
+        500,
+      );
+    }
+    throw err;
+  }
 });
 
 vaults.post("/", async (c) => {
@@ -69,6 +88,12 @@ vaults.post("/", async (c) => {
     }
     if (code === "non_empty") {
       return c.json({ error: "non_empty", message: msg }, 409);
+    }
+    if (code === "registry_invalid") {
+      return c.json(
+        { error: "registry_invalid", message: REGISTRY_INVALID_MESSAGE },
+        500,
+      );
     }
     if (code === "invalid_name") {
       // The name is valid JSON and a non-empty string, but it cannot produce
@@ -104,7 +129,18 @@ const DeleteBody = z.object({
  */
 vaults.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  const reg = await readRegistry();
+  let reg: Registry;
+  try {
+    reg = await readRegistry();
+  } catch (err) {
+    if ((err as Error & { code?: string }).code === "registry_invalid") {
+      return c.json(
+        { error: "registry_invalid", message: REGISTRY_INVALID_MESSAGE },
+        500,
+      );
+    }
+    throw err;
+  }
   const record = reg.vaults.find((v) => v.id === id);
   if (!record) return c.json({ error: "not_found", message: "Unknown vault." }, 404);
 
@@ -134,6 +170,12 @@ vaults.delete("/:id", async (c) => {
     if (code === "not_found") {
       // Race: removed between the read above and deleteVault. 404, no recreation.
       return c.json({ error: "not_found", message: "Unknown vault." }, 404);
+    }
+    if (code === "registry_invalid") {
+      return c.json(
+        { error: "registry_invalid", message: REGISTRY_INVALID_MESSAGE },
+        500,
+      );
     }
     throw err;
   }

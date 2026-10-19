@@ -36,17 +36,26 @@ describe("registry", () => {
     expect(reg.vaults).toEqual([]);
   });
 
-  it("an invalid-shape fallback is fresh, so a create cannot leak phantom entries", async () => {
+  it("a schema-mismatched registry fails loudly instead of becoming empty", async () => {
     const { createVault, readRegistry } = await reload();
-    const invalid = JSON.stringify({ version: 2, vaults: [] });
-    // A schema-mismatched file makes readRegistry return the fallback envelope.
-    await writeFile(join(root, "vaults.json"), invalid, "utf8");
+    // A valid registry with one entry, then a future-version envelope.
     await createVault({ name: "Real Vault" });
-    // Put the invalid shape back and read again. A shared fallback array would
-    // still hold the entry the create pushed into it.
+    const valid = await readRegistry();
+    expect(valid.vaults).toHaveLength(1);
+
+    const invalid = JSON.stringify({ version: 2, vaults: valid.vaults });
     await writeFile(join(root, "vaults.json"), invalid, "utf8");
-    const reg = await readRegistry();
-    expect(reg.vaults).toEqual([]);
+
+    // Returning an empty envelope here would make the next write erase every
+    // entry. The read must refuse instead.
+    await expect(readRegistry()).rejects.toMatchObject({
+      code: "registry_invalid",
+    });
+    // The file is untouched: no recovery write happened.
+    expect(JSON.parse(await readFile(join(root, "vaults.json"), "utf8"))).toEqual({
+      version: 2,
+      vaults: valid.vaults,
+    });
   });
 
   it("writeRegistryAtomic writes and leaves no tmp file behind", async () => {
