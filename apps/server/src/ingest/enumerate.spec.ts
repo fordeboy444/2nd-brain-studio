@@ -7,6 +7,7 @@ import { runJob, slugForCandidate, type StageDeps } from "../jobs/runner.js";
 import { readJob } from "../jobs/store.js";
 import type { JobSettings, VideoCandidate } from "../jobs/types.js";
 import {
+  defaultRun,
   EnumerateError,
   enumerateChannel,
   parseDuration,
@@ -142,6 +143,20 @@ describe("enumerateChannel (INGEST-02)", () => {
     expect((error as EnumerateError).code).toBe("enumerate_failed");
     expect((error as EnumerateError).detail).toHaveLength(500);
     expect((error as EnumerateError).detail?.endsWith("network denied")).toBe(true);
+  });
+
+  it("never spawns yt-dlp when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      defaultRun(["--version"], {
+        shell: false,
+        timeoutMs: 120_000,
+        maxBufferBytes: 1024,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("maps a watchdog kill to timeout", async () => {

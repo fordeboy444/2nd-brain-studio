@@ -87,13 +87,17 @@ export function scanCap(options: EnumerateOptions): number {
  * Spawn `yt-dlp` with an argv array and no shell. Output is accumulated as
  * chunks so the caller can cap it; stderr is kept only for the failure detail.
  */
-function defaultRun(argv: readonly string[], opts: RunOptions): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("yt-dlp", [...argv], {
-      shell: opts.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+export function defaultRun(
+  argv: readonly string[],
+  opts: RunOptions,
+): Promise<RunResult> {
+  // A cancel that lands before the spawn must not start yt-dlp at all: the
+  // child would otherwise run to completion or to the 120 s watchdog.
+  if (opts.signal?.aborted === true) {
+    return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+  }
 
+  return new Promise((resolve, reject) => {
     const stdout: Buffer[] = [];
     let stdoutBytes = 0;
     let stderr = "";
@@ -101,9 +105,12 @@ function defaultRun(argv: readonly string[], opts: RunOptions): Promise<RunResul
     let overflow = false;
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
+    let child: ReturnType<typeof spawn> | undefined;
 
     const kill = (): void => {
-      if (!child.killed) child.kill("SIGKILL");
+      // `killed` is false until a signal is sent; the optional child covers
+      // an abort that races the spawn call.
+      if (child !== undefined && !child.killed) child.kill("SIGKILL");
     };
     const onAbort = (): void => {
       kill();
@@ -123,7 +130,15 @@ function defaultRun(argv: readonly string[], opts: RunOptions): Promise<RunResul
       timedOut = true;
       kill();
     }, opts.timeoutMs);
+    // Register before `spawn`, then re-check: an abort between the first check
+    // and the spawn either fires the listener or is caught by this check.
     opts.signal?.addEventListener("abort", onAbort, { once: true });
+
+    child = spawn("yt-dlp", [...argv], {
+      shell: opts.shell,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (opts.signal?.aborted === true) kill();
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
