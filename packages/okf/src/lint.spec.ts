@@ -868,6 +868,18 @@ describe("E7 wikilink boundaries", () => {
     };
     expect(findingMessages(pages)).toEqual([]);
   });
+
+  it.each(["[[]]", "[[][]]", "[[[]a]]", "[[]a]]"])(
+    "does not report the non-wikilink %s as E7 (WR-10)",
+    (text) => {
+      const pages = conceptPair(
+        `${TYPED_CONCEPT}[Partner](partner.md)\n\nShortcut ${text} here.\n`,
+      );
+      const result = lintBundle(pages, "edge");
+      expect(result.findings).toEqual([]);
+      expect(result.exitCode).toBe(0);
+    },
+  );
 });
 
 describe("warning order across added rules", () => {

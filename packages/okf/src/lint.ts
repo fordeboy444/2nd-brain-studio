@@ -242,6 +242,14 @@ function findWikilinks(text: string): string[] {
     if (start === -1) break;
     const close = text.indexOf("]]", start + 2);
     if (close === -1) break;
+    const inner = text.slice(start + 2, close);
+    // The reference pattern is `\[\[[^\]]+\]\]`: the inner text must be
+    // non-empty and must not itself contain `]`. Without this check a shortcut
+    // link such as `[[]]` becomes a false E7 error.
+    if (inner === "" || inner.includes("]")) {
+      i = start + 1;
+      continue;
+    }
     out.push(text.slice(start, close + 2));
     i = close + 2;
   }
