@@ -1591,6 +1591,23 @@ describe("cancel", () => {
     expect(events.find((event) => event.type === "done")?.data.status).toBe("cancelled");
   });
 
+  it("honours a cancel flag written while the job sat in the queue, before S0", async () => {
+    const job = makeVideoJob();
+    // The user cancelled after `writeJob` but before the queue started it:
+    // only the on-disk flag knows, and there is no active controller to abort.
+    await writeJob(root, { ...job, cancelRequested: true });
+    const enumerate = vi.fn(async () => {
+      throw new Error("S0 must not run");
+    });
+    const deps = makeDeps({ enumerate });
+
+    const finished = await runJob(job, deps);
+
+    expect(enumerate).not.toHaveBeenCalled();
+    expect(finished.status).toBe("cancelled");
+    expect((await readJob(root, job.id)).status).toBe("cancelled");
+  });
+
   it("does not record a failure when the queue aborts the active job", async () => {
     let signalEntered: () => void = () => undefined;
     const entered = new Promise<void>((resolve) => {

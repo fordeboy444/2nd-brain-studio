@@ -382,6 +382,14 @@ export async function runJob(
   try {
     job.status = "running";
 
+    // Persist first: `makePersist` merges the on-disk `cancelRequested`, which
+    // is the authority. A cancel that arrived while the job sat in the queue
+    // has no active controller, so the in-memory flag alone would miss it and
+    // S0 would run for up to 120 s.
+    const firstStage = table[0] as StageName;
+    if (job.stage === undefined) job.stage = firstStage;
+    await persist();
+
     // A cancel that arrived while the job sat in the queue wins before any work.
     if (job.cancelRequested) {
       job.status = "cancelled";
@@ -389,10 +397,6 @@ export async function runJob(
       await appendEvent(dir, "done", { status: "cancelled" });
       return job;
     }
-
-    const firstStage = table[0] as StageName;
-    if (job.stage === undefined) job.stage = firstStage;
-    await persist();
 
     const current = job.stage ?? firstStage;
     let start = current === "done" ? table.length : table.indexOf(current);
