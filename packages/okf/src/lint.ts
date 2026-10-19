@@ -198,11 +198,12 @@ function sourceBullets(text: string): string[] {
     if (fence !== null) continue;
 
     // CommonMark ATX headings may be indented up to three spaces, may use a
-    // tab after the marker, and may end with an optional closing `#` sequence.
-    // Use one parser for both the section start and the section end.
-    const heading = /^\s{0,3}##\s+(.+?)(?:\s+#+)?\s*$/.exec(line);
+    // tab after the marker, may have an empty title, and may end with an
+    // optional closing `#` sequence. Use one parser for both the section start
+    // and the section end.
+    const heading = /^\s{0,3}##(?:[ \t]+(.+?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
     if (heading !== null) {
-      const title = heading[1]!.trim();
+      const title = (heading[1] ?? "").trim();
       if (!inSources) {
         inSources = title === "Sources";
       } else {

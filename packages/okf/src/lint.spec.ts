@@ -1691,3 +1691,20 @@ describe("WR-12 fence validation", () => {
     expect(findingMessages(pages)).toEqual([]);
   });
 });
+
+describe("WR-14 empty level-2 heading", () => {
+  it.each(["## ", "##", "##   "])(
+    "ends the Sources section on %s",
+    (heading) => {
+      const pages = e8Set({
+        bullet:
+          '- [Video A](../sources/video-a.md) - "[0:00:00] alpha beta gamma delta"\n' +
+          `${heading}\n` +
+          "- unrelated note here",
+      });
+      // Without the empty-heading branch the note is read as a citation and
+      // produces a false E8.
+      expect(findingMessages(pages)).toEqual([]);
+    },
+  );
+});
