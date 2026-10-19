@@ -245,14 +245,18 @@ export function Browse() {
           </div>
         </header>
 
-        <div className="editor-wrap">
-          <div className="editor-host" style={{ overflow: "auto" }}>
-            <EditorRegion mode={mode} />
+        {/* The canvas starts below the header, so the slide-over panels
+            anchored to it never cover the header controls. */}
+        <div className="canvas">
+          <div className="editor-wrap">
+            <div className="editor-host" style={{ overflow: "auto" }}>
+              <EditorRegion mode={mode} />
+            </div>
           </div>
-        </div>
 
-        <BacklinksPanel />
-        <RightPanel />
+          <BacklinksPanel />
+          <RightPanel />
+        </div>
       </main>
     </div>
   );

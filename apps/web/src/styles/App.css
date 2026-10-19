@@ -2056,8 +2056,19 @@ body:has(.sidebar-resizer.dragging) {
      off-screen version panel is prevented at the source instead — the panel
      focuses with preventScroll and skips its mount-time scrollIntoView. */
   overflow: hidden;
-  /* Anchors the version-history panel, which slides in over the editor. */
+  /* Anchors the header and the canvas. The slide-over panels anchor to
+     .canvas, not here, so they stay below the header controls. */
   position: relative;
+}
+
+/* Everything below the header. The slide-over panels are absolutely
+   positioned against this box, so opening one never covers the header. */
+.canvas {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* ============================================================
@@ -2921,7 +2932,7 @@ html[data-platform="macos"] .sidebar-hidden .main-header {
    Backlinks
    ============================================================ */
 .backlinks-float {
-  /* Bottom-right of the note, inside .main (position: relative). Below the
+  /* Bottom-right of the note, inside .canvas (position: relative). Below the
      slide-over right panel (120), above the editor. */
   position: absolute;
   right: var(--sp-4);

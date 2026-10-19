@@ -889,3 +889,30 @@ describe("Browse, a child directory that fails to load", () => {
     expect(findRow(host, "Deep")).toBeTruthy();
   });
 });
+
+describe("Browse, the slide-over panels", () => {
+  it("anchor below the header so the header controls stay clickable", async () => {
+    const host = await mount();
+    await settle();
+
+    await act(async () => {
+      useStore.setState({ rightPanelOpen: true });
+    });
+    await settle();
+
+    const header = host.querySelector(".main-header");
+    const canvas = host.querySelector(".canvas");
+    const panel = host.querySelector(".right-panel");
+    expect(header, "the header renders").toBeTruthy();
+    expect(canvas, "the canvas below the header renders").toBeTruthy();
+    expect(panel, "the right panel renders when open").toBeTruthy();
+
+    // The panel is absolute against .canvas, which starts BELOW the header.
+    // If it were a child of .main (as it was), top: 0 would put it over the
+    // header controls and every click would land on the panel instead.
+    expect(canvas!.contains(panel!)).toBe(true);
+    expect(canvas!.querySelector(".main-header")).toBeNull();
+    expect(header!.contains(panel!)).toBe(false);
+    expect(header!.parentElement).toBe(canvas!.parentElement);
+  });
+});
