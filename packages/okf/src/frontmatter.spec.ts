@@ -268,6 +268,48 @@ describe("renderFrontmatter", () => {
     ).toBe(rendered);
   });
 
+  it("rejects a non-safe-integer number instead of breaking the fixed point (WR-16)", () => {
+    const cases: Array<[string, number]> = [
+      ["1.5", 1.5],
+      ["NaN", Number.NaN],
+      ["Infinity", Number.POSITIVE_INFINITY],
+    ];
+    for (const [label, value] of cases) {
+      let caught: unknown;
+      try {
+        renderFrontmatter({ n: value });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, label).toBeInstanceOf(FrontmatterError);
+      expect((caught as FrontmatterError).code, label).toBe("unsupported_yaml");
+    }
+  });
+
+  it("rejects a non-safe-integer number in an array (WR-16)", () => {
+    let caught: unknown;
+    try {
+      renderFrontmatter({ nums: [1, 2.5] });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(FrontmatterError);
+  });
+
+  it("renders safe integers unchanged (WR-16)", () => {
+    const rendered = renderFrontmatter({
+      rank: Number.MAX_SAFE_INTEGER,
+      floor: -3,
+    });
+    expect(rendered).toBe(
+      "---\nrank: 9007199254740991\nfloor: -3\n---\n",
+    );
+    expect(parseFrontmatter(rendered)?.data).toEqual({
+      rank: Number.MAX_SAFE_INTEGER,
+      floor: -3,
+    });
+  });
+
   it("is a fixed point when its own output is parsed and rendered again", () => {
     const first = renderFrontmatter({
       type: "concept",

@@ -21,7 +21,13 @@ export interface BundlePage {
   text: string;
 }
 
-/** The value shapes the supported frontmatter subset can hold. */
+/**
+ * The value shapes the supported frontmatter subset can hold.
+ *
+ * A `number` must be a safe integer (`Number.isSafeInteger`). Floats, `NaN`
+ * and `Infinity` are outside the subset: the parser reads only integers, so a
+ * rendered float would come back as a string and break the byte contract.
+ */
 export type FrontmatterValue = string | number | boolean | string[] | number[];
 
 /** Parsed frontmatter, keyed by the key as written on the page. */
@@ -356,7 +362,10 @@ function quoteString(value: string): string {
 
 /** Render one scalar value under the same rules the parser accepts. */
 function renderScalar(value: string | number | boolean): string {
-  if (typeof value === "number") return String(value);
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new FrontmatterError();
+    return String(value);
+  }
   if (typeof value === "boolean") return value ? "true" : "false";
   const mustQuote =
     value === "" ||
@@ -380,7 +389,9 @@ function renderScalar(value: string | number | boolean): string {
  * Render parsed frontmatter as a canonical block.
  *
  * The output is LF-only and ends with exactly one newline, and parsing then
- * re-rendering it is a fixed point.
+ * re-rendering it is a fixed point. A `number` must be a safe integer: the
+ * renderer throws `FrontmatterError` for a float, `NaN` or `Infinity`, because
+ * the parser would read it back as a string.
  */
 export function renderFrontmatter(data: OkfFrontmatter): string {
   const lines = ["---"];
