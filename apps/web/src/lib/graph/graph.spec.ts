@@ -161,14 +161,14 @@ describe("assembleGraph — pure transform", () => {
   it("drops self-loops and dangling refs", () => {
     const g = assembleGraph([node("a")], [edge("a", "a"), edge("a", "ghost")]);
     expect(g.edges).toEqual([]);
-    expect(g.nodes[0].linkCount).toBe(0);
+    expect(g.nodes[0]!.linkCount).toBe(0);
   });
 
   it("defaults a missing kind to 'link'", () => {
     const g = assembleGraph([node("a"), node("b")], [
       { source: "a", target: "b" } as GraphEdge,
     ]);
-    expect(g.edges[0].kind).toBe("link");
+    expect(g.edges[0]!.kind).toBe("link");
   });
 
   it("returns an empty graph for an empty vault", () => {
@@ -184,8 +184,8 @@ describe("assembleGraph — pure transform", () => {
       ],
       [],
     );
-    expect(g.nodes[0].type).toBe("concept");
-    expect(g.nodes[1].type).toBe("note");
+    expect(g.nodes[0]!.type).toBe("concept");
+    expect(g.nodes[1]!.type).toBe("note");
   });
 });
 
@@ -199,8 +199,8 @@ describe("transformGraphResponse / buildGraph — API payload adapter", () => {
       edges: [{ source: "a", target: "b", kind: "concept" }],
     });
     expect(g.nodes).toHaveLength(2);
-    expect(g.nodes[0].title).toBe("Alpha");
-    expect(g.edges[0].kind).toBe("concept");
+    expect(g.nodes[0]!.title).toBe("Alpha");
+    expect(g.edges[0]!.kind).toBe("concept");
   });
 
   it("buildGraph(payload) transforms synchronously when given an object", () => {
@@ -215,8 +215,8 @@ describe("transformGraphResponse / buildGraph — API payload adapter", () => {
       edges: [],
     });
     const g = (await buildGraph("v1", fetcher)) as Graph;
-    expect(g.nodes[0].id).toBe("a");
-    expect(g.nodes[0].type).toBe("concept");
+    expect(g.nodes[0]!.id).toBe("a");
+    expect(g.nodes[0]!.type).toBe("concept");
   });
 });
 
@@ -240,7 +240,7 @@ describe("filterEdgesByKind / filterGraphByEdgeKinds / availableEdgeKinds", () =
   it("filterEdgesByKind keeps only edges whose kind is in the allow-set", () => {
     const kept = filterEdgesByKind(graph.edges, ["concept"]);
     expect(kept).toHaveLength(1);
-    expect(kept[0].kind).toBe("concept");
+    expect(kept[0]!.kind).toBe("concept");
   });
 
   it("filterEdgesByKind returns an empty array for an empty allow-set", () => {
@@ -251,7 +251,7 @@ describe("filterEdgesByKind / filterGraphByEdgeKinds / availableEdgeKinds", () =
     const filtered = filterGraphByEdgeKinds(graph, new Set(["related"]));
     expect(filtered.nodes).toBe(graph.nodes);
     expect(filtered.edges).toHaveLength(1);
-    expect(filtered.edges[0].kind).toBe("related");
+    expect(filtered.edges[0]!.kind).toBe("related");
   });
 });
 
