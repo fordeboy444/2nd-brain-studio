@@ -309,8 +309,8 @@ export function Settings() {
         : testLlmResult === null
           ? null
           : testLlmResult.ok
-            ? `Ollama replied in ${testLlmResult.latencyMs ?? 0} ms.`
-            : `Test failed: ${testLlmResult.reason ?? "unknown error"}.`;
+            ? `Connection successful. Ollama replied in ${testLlmResult.latencyMs ?? 0} ms.`
+            : `Connection not successful: ${testLlmResult.reason ?? "unknown error"}.`;
   const testFailed =
     settings?.llmConfigured === false || (testLlmResult !== null && !testLlmResult.ok);
 

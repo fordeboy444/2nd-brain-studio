@@ -609,7 +609,9 @@ it("shows the exact Test connection success copy", async () => {
   await render(() => buttonByText(host, "Test connection").click());
 
   expect(stub.tests).toBe(1);
-  expect(host.textContent).toContain("Ollama replied in 37 ms.");
+  expect(host.textContent).toContain(
+    "Connection successful. Ollama replied in 37 ms.",
+  );
 });
 
 it("shows the exact Test connection failure copy", async () => {
@@ -618,7 +620,7 @@ it("shows the exact Test connection failure copy", async () => {
 
   await render(() => buttonByText(host, "Test connection").click());
 
-  expect(host.textContent).toContain("Test failed: timeout.");
+  expect(host.textContent).toContain("Connection not successful: timeout.");
 });
 
 it("says the key is missing, points at the input and no longer asks for a restart", async () => {
