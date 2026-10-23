@@ -798,3 +798,65 @@ it("keeps the last list on a failed load and records the error", async () => {
   expect(useStore.getState().jobsError).toBe("down");
   expect(useStore.getState().jobsLoading).toBe(false);
 });
+
+it("refreshes health after a key save so the degraded dot clears", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/settings/ollama-key" && init?.method === "POST") {
+      return json({ ok: true });
+    }
+    if (url === "/api/settings") {
+      return json({ ...SETTINGS_PAYLOAD, hasOllamaKey: true, llmConfigured: true });
+    }
+    if (url === "/api/health") {
+      return json({
+        ok: true,
+        status: "healthy",
+        service: "2nd-brain-studio",
+        version: "0.1.0",
+        uptimeSec: 1,
+        time: "2026-10-18T12:00:00Z",
+        readOnly: false,
+      });
+    }
+    return json({});
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().saveOllamaKey("sk-test");
+
+  expect(calls).toContain("GET /api/health");
+  expect(useStore.getState().health?.status).toBe("healthy");
+});
+
+it("refreshes health after a key delete so the dot returns to degraded", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url === "/api/settings/ollama-key" && init?.method === "DELETE") {
+      return json({ hasOllamaKey: false });
+    }
+    if (url === "/api/settings") {
+      return json({ ...SETTINGS_PAYLOAD, hasOllamaKey: false, llmConfigured: false });
+    }
+    if (url === "/api/health") {
+      return json({
+        ok: false,
+        status: "degraded",
+        service: "2nd-brain-studio",
+        version: "0.1.0",
+        uptimeSec: 1,
+        time: "2026-10-18T12:00:00Z",
+        readOnly: false,
+      });
+    }
+    return json({});
+  }) as unknown as typeof fetch;
+
+  await useStore.getState().deleteOllamaKey();
+
+  expect(calls).toContain("GET /api/health");
+  expect(useStore.getState().health?.status).toBe("degraded");
+});

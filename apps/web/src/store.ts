@@ -1003,6 +1003,10 @@ export const useStore = create<AppState>((set, get) => {
       } catch {
         set({ settingsError: null });
       }
+      // The health probe feeds the toolbar dot. Refresh it here, or the dot
+      // keeps saying "Server degraded" until a full page reload even though the
+      // key is live. A failed probe writes healthError and keeps the old dot.
+      await get().loadHealth();
     },
 
     deleteOllamaKey: async () => {
@@ -1018,6 +1022,8 @@ export const useStore = create<AppState>((set, get) => {
           settingsError: null,
         }));
       }
+      // Removing the last key flips health back to degraded; show that now.
+      await get().loadHealth();
     },
 
     runTestConnection: async () => {
