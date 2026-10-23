@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, rename, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { guardVault } from "../auth/middleware.js";
 import { sameOrigin } from "../http/origin.js";
 import { PathJailError, decodePathParam, resolveInVault } from "../paths/jail.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
@@ -103,6 +104,11 @@ files.get("/", async (c) => {
   const vaultId = c.req.query("vault") ?? "";
   const rawPath = c.req.query("path") ?? "";
 
+  // Scope check before the registry lookup: a forbidden vault is 403 whether
+  // or not it is registered.
+  const denied = guardVault(c, vaultId);
+  if (denied !== null) return denied;
+
   const vault = await lookupVault(vaultId);
   if (!vault) return c.json({ error: "not_found", message: "Unknown vault." }, 404);
 
@@ -164,6 +170,9 @@ files.put("/", async (c) => {
       400,
     );
   }
+
+  const denied = guardVault(c, parsed.vault);
+  if (denied !== null) return denied;
 
   const vault = await lookupVault(parsed.vault);
   if (!vault) return c.json({ error: "not_found", message: "Unknown vault." }, 404);

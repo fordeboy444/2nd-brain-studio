@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
+import { allowedVaultIds, guardVault } from "../auth/middleware.js";
 import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import { EnumerateError } from "../ingest/enumerate.js";
@@ -192,13 +193,19 @@ interface FoundJob {
 }
 
 /**
- * Find one job across every registered vault. Job ids carry no vault id, so the
- * scan is the lookup. An unreadable record is treated as absent.
+ * Find one job across the registered vaults the caller may read. Job ids carry
+ * no vault id, so the scan is the lookup. A job in a forbidden vault is
+ * indistinguishable from one that does not exist: both are null, both answer
+ * 404 — the alternative is an existence oracle for a token's scope.
  */
-async function findJob(id: string): Promise<FoundJob | null> {
+async function findJob(
+  id: string,
+  allowed: "*" | string[],
+): Promise<FoundJob | null> {
   if (!isJobId(id)) return null;
   const registry = await readRegistry();
   for (const vault of registry.vaults) {
+    if (allowed !== "*" && !allowed.includes(vault.id)) continue;
     const vaultDir = vaultDirPath(vault.id);
     try {
       return { job: await readJob(vaultDir, id), vaultDir };
@@ -321,6 +328,9 @@ jobs.post("/", async (c) => {
     );
   }
 
+  const denied = guardVault(c, parsed.vaultId);
+  if (denied !== null) return denied;
+
   // The vault must already exist; the Settings form creates one first.
   const registry = await readRegistry();
   const vault = registry.vaults.find((entry) => entry.id === parsed.vaultId);
@@ -442,10 +452,22 @@ jobs.get("/", async (c) => {
     return c.json({ error: "invalid_body", message: `Unknown job status "${status}".` }, 400);
   }
   const vaultId = c.req.query("vaultId");
+  const allowed = allowedVaultIds(c);
+
+  // Asking for a specific vault outside the scope is a refusal, not an empty
+  // list: an empty list would say "this vault has no jobs", which is not the
+  // caller's business to learn.
+  if (vaultId !== undefined && allowed !== "*" && !allowed.includes(vaultId)) {
+    return c.json(
+      { error: "forbidden", message: "This token cannot access that vault." },
+      403,
+    );
+  }
 
   const registry = await readRegistry();
-  const vaults =
-    vaultId === undefined ? registry.vaults : registry.vaults.filter((v) => v.id === vaultId);
+  const vaults = (
+    vaultId === undefined ? registry.vaults : registry.vaults.filter((v) => v.id === vaultId)
+  ).filter((v) => allowed === "*" || allowed.includes(v.id));
 
   const all: JobRecord[] = [];
   for (const vault of vaults) {
@@ -497,7 +519,7 @@ jobs.get("/", async (c) => {
  */
 jobs.get("/:id/events", async (c) => {
   const id = c.req.param("id");
-  const found = await findJob(id);
+  const found = await findJob(id, allowedVaultIds(c));
   if (found === null) {
     return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
   }
@@ -512,7 +534,7 @@ jobs.get("/:id/events", async (c) => {
  */
 jobs.get("/:id/artifacts", async (c) => {
   const id = c.req.param("id");
-  const found = await findJob(id);
+  const found = await findJob(id, allowedVaultIds(c));
   if (found === null) {
     return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
   }
@@ -606,7 +628,7 @@ jobs.post("/:id/retry", async (c) => {
   }
   retriesInFlight.add(id);
   try {
-    const found = await findJob(id);
+    const found = await findJob(id, allowedVaultIds(c));
     if (found === null) {
       return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
     }
@@ -644,7 +666,7 @@ jobs.get("/:id", async (c) => {
   if (!isJobId(id)) {
     return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
   }
-  const found = await findJob(id);
+  const found = await findJob(id, allowedVaultIds(c));
   if (found === null) {
     return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
   }
@@ -658,7 +680,7 @@ jobs.get("/:id", async (c) => {
  */
 jobs.delete("/:id", async (c) => {
   const id = c.req.param("id");
-  const found = await findJob(id);
+  const found = await findJob(id, allowedVaultIds(c));
   if (found === null) {
     return c.json({ error: "job_not_found", message: "Unknown job." }, 404);
   }

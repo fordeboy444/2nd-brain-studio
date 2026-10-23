@@ -12,6 +12,7 @@
 import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
+import { isAdmin } from "../auth/middleware.js";
 import { config } from "../config.js";
 import { sameOrigin } from "../http/origin.js";
 import {
@@ -69,6 +70,21 @@ async function statusPayload(): Promise<{
     llmConfigured: key !== undefined,
   };
 }
+
+/**
+ * Admin-only. Settings hold the LLM key, the YouTube cookie and the global
+ * pipeline defaults; a scoped agent token must not be able to read or rotate
+ * any of them, even for a vault it may open.
+ */
+settings.use("*", async (c, next) => {
+  if (!isAdmin(c)) {
+    return c.json(
+      { error: "forbidden", message: "This token cannot use the settings API." },
+      403,
+    );
+  }
+  await next();
+});
 
 settings.use("*", async (c, next) => {
   const method = c.req.method.toUpperCase();

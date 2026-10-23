@@ -6,7 +6,8 @@ import { resolve } from "node:path";
 import pino from "pino";
 import { config } from "../config.js";
 import { getLockState } from "../lock.js";
-import { authenticate } from "../auth/middleware.js";
+import { authenticate, vaultScope } from "../auth/middleware.js";
+import { admin } from "../routes/admin.js";
 import { auth } from "../routes/auth.js";
 import { health } from "../routes/health.js";
 import { vaults } from "../routes/vaults.js";
@@ -107,6 +108,18 @@ app.use("/api/*", async (c, next) => {
  */
 app.use("/api/*", authenticate);
 
+/**
+ * Vault-id scope, one rule for the seven routers mounted at `/api/vaults`.
+ *
+ * It runs after authentication (a principal exists) and before every route, so
+ * a token scoped to one vault gets 403 on another vault's tree, search, graph,
+ * backlinks, frontmatter, lint or reindex without each router repeating the
+ * check. `vaultScope` reads `:id`, which is the vault id in every one of those
+ * paths.
+ */
+app.use("/api/vaults/:id", vaultScope);
+app.use("/api/vaults/:id/*", vaultScope);
+
 // API routes.
 app.route("/api/health", health);
 app.route("/api", auth);
@@ -115,6 +128,8 @@ app.route("/api/file", files);
 app.route("/api/jobs", jobs);
 // Mounted before the SPA fallback so `/api/settings/*` never returns index.html.
 app.route("/api/settings", settings);
+// Admin-only; the router itself refuses a scoped token with 403.
+app.route("/api/admin", admin);
 // GET /api/vaults/:id/tree lives on its own router mounted at the same prefix;
 // its `:id/tree` path is distinct from the vaults router's `/` and `/:id` routes.
 app.route("/api/vaults", tree);

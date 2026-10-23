@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import pino from "pino";
 import { z } from "zod";
+import { allowedVaultIds, isAdmin } from "../auth/middleware.js";
 import { sameOrigin } from "../http/origin.js";
 import { listJobs } from "../jobs/store.js";
 import {
@@ -59,7 +60,13 @@ const CreateBody = z.object({
 vaults.get("/", async (c) => {
   try {
     const entries = await listVaults();
-    return c.json(entries, 200);
+    // A scoped token gets its subset, possibly empty. This route never 403s:
+    // listing is how a caller discovers which vaults it may open.
+    const allowed = allowedVaultIds(c);
+    return c.json(
+      allowed === "*" ? entries : entries.filter((entry) => allowed.includes(entry.id)),
+      200,
+    );
   } catch (err) {
     if ((err as Error & { code?: string }).code === "registry_invalid") {
       return c.json(
@@ -72,6 +79,11 @@ vaults.get("/", async (c) => {
 });
 
 vaults.post("/", async (c) => {
+  // Before the body parse: a scoped token learns nothing about the request
+  // shape from a route it may never call.
+  if (!isAdmin(c)) {
+    return c.json({ error: "forbidden", message: "This token cannot create vaults." }, 403);
+  }
   let parsed: z.infer<typeof CreateBody>;
   try {
     const body = await c.req.json();
@@ -130,6 +142,9 @@ const DeleteBody = z.object({
  * idempotent under repetition: a second call for the same id is the 404 case.
  */
 vaults.delete("/:id", async (c) => {
+  if (!isAdmin(c)) {
+    return c.json({ error: "forbidden", message: "This token cannot delete vaults." }, 403);
+  }
   const id = c.req.param("id");
   let reg: Registry;
   try {

@@ -13,6 +13,7 @@ import type { Context, Next } from "hono";
 import { getCookie } from "hono/cookie";
 import { sessionKey, verifyAdminToken } from "./adminToken.js";
 import { SESSION_COOKIE, readSession } from "./session.js";
+import { findByToken, scopeAllows, TokenStoreInvalidError } from "./tokens.js";
 
 /**
  * An authenticated caller. The browser session and a Bearer credential both
@@ -100,12 +101,24 @@ export function forbiddenVault(c: Context): Response {
   );
 }
 
+/** The fixed 500 for a store that does not parse. The body names no token. */
+function storeInvalid(c: Context): Response {
+  return c.json(
+    { error: "token_store_invalid", message: "The agent token store is unreadable." },
+    500,
+  );
+}
+
 /**
  * Accept a credential or refuse the request.
  *
  * Order is deliberate: Bearer first (the agent path, no ambient state), then
  * the session cookie (the browser path). A Bearer credential that fails is not
  * retried as a cookie — a caller that sent one shape gets one answer.
+ *
+ * A Bearer credential is the admin token OR a minted agent token. Only the
+ * admin token can be a cookie: the single browser session belongs to the
+ * operator, and an agent token is deliberately Bearer-only.
  */
 export async function authenticate(c: Context, next: Next): Promise<void | Response> {
   if (!isGatedPath(c.req.path)) {
@@ -122,12 +135,31 @@ export async function authenticate(c: Context, next: Next): Promise<void | Respo
   const header = c.req.header("authorization") ?? "";
   if (header.toLowerCase().startsWith("bearer ")) {
     const credential = header.slice(7).trim();
-    if (credential !== "" && (await verifyAdminToken(credential))) {
+    if (credential === "") return unauthorized(c);
+
+    if (await verifyAdminToken(credential)) {
       c.set(PRINCIPAL_KEY, { kind: "admin", vaults: "*" } satisfies Principal);
       await next();
       return;
     }
-    return unauthorized(c);
+
+    let entry;
+    try {
+      entry = await findByToken(credential);
+    } catch (error) {
+      if (error instanceof TokenStoreInvalidError) return storeInvalid(c);
+      throw error;
+    }
+    if (entry === null) return unauthorized(c);
+
+    c.set(PRINCIPAL_KEY, {
+      kind: "token",
+      id: entry.id,
+      name: entry.name,
+      vaults: entry.vaults,
+    } satisfies Principal);
+    await next();
+    return;
   }
 
   const key = await sessionKey();
@@ -147,12 +179,14 @@ export async function authenticate(c: Context, next: Next): Promise<void | Respo
  * This runs BEFORE any registry lookup on purpose: a vault the caller cannot
  * see must answer 403 whether or not it exists, or the status code becomes an
  * existence oracle.
- *
- * Task 1 knows only the admin principal; per-token scopes arrive with
- * `scopeAllows` in Task 2.
  */
-export function guardVault(c: Context, _vaultId: string): Response | null {
-  return principalOf(c) === null ? forbiddenVault(c) : null;
+export function guardVault(c: Context, vaultId: string): Response | null {
+  const principal = principalOf(c);
+  // No principal can only happen when a route is mounted without the
+  // `authenticate` middleware; fail closed rather than serving the vault.
+  if (principal === null) return forbiddenVault(c);
+  if (principal.kind === "admin") return null;
+  return scopeAllows(principal, vaultId) ? null : forbiddenVault(c);
 }
 
 /** The `/api/vaults/:id` and `/api/vaults/:id/*` middleware. */
