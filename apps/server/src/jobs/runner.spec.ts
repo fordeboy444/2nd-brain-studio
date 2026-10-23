@@ -779,7 +779,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(onDisk.progress.total).toBe(preview.selected);
   });
 
-  it("advances a zero-unit stage and completes", async () => {
+  it("advances a zero-unit stage and fails with no_sources", async () => {
     const deps = makeDeps({
       async enumerate() {
         return [];
@@ -794,8 +794,9 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     );
     expect(enumerated.count).toBe(0);
     const onDisk = await readJob(root, job.id);
-    expect(onDisk.status).toBe("completed");
-    expect(onDisk.stage).toBe("done");
+    expect(onDisk.status).toBe("failed");
+    expect(onDisk.error).toBe("no_sources");
+    expect(onDisk.stage).toBe("S1");
   });
 
   it("makes zero network calls for a repeat web URL", async () => {
@@ -866,7 +867,7 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
     expect(parsed!.data.captured_at).toBe(FIXED_ISO);
   });
 
-  it("records a thrown fetchWeb as one S1w skip and never fails the job", async () => {
+  it("records a thrown fetchWeb as one S1w skip and fails the job with no_sources", async () => {
     const deps = makeDeps({
       async fetchWeb() {
         throw new Error("socket hang up");
@@ -878,8 +879,9 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
 
     const finished = await runJob(job, deps);
 
-    expect(finished.status).toBe("completed");
-    expect(finished.stage).toBe("done");
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toBe("no_sources");
+    expect(finished.stage).toBe("S1w");
     expect(finished.skipped).toHaveLength(1);
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "fetch_error" });
     expect(await rawCaptures()).toEqual([]);
@@ -901,7 +903,8 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
 
     const finished = await runJob(job, deps);
 
-    expect(finished.status).toBe("completed");
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toBe("no_sources");
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "blocked" });
     expect(classified).toBe(0);
     expect(await rawCaptures()).toEqual([]);
@@ -959,7 +962,8 @@ describe("runJob (PIPE-02, PIPE-10)", () => {
 
     const finished = await runJob(job, deps);
 
-    expect(finished.status).toBe("completed");
+    expect(finished.status).toBe("failed");
+    expect(finished.error).toBe("no_sources");
     expect(finished.skipped).toHaveLength(1);
     expect(finished.skipped[0]).toMatchObject({ stage: "S1w", reason: "empty_transcript" });
     expect(await rawCaptures()).toEqual([]);

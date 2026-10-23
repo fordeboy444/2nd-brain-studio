@@ -263,6 +263,16 @@ function errorCode(error: unknown): string {
   return typeof code === "string" ? code : "stage_failed";
 }
 
+function noSourcesError(selected: number): Error {
+  const message =
+    selected === 0
+      ? "no sources: no selected candidates"
+      : `no sources: all ${selected} selected units were skipped`;
+  const error = new Error(message);
+  (error as Error & { code?: string }).code = "no_sources";
+  return error;
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -597,6 +607,8 @@ async function runS1(
   job.progress = { done: 0, total: units.length };
   await persist();
 
+  let ingested = 0;
+
   if (units.length > 0 && resumedDone === 0) {
     try {
       await deps.preflight(
@@ -625,6 +637,7 @@ async function runS1(
       existing.frontmatter.youtube_id === candidate.youtubeId
     ) {
       job.progress.done += 1;
+      ingested += 1;
       await persist();
       await appendEvent(dir, "unit", {
         slug,
@@ -641,6 +654,7 @@ async function runS1(
       // written under a slug the loop is not tracking.
       await writeCapture(vaultDir, { ...capture, slug });
       job.progress.done += 1;
+      ingested += 1;
       await persist();
       await appendEvent(dir, "unit", {
         slug,
@@ -674,7 +688,9 @@ async function runS1(
   // A cancel that landed during the final unit is still honoured.
   const final = await readJob(vaultDir, job.id);
   job.cancelRequested = final.cancelRequested;
-  return job.cancelRequested;
+  if (job.cancelRequested) return true;
+  if (ingested === 0) throw noSourcesError(units.length);
+  return false;
 }
 
 /**
@@ -696,9 +712,12 @@ async function runS1w(
   job.progress = { done: 0, total: 1 };
   await persist();
 
+  let ingested = 0;
+
   const existing = await findCaptureByUrl(vaultDir, job.input.url);
   if (existing !== null) {
     job.progress.done = 1;
+    ingested = 1;
     await persist();
     await appendEvent(dir, "unit", {
       slug: existing.slug,
@@ -706,6 +725,10 @@ async function runS1w(
       status: "skipped",
       detail: "capture present",
     });
+    const finalExisting = await readJob(vaultDir, job.id);
+    job.cancelRequested = finalExisting.cancelRequested;
+    if (job.cancelRequested) return true;
+    // ingested === 1, so no no_sources throw
     return false;
   }
 
@@ -734,6 +757,7 @@ async function runS1w(
       paragraphs: result.paragraphs,
     });
     job.progress.done = 1;
+    ingested = 1;
     await persist();
     await appendEvent(dir, "unit", { slug, stage: "S1w", status: "written" });
   } catch (error) {
@@ -754,7 +778,9 @@ async function runS1w(
 
   const final = await readJob(vaultDir, job.id);
   job.cancelRequested = final.cancelRequested;
-  return job.cancelRequested;
+  if (job.cancelRequested) return true;
+  if (ingested === 0) throw noSourcesError(1);
+  return false;
 }
 
 export interface JobQueue {

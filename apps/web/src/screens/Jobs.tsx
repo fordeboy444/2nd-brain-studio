@@ -351,6 +351,11 @@ export function Jobs() {
     selectedJob.status === "failed" &&
     selectedJob.error === "preflight_failed";
 
+  const noSourcesFailed =
+    selectedJob !== null &&
+    selectedJob.status === "failed" &&
+    selectedJob.error === "no_sources";
+
   // The server refuses a retry on a running job and on a job with no failed
   // units. The screen names both conditions before the press, in that order.
   const retryBlockedReason =
@@ -482,6 +487,10 @@ export function Jobs() {
                 {preflightFailed ? (
                   <p className="job-preflight" role="alert">
                     Transcript check failed. Retry with a fresh YouTube cookie.
+                  </p>
+                ) : noSourcesFailed ? (
+                  <p className="job-no-sources" role="alert">
+                    No sources were ingested. Nothing was written to this vault.
                   </p>
                 ) : (
                   <>

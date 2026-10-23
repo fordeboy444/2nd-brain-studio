@@ -4413,7 +4413,8 @@ button.secondary:active:not(:disabled),
   box-shadow: var(--shadow-sm);
   transition: width var(--t-med) var(--ease);
 }
-.job-preflight {
+.job-preflight,
+.job-no-sources {
   margin: 0;
   padding: var(--sp-3);
   border-radius: var(--radius-md);

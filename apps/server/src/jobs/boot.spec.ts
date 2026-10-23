@@ -264,8 +264,8 @@ describe("resumeJobs (PIPE-11)", () => {
     expect(ids).toEqual([older.id, interrupted.id]);
     await queue.idle();
     expect(queue.started).toEqual([older.id, interrupted.id]);
-    expect((await store.readJob(dirA, older.id)).status).toBe("completed");
-    expect((await store.readJob(dirB, interrupted.id)).status).toBe("completed");
+    expect((await store.readJob(dirA, older.id)).status).toBe("failed");
+    expect((await store.readJob(dirB, interrupted.id)).status).toBe("failed");
     // The completed job is never re-enqueued.
     expect(queue.started).not.toContain(finished.id);
   });
@@ -299,7 +299,7 @@ describe("resumeJobs (PIPE-11)", () => {
 
     expect(ids).toEqual([valid.id]);
     await queue.idle();
-    expect((await store.readJob(dirA, valid.id)).status).toBe("completed");
+    expect((await store.readJob(dirA, valid.id)).status).toBe("failed");
   });
 
   it("survives a parseable record with no settings instead of rejecting unhandled", async () => {
