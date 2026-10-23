@@ -37,6 +37,7 @@ names into Coolify's Environment Variables and fill in your own values.
 | `OLLAMA_BASE_URL` | `https://ollama.com` | Ollama Cloud endpoint |
 | `OLLAMA_MODEL` | `llama3.1:8b` | The model the generation stages call |
 | `SUPADATA_API_KEY` | empty | Paid fallback for the transcript cascade |
+| `BRAIN_ADMIN_TOKEN` | empty | The admin token. Empty means one is generated on first boot and written to `/data/admin-token` |
 | `SERVICE_FQDN_APP` | empty | Coolify's domain variable. Leave it empty and let Coolify assign the domain |
 
 An empty key is a working deployment: the container serves, `GET /api/health`
@@ -122,6 +123,40 @@ that file is live session material:
   with the notes. Keep it next to the vaults directory, never within it.
 - It is never part of the image either: `.dockerignore` excludes cookie files from
   every build context.
+
+## Authentication and agent tokens
+
+The deployment has one admin credential and any number of agent tokens.
+
+- **The admin token.** If `BRAIN_ADMIN_TOKEN` is set in the environment, that
+  value is the admin token. If it is empty, the container generates one on first
+  boot and writes it to `/data/admin-token` at mode 0600, inside the `okf_state`
+  volume. Read it on the host with `docker exec` (or the Coolify terminal), sign
+  in at the domain with it, and keep it out of the repository.
+- **What the admin token opens.** The browser login (it sets a signed, HMAC
+  `brain_session` cookie valid for 7 days), the token API, settings, and every
+  vault. The browser never receives an agent token, and an agent token cannot use
+  the cookie path.
+- **Agent tokens.** An agent token carries a scope: `*` (every vault) or a list
+  of vault ids. It authenticates as a Bearer credential only. Outside its scope
+  the API answers 403, and its vault list is filtered rather than refused, so an
+  agent never learns which other vaults exist. Hashes live in
+  `/data/agent-tokens.json` (mode 0600, in the `okf_state` volume); the plaintext
+  is shown once, when the token is minted.
+- **Minting.** On a machine with network access, use the skill:
+  `skills/vault-access/admin-login.sh https://your-domain <admin-token>` then
+  `skills/vault-access/provision.sh my-agent --vaults vault-a,vault-b`. Then, on
+  the agent's machine, `skills/vault-access/login.sh https://your-domain <token>`
+  stores the URL and token at `~/.config/brain-vaults/config.json` (mode 0600),
+  outside every repository.
+- **Revocation** is immediate: `DELETE /api/admin/tokens/:id` (or the admin UI)
+  removes the entry, and the agent's very next request is a 401.
+- **Rotation.** Changing `BRAIN_ADMIN_TOKEN` and redeploying rotates the admin
+  token: the session key derives from it, so every browser session is logged out
+  and has to sign in again. Agent tokens are unaffected, because they are checked
+  against `/data/agent-tokens.json`, not against the admin token.
+- **A 2nd Brain token is not a Coolify token.** Do not reuse the Coolify API key,
+  and do not paste a token into a repository, a committed `.env`, or a job log.
 
 ## After the deploy
 

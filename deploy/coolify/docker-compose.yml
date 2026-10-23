@@ -34,6 +34,11 @@ services:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-https://ollama.com}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
       SUPADATA_API_KEY: ${SUPADATA_API_KEY:-}
+      # The admin credential for the browser login and the agent-token API.
+      # Empty means the container mints one on first boot and writes it to
+      # /data/admin-token (mode 0600). Setting a value here wins over the file
+      # and is not persisted, so a rotation is a variable change plus a redeploy.
+      BRAIN_ADMIN_TOKEN: ${BRAIN_ADMIN_TOKEN:-}
       # Coolify's domain variable: leave it empty and Coolify assigns a domain
       # and terminates TLS for it.
       SERVICE_FQDN_APP: ${SERVICE_FQDN_APP:-}

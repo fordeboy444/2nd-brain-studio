@@ -313,6 +313,21 @@ describe("secret material", () => {
     }
   });
 
+  it("passes the admin token through empty and documents where the token files live", () => {
+    // An unset admin token must reach the container as an empty string so the
+    // server generates one at /data/admin-token rather than starting with a
+    // literal placeholder as the credential.
+    expect(compose).toContain("BRAIN_ADMIN_TOKEN: ${BRAIN_ADMIN_TOKEN:-}");
+    expect(envExample).toMatch(/^BRAIN_ADMIN_TOKEN=$/m);
+
+    // Both token stores sit under /data, inside the persistent volume, and the
+    // runbook has to say so along with how revocation and rotation behave.
+    expect(runbook).toContain("/data/admin-token");
+    expect(runbook).toContain("/data/agent-tokens.json");
+    expect(runbook).toMatch(/revocation/i);
+    expect(runbook).toMatch(/rotation/i);
+  });
+
   it("ships an env example of placeholders for every variable the compose file sets", () => {
     const entries = dotenvEntries(envExample);
     const byKey = new Map(entries.map((entry) => [entry.key, entry.value]));
