@@ -177,9 +177,13 @@ describe("the compose file", () => {
     const vaultRootDefault = /VAULT_ROOT[\s\S]*?\?\?\s*"([^"]+)"/.exec(configSrc)?.[1];
     expect(vaultRootDefault).toBeDefined();
 
-    expect(topLevelKeys(compose, "volumes")).toEqual(["okf_vaults"]);
+    expect(topLevelKeys(compose, "volumes")).toEqual(["okf_vaults", "okf_state"]);
     expect(compose).toContain(`okf_vaults:${vaultRootDefault}`);
     expect(compose).toContain(`VAULT_ROOT: ${vaultRootDefault}`);
+    // The secret files (Ollama key, YouTube cookie) default to /data/*, outside
+    // the vault sub-mount. Without this mount a redeploy erases them.
+    expect(compose).toContain("okf_state:/data");
+    expect(compose).not.toContain("okf_state:/data/vaults");
   });
 
   it("health-checks the route apps/server/src/routes/health.ts is mounted at", () => {

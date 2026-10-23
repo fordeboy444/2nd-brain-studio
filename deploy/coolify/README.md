@@ -1,6 +1,6 @@
 # Deploying 2nd Brain Studio on Coolify
 
-One container, one volume, one compose file. Coolify builds the image from a
+One container, two volumes, one compose file. Coolify builds the image from a
 repository URL and runs `deploy/coolify/docker-compose.yml`.
 
 You need two things this repository does not have: a git remote Coolify can read,
@@ -17,7 +17,7 @@ Create a new resource of type **Docker Compose** and fill in these fields:
 | Docker Compose Location | `/deploy/coolify/docker-compose.yml` |
 | Domain | leave it to Coolify: it generates one, writes it into `SERVICE_FQDN_APP`, and terminates TLS for it |
 | Ports | nothing to publish. The compose file `expose`s 3010 to Coolify's proxy |
-| Volume | declared in the compose file as `okf_vaults`; Coolify needs no extra setting |
+| Volume | declared in the compose file as `okf_vaults` (vault data) and `okf_state` (secrets); Coolify needs no extra setting |
 
 If the build fails, read the build log for the install step first — a Base
 Directory that is not the repository root is the most common cause (see the first
@@ -90,8 +90,11 @@ container restarting in a loop.
 
 ## Operating it
 
-- **The volume is the only state.** `/data/vaults` holds the vault markdown, the
-  registry and the job state. Everything else in the container is disposable.
+- **The volumes are the only state.** `/data/vaults` (volume `okf_vaults`) holds
+  the vault markdown, the registry and the job state. `/data` (volume
+  `okf_state`) holds the secret files — the Ollama API key and the YouTube
+  cookie. Everything else in the container is disposable, so a redeploy keeps
+  the vaults **and** the secrets.
 - **Refreshing the Python downloader means a redeploy.** `yt-dlp` is installed at
   image build time and pinned to one release, because YouTube changes break it
   without notice. Bump the pin in the `Dockerfile`, commit, and redeploy — there

@@ -38,9 +38,13 @@ services:
       # and terminates TLS for it.
       SERVICE_FQDN_APP: ${SERVICE_FQDN_APP:-}
     volumes:
-      # The only state: vault markdown, the registry and job state. A redeploy
-      # replaces the container and keeps this volume.
+      # Vault markdown, the registry and job state. The more specific mount wins
+      # over the /data mount below, so existing vault data stays where it is.
       - okf_vaults:/data/vaults
+      # Everything else that must survive a redeploy. The Ollama key file and the
+      # YouTube cookie file both default to /data/*; without this mount they sit
+      # on the container's temporary layer, and every redeploy erases them.
+      - okf_state:/data
     healthcheck:
       # GET /api/health, the route apps/server mounts. That endpoint answers 200
       # even when a credential is missing (status: degraded), so an incomplete
@@ -59,3 +63,4 @@ services:
 
 volumes:
   okf_vaults:
+  okf_state:
