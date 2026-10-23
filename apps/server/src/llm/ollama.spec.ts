@@ -103,6 +103,23 @@ describe("createOllamaClient request shape", () => {
       `Bearer ${secret}`,
     );
   });
+
+  it("resolves a provided key on every call, so a saved key needs no restart", async () => {
+    const keys = ["sk-first", "sk-second"];
+    let reads = 0;
+    const { calls, impl } = recordingFetch(() => okReply());
+    const client = createOllamaClient({
+      apiKey: async () => keys[reads++],
+      fetchImpl: impl,
+    });
+
+    await client.chat(MESSAGES, OPTIONS);
+    await client.chat(MESSAGES, OPTIONS);
+
+    expect(reads).toBe(2);
+    expect(headersOf(calls[0] as FetchCall).Authorization).toBe("Bearer sk-first");
+    expect(headersOf(calls[1] as FetchCall).Authorization).toBe("Bearer sk-second");
+  });
 });
 
 describe("createOllamaClient reply mapping", () => {

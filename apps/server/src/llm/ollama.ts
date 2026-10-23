@@ -78,7 +78,13 @@ export function redactSecret(text: string, secret: string | undefined): string {
 }
 
 export interface OllamaClientDeps {
-  apiKey: string;
+  /**
+   * The API key, or a function that returns it (or a promise of it) at call
+   * time. A function lets the job bootstrap resolve a key pasted in Settings
+   * (or set in the env) without a restart; the value is read once per `chat`
+   * call.
+   */
+  apiKey: string | (() => string | undefined | Promise<string | undefined>);
   /** Defaults to the global `fetch`. */
   fetchImpl?: typeof globalThis.fetch;
   /** Defaults to a real timer; injected so a backoff spec does not wait. */
@@ -124,10 +130,16 @@ function usageCount(value: unknown): number {
 export function createOllamaClient(deps: OllamaClientDeps): LlmClient {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   const sleep = deps.sleep ?? defaultSleep;
-  const apiKey = deps.apiKey;
+  const apiKeyProvider = deps.apiKey;
 
   return {
     async chat(messages, options) {
+      // Resolve at call time so a key set in Settings (or the env) takes effect
+      // without a restart. A missing key is a hard failure here; the job
+      // bootstrap wraps this client so a missing key becomes a typed skip.
+      const resolved =
+        typeof apiKeyProvider === "function" ? apiKeyProvider() : apiKeyProvider;
+      const apiKey = await resolved;
       const url = `${options.baseUrl.replace(/\/+$/, "")}/api/chat`;
       const body = JSON.stringify({
         model: options.model,

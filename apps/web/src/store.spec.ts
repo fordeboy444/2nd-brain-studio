@@ -322,6 +322,8 @@ const SETTINGS_PAYLOAD = {
   hasYoutubeCookie: false,
   youtubeCookieUpdatedAt: null,
   hasSupadataKey: false,
+  hasOllamaKey: false,
+  ollamaKeyUpdatedAt: null,
   llmConfigured: true,
 };
 

@@ -221,6 +221,8 @@ export interface SettingsPayload {
   hasYoutubeCookie: boolean;
   youtubeCookieUpdatedAt: string | null;
   hasSupadataKey: boolean;
+  hasOllamaKey: boolean;
+  ollamaKeyUpdatedAt: string | null;
   llmConfigured: boolean;
 }
 
@@ -285,6 +287,29 @@ export function saveYoutubeCookieHeader(text: string): Promise<{ ok: true }> {
 /** DELETE /api/settings/youtube-cookie — idempotent; absence is a success. */
 export function deleteYoutubeCookie(): Promise<{ hasYoutubeCookie: false }> {
   return request<{ hasYoutubeCookie: false }>("/settings/youtube-cookie", {
+    method: "DELETE",
+  });
+}
+
+/**
+ * POST /api/settings/ollama-key — the raw API key as the raw body.
+ *
+ * `text/plain` is the contract (the route refuses anything else with 415), and
+ * the key is never JSON-encoded. The answer is the fixed `{ok:true}`; the key
+ * is in no response field. Saving a key here flips `llmConfigured` to true on
+ * the next settings load without a restart.
+ */
+export function saveOllamaKey(text: string): Promise<{ ok: true }> {
+  return request<{ ok: true }>("/settings/ollama-key", {
+    method: "POST",
+    headers: { "content-type": "text/plain" },
+    body: text,
+  });
+}
+
+/** DELETE /api/settings/ollama-key — idempotent; absence is a success. */
+export function deleteOllamaKey(): Promise<{ hasOllamaKey: false }> {
+  return request<{ hasOllamaKey: false }>("/settings/ollama-key", {
     method: "DELETE",
   });
 }

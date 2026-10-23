@@ -1,18 +1,21 @@
 import { Hono } from "hono";
 import { config } from "../config.js";
 import { getLockState } from "../lock.js";
+import { resolveOllamaKey } from "../settings/ollamaKey.js";
 
 /**
- * GET /api/health — synchronous over in-memory config only. Reads no filesystem
- * and awaits nothing, so it stays answerable while a job runner is in flight
- * (API-08). The payload is an explicit allowlist; secrets are never spread in.
+ * GET /api/health — answers over in-memory config plus the on-disk Ollama key
+ * file. The key file read is a single small `stat`+`read`; it is awaited so a
+ * job runner in flight never gets a stale `degraded` after a key was saved in
+ * Settings (API-08). The payload is an explicit allowlist; the key body is
+ * never spread in — only the boolean `ok`.
  */
 export const health = new Hono();
 
 const startedAt = Date.now();
 
-health.get("/", (c) => {
-  const ok = config.llmConfigured;
+health.get("/", async (c) => {
+  const ok = (await resolveOllamaKey()) !== undefined;
   const lockState = getLockState();
   const payload = {
     ok,

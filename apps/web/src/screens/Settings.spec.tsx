@@ -38,6 +38,8 @@ function settingsPayload(over: Partial<SettingsPayload> = {}): SettingsPayload {
     hasYoutubeCookie: false,
     youtubeCookieUpdatedAt: null,
     hasSupadataKey: false,
+    hasOllamaKey: false,
+    ollamaKeyUpdatedAt: null,
     llmConfigured: true,
     ...over,
   };
@@ -92,6 +94,9 @@ interface Stub {
   uploads: Array<{ contentType: string; body: string }>;
   headerUploads: Array<{ contentType: string; body: string }>;
   headerStatus: number;
+  keyUploads: Array<{ contentType: string; body: string }>;
+  keyUploadStatus: number;
+  keyDeletes: number;
   deletes: number;
   settingsPuts: number;
   settingsPutStatus: number;
@@ -222,6 +227,32 @@ function stubServer(): void {
       return json({ hasYoutubeCookie: false });
     }
 
+    if (url === "/api/settings/ollama-key" && method === "POST") {
+      const headers = init?.headers instanceof Headers ? init.headers : new Headers(init?.headers);
+      stub.keyUploads.push({
+        contentType: headers.get("content-type") ?? "",
+        body: typeof init?.body === "string" ? init.body : "",
+      });
+      if (stub.keyUploadStatus !== 200) {
+        return json(
+          { error: "invalid_key", message: "The API key is not usable (bad_shape)." },
+          stub.keyUploadStatus,
+        );
+      }
+      stub.current = settingsPayload({
+        hasOllamaKey: true,
+        ollamaKeyUpdatedAt: "2026-10-18T12:00:00Z",
+        llmConfigured: true,
+      });
+      return json({ ok: true });
+    }
+
+    if (url === "/api/settings/ollama-key" && method === "DELETE") {
+      stub.keyDeletes += 1;
+      stub.current = settingsPayload({ hasOllamaKey: false, llmConfigured: false });
+      return json({ hasOllamaKey: false });
+    }
+
     return json({});
   }) as unknown as typeof fetch;
 }
@@ -345,6 +376,9 @@ beforeEach(() => {
     uploads: [],
     headerUploads: [],
     headerStatus: 200,
+    keyUploads: [],
+    keyUploadStatus: 200,
+    keyDeletes: 0,
     deletes: 0,
     settingsPuts: 0,
     settingsPutStatus: 200,
@@ -587,11 +621,34 @@ it("shows the exact Test connection failure copy", async () => {
   expect(host.textContent).toContain("Test failed: timeout.");
 });
 
-it("says the key is missing when the server is unconfigured", async () => {
+it("says the key is missing, points at the input and no longer asks for a restart", async () => {
   stub.current = settingsPayload({ llmConfigured: false });
   const { host } = await mountSettings();
 
-  expect(host.textContent).toContain("Set OLLAMA_API_KEY and restart.");
+  expect(host.textContent).toContain(
+    "Set an Ollama API key below to test the connection.",
+  );
+  expect(host.textContent).not.toContain("restart");
+  expect(field(host, "ollama-key")).toBeTruthy();
+});
+
+it("points the degraded banner at the input instead of a restart", async () => {
+  useStore.setState({
+    health: {
+      ok: false,
+      status: "degraded",
+      service: "2nd-brain",
+      version: "0.1.0",
+      uptimeSec: 10,
+      time: "2026-10-18T12:00:00Z",
+    },
+  });
+  const { host } = await mountSettings();
+
+  expect(host.textContent).toContain(
+    "Ollama API key is not configured. Paste it in the LLM section below, or set OLLAMA_API_KEY in the deployment environment.",
+  );
+  expect(host.textContent).not.toContain("restart");
 });
 
 /* -------------------------------------------------------------------------
@@ -644,6 +701,79 @@ it("sends nothing and asks for a header when the textarea is empty", async () =>
   expect(stub.headerUploads.length).toBe(0);
   expect(host.textContent).toContain("Paste a Cookie header first.");
   expect(host.textContent).not.toContain("YouTube cookie saved.");
+});
+
+/* -------------------------------------------------------------------------
+   Ollama API key
+
+   The reported bug: the Settings page had no control for the key at all,
+   only a "set it and restart" note. These specs drive the real screen so the
+   missing input cannot come back unnoticed.
+   ------------------------------------------------------------------------- */
+
+const OLLAMA_KEY = "sk-MARKER-key-7a1e2c-do-not-render";
+
+it("offers a password input and never asks the user to restart", async () => {
+  stub.current = settingsPayload({ llmConfigured: false, hasOllamaKey: false });
+  const { host } = await mountSettings();
+
+  const input = field(host, "ollama-key");
+  expect(input.type).toBe("password");
+  expect(host.textContent).toContain("No API key saved. Paste one below.");
+  expect(buttonByText(host, "Save API key")).toBeTruthy();
+});
+
+it("sends the pasted key as raw text/plain, then clears it and never renders it", async () => {
+  const { host, render } = await mountSettings();
+
+  const input = await typeInto(render, host, "ollama-key", `  ${OLLAMA_KEY}  `);
+  expect(stub.keyUploads.length).toBe(0);
+
+  await render(() => buttonByText(host, "Save API key").click());
+
+  expect(stub.keyUploads.length).toBe(1);
+  expect(stub.keyUploads[0]?.contentType).toContain("text/plain");
+  expect(stub.keyUploads[0]?.contentType).not.toContain("json");
+  // The value is trimmed, and the key is the body - never a JSON envelope.
+  expect(stub.keyUploads[0]?.body).toBe(OLLAMA_KEY);
+  expect(host.textContent).toContain("API key saved.");
+  expect(input.value).toBe("");
+  // The credential is in the request body and nowhere the user can read it.
+  expect(host.textContent).not.toContain("MARKER-key-7a1e2c-do-not-render");
+});
+
+it("keeps the typed key and shows the exact copy when the key is rejected", async () => {
+  stub.keyUploadStatus = 400;
+  const { host, render } = await mountSettings();
+
+  await typeInto(render, host, "ollama-key", OLLAMA_KEY);
+  await render(() => buttonByText(host, "Save API key").click());
+
+  expect(stub.keyUploads.length).toBe(1);
+  expect(host.textContent).toContain(
+    "The key was not accepted. Check it is a single line.",
+  );
+  expect(field(host, "ollama-key").value).toBe(OLLAMA_KEY);
+});
+
+it("asks before removing the saved key and reports success", async () => {
+  stub.current = settingsPayload({
+    hasOllamaKey: true,
+    ollamaKeyUpdatedAt: "2026-10-18T12:00:00Z",
+    llmConfigured: true,
+  });
+  const { host, render } = await mountSettings();
+
+  await render(() => buttonByText(host, "Remove key").click());
+  expect(document.body.textContent).toContain("Remove the saved Ollama API key?");
+  expect(stub.keyDeletes).toBe(0);
+
+  const confirm = document.querySelector<HTMLButtonElement>(".confirm-actions .primary");
+  await render(() => confirm?.click());
+
+  expect(stub.keyDeletes).toBe(1);
+  expect(host.textContent).toContain("API key removed.");
+  expect(host.textContent).toContain("No API key saved. Paste one below.");
 });
 
 /* -------------------------------------------------------------------------

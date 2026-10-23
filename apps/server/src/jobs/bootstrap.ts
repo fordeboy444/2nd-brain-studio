@@ -18,7 +18,8 @@ import {
 } from "../ingest/transcript.js";
 import { isYouTubeChannelUrl } from "../ingest/urls.js";
 import { classifyYtDlpError, type YtDlpRun } from "../ingest/ytdlp.js";
-import { createOllamaClient } from "../llm/ollama.js";
+import { createOllamaClient, type LlmChatOptions, type LlmMessage } from "../llm/ollama.js";
+import { resolveOllamaKey } from "../settings/ollamaKey.js";
 import { readRegistry, vaultDirPath } from "../vaults/registry.js";
 import {
   createDefaultStageDeps,
@@ -30,6 +31,7 @@ import { createTranscriptFetcher } from "./stages/fetch.js";
 import { classifyWebError, createWebFetcher } from "./stages/web.js";
 import { listJobs } from "./store.js";
 import type { JobRecord, SkipReason } from "./types.js";
+import { SkipError } from "./types.js";
 
 const log = pino({ name: "jobs" });
 
@@ -84,10 +86,24 @@ export function createIngestStageDeps(overrides: IngestDeps = {}): StageDeps {
     ...base,
     // The key is the only live secret here. Every per-job value travels on
     // each `callCached` request from the job snapshot, never from this seam.
-    llm:
-      config.ollamaApiKey === undefined
-        ? base.llm
-        : createOllamaClient({ apiKey: config.ollamaApiKey }),
+    // The key is resolved at call time (env var wins, then the on-disk key
+    // pasted in Settings) so saving a key takes effect without a restart. A
+    // missing key becomes the same typed SkipError the stub throws, so S2
+    // records an `llm_not_configured` skip rather than a `model_error`.
+    llm: (() => {
+      const client = createOllamaClient({ apiKey: () => resolveOllamaKey() });
+      return {
+        async chat(messages: readonly LlmMessage[], options: LlmChatOptions) {
+          if ((await resolveOllamaKey()) === undefined) {
+            throw new SkipError(
+              "llm_not_configured",
+              "Set an Ollama API key in Settings or OLLAMA_API_KEY.",
+            );
+          }
+          return client.chat(messages, options);
+        },
+      };
+    })(),
     fetchTranscript: createTranscriptFetcher(cascade),
     fetchWeb: createWebFetcher({
       fetch: overrides.fetch,

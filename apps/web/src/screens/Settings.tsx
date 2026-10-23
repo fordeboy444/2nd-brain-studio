@@ -45,6 +45,8 @@ export function Settings() {
   const uploadCookie = useStore((s) => s.uploadCookie);
   const saveCookieHeader = useStore((s) => s.saveCookieHeader);
   const deleteCookie = useStore((s) => s.deleteCookie);
+  const saveOllamaKey = useStore((s) => s.saveOllamaKey);
+  const deleteOllamaKey = useStore((s) => s.deleteOllamaKey);
 
   const testLlmResult = useStore((s) => s.testLlmResult);
   const runTestConnection = useStore((s) => s.runTestConnection);
@@ -87,6 +89,13 @@ export function Settings() {
   // render away from the screen, and a successful save clears this field.
   const [cookieHeader, setCookieHeader] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // The typed Ollama key lives here and nowhere else: a store copy would be one
+  // render away from the screen. A successful save clears the field so the
+  // credential is not left visible; the server never returns the body.
+  const [ollamaKey, setOllamaKey] = useState("");
+  const [ollamaKeyNotice, setOllamaKeyNotice] = useState<string | null>(null);
+  const [confirmDeleteOllamaKey, setConfirmDeleteOllamaKey] = useState(false);
 
   // The one banner condition this phase has. No `onFade`: a misconfigured
   // server is a fact, not an acknowledgement, so the notice stays until the
@@ -296,7 +305,7 @@ export function Settings() {
     settings === null || settings === undefined
       ? null
       : settings.llmConfigured === false
-        ? "Set OLLAMA_API_KEY and restart."
+        ? "Set an Ollama API key below to test the connection."
         : testLlmResult === null
           ? null
           : testLlmResult.ok
@@ -304,6 +313,33 @@ export function Settings() {
             : `Test failed: ${testLlmResult.reason ?? "unknown error"}.`;
   const testFailed =
     settings?.llmConfigured === false || (testLlmResult !== null && !testLlmResult.ok);
+
+  const onSaveOllamaKey = async () => {
+    const text = ollamaKey.trim();
+    if (text === "") {
+      setOllamaKeyNotice("Paste an API key first.");
+      return;
+    }
+    setOllamaKeyNotice(null);
+    try {
+      await saveOllamaKey(text);
+      setOllamaKey("");
+      setOllamaKeyNotice("API key saved.");
+    } catch {
+      setOllamaKeyNotice("The key was not accepted. Check it is a single line.");
+    }
+  };
+
+  const onDeleteOllamaKey = async () => {
+    try {
+      await deleteOllamaKey();
+      setOllamaKeyNotice("API key removed.");
+    } catch {
+      setOllamaKeyNotice("Couldn't remove the API key. Try again in a moment.");
+    } finally {
+      setConfirmDeleteOllamaKey(false);
+    }
+  };
 
   return (
     <div
@@ -333,7 +369,8 @@ export function Settings() {
         </div>
 
         <Banner show={notice} role="status">
-          Ollama API key is not configured. Set OLLAMA_API_KEY and restart.
+          Ollama API key is not configured. Paste it in the LLM section below,
+          or set OLLAMA_API_KEY in the deployment environment.
         </Banner>
 
         {/* One error slot for every settings save. It lives at the top of the
@@ -557,6 +594,66 @@ export function Settings() {
                 onBlur={saveLlm}
               />
             </div>
+
+            {/* The Ollama Cloud API key. Stored on the server at mode 0600 and
+                never read back: the row below shows only presence + a timestamp
+                when one is saved. A paste here flips `llmConfigured` to true on
+                the next settings load, with no restart. */}
+            <div className="settings-field">
+              <span className="field-label">API key</span>
+              {settings === null || settings === undefined ? (
+                <p className="muted" aria-busy="true" style={{ margin: 0 }}>
+                  Checking…
+                </p>
+              ) : settings.hasOllamaKey ? (
+                <p className="muted" style={{ margin: 0 }}>
+                  API key saved
+                  {settings.ollamaKeyUpdatedAt === null ||
+                  settings.ollamaKeyUpdatedAt === undefined
+                    ? "."
+                    : ` ${formatWhen(settings.ollamaKeyUpdatedAt)}.`}
+                </p>
+              ) : (
+                <p className="muted" style={{ margin: 0 }}>
+                  No API key saved. Paste one below.
+                </p>
+              )}
+            </div>
+            <div className="settings-field">
+              <label className="field-label" htmlFor="ollama-key">
+                {settings?.hasOllamaKey === true ? "Replace key" : "New key"}
+              </label>
+              <input
+                id="ollama-key"
+                type="password"
+                autoComplete="off"
+                value={ollamaKey}
+                placeholder="sk-..."
+                onChange={(e) => setOllamaKey(e.target.value)}
+              />
+              <div className="settings-row" style={{ marginTop: "var(--sp-2)" }}>
+                <AsyncButton
+                  onClick={onSaveOllamaKey}
+                  disabled={ollamaKey.trim() === ""}
+                  spinnerTone="neutral"
+                >
+                  Save API key
+                </AsyncButton>
+                {settings?.hasOllamaKey === true && (
+                  <button
+                    type="button"
+                    className="ghost-pill"
+                    onClick={() => setConfirmDeleteOllamaKey(true)}
+                  >
+                    Remove key
+                  </button>
+                )}
+              </div>
+            </div>
+            <Banner show={ollamaKeyNotice !== null} role="status">
+              {ollamaKeyNotice}
+            </Banner>
+
             <div className="settings-actions">
               <AsyncButton onClick={runTestConnection} spinnerTone="neutral">
                 Test connection
@@ -726,6 +823,17 @@ export function Settings() {
           onConfirm={onDeleteCookie}
         >
           <p>The next transcript fetch runs without a signed-in session.</p>
+        </ConfirmDialog>
+      )}
+
+      {confirmDeleteOllamaKey && (
+        <ConfirmDialog
+          title="Remove the saved Ollama API key?"
+          confirmLabel="Remove key"
+          onCancel={() => setConfirmDeleteOllamaKey(false)}
+          onConfirm={onDeleteOllamaKey}
+        >
+          <p>LLM stages will skip until a new key is saved or OLLAMA_API_KEY is set.</p>
         </ConfirmDialog>
       )}
     </div>

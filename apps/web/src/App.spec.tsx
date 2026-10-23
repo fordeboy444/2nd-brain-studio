@@ -193,7 +193,7 @@ it("renders the settings and jobs overlays, and the reserved ones as an empty sl
   });
   expect(host.querySelector('.overlay-slot[data-overlay="settings"] .modal')).toBeTruthy();
   expect(host.textContent).toContain(
-    "Ollama API key is not configured. Set OLLAMA_API_KEY and restart.",
+    "Ollama API key is not configured. Paste it in the LLM section below, or set OLLAMA_API_KEY in the deployment environment.",
   );
 
   // `jobs` is a real screen now, and only its own overlay value renders it.

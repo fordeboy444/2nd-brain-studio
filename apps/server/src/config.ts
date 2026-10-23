@@ -52,8 +52,17 @@ export const config = Object.freeze({
   port: optionalInt("PORT", 3010),
   /** Root directory holding all vault directories and vaults.json. */
   vaultRoot: optional("VAULT_ROOT") ?? "/data/vaults",
-  /** Ollama Cloud API key. Absent or empty ⇒ degraded health. Never serialized. */
+  /** Ollama Cloud API key. Absent or empty ⇒ degraded health. Never serialized.
+   *  Read once at boot; an in-app pasted key (ollamaKeyPath) is the fallback
+   *  used only when this is unset. See settings/ollamaKey.ts. */
   ollamaApiKey: optional("OLLAMA_API_KEY"),
+  /**
+   * Path to the optional on-disk Ollama API key file (mode 0600). The env var
+   * OLLAMA_API_KEY wins over this when set; when unset, the key pasted in
+   * Settings lives here so it can be changed without a redeploy. The default
+   * matches the deployment volume (`/data`), never the repository.
+   */
+  ollamaKeyPath: optional("OLLAMA_KEY_PATH") ?? "/data/ollama-api-key",
   /** Ollama Cloud base URL. */
   ollamaBaseUrl: optional("OLLAMA_BASE_URL") ?? "https://ollama.com",
   /** Ollama model id used by Phase 4 LLM stages. */
@@ -80,10 +89,10 @@ export const config = Object.freeze({
   serviceName: "2nd-brain-studio",
   /** Service version, surfaced in /api/health. */
   version: pkgVersion,
-  /** True iff an Ollama API key is configured. Drives the health status. */
-  get llmConfigured(): boolean {
-    return this.ollamaApiKey !== undefined;
-  },
+  // There is deliberately no `llmConfigured` getter here: it would answer from
+  // the boot-time env only and report `degraded` after a key was pasted in
+  // Settings. Health and the settings status call `resolveOllamaKey()` at
+  // request time instead (settings/ollamaKey.ts).
 });
 
 export type AppConfig = typeof config;

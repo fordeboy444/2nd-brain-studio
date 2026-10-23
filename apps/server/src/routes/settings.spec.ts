@@ -29,11 +29,13 @@ vi.mock("pino", () => {
 const ORIGINAL_VAULT_ROOT = process.env.VAULT_ROOT;
 const ORIGINAL_COOKIE_PATH = process.env.YOUTUBE_COOKIE_PATH;
 const ORIGINAL_OLLAMA_KEY = process.env.OLLAMA_API_KEY;
+const ORIGINAL_OLLAMA_KEY_PATH = process.env.OLLAMA_KEY_PATH;
 const ORIGINAL_OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL;
 const ORIGINAL_SUPADATA_KEY = process.env.SUPADATA_API_KEY;
 
 let root = "";
 let cookiePath = "";
+let ollamaKeyPath = "";
 
 interface ReloadOptions {
   ollamaKey?: string;
@@ -81,8 +83,10 @@ function upload(
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "settings-routes-"));
   cookiePath = join(root, "youtube-cookie.txt");
+  ollamaKeyPath = join(root, "ollama-api-key");
   process.env.VAULT_ROOT = root;
   process.env.YOUTUBE_COOKIE_PATH = cookiePath;
+  process.env.OLLAMA_KEY_PATH = ollamaKeyPath;
   logHarness.entries.length = 0;
 });
 
@@ -91,6 +95,8 @@ afterEach(async () => {
   else process.env.VAULT_ROOT = ORIGINAL_VAULT_ROOT;
   if (ORIGINAL_COOKIE_PATH === undefined) delete process.env.YOUTUBE_COOKIE_PATH;
   else process.env.YOUTUBE_COOKIE_PATH = ORIGINAL_COOKIE_PATH;
+  if (ORIGINAL_OLLAMA_KEY_PATH === undefined) delete process.env.OLLAMA_KEY_PATH;
+  else process.env.OLLAMA_KEY_PATH = ORIGINAL_OLLAMA_KEY_PATH;
   if (ORIGINAL_OLLAMA_KEY === undefined) delete process.env.OLLAMA_API_KEY;
   else process.env.OLLAMA_API_KEY = ORIGINAL_OLLAMA_KEY;
   if (ORIGINAL_OLLAMA_BASE_URL === undefined) delete process.env.OLLAMA_BASE_URL;
@@ -315,14 +321,17 @@ describe("GET /api/settings", () => {
 
     const body = JSON.parse(text) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual([
+      "hasOllamaKey",
       "hasSupadataKey",
       "hasYoutubeCookie",
       "llmConfigured",
+      "ollamaKeyUpdatedAt",
       "settings",
       "youtubeCookieUpdatedAt",
     ]);
     expect(body.hasYoutubeCookie).toBe(true);
     expect(body.hasSupadataKey).toBe(false);
+    expect(body.hasOllamaKey).toBe(false);
     expect(body.llmConfigured).toBe(false);
     expect(body.settings).toEqual({
       llm: {
@@ -524,5 +533,182 @@ describe("DELETE /api/settings/youtube-cookie", () => {
     const second = await routes.settings.request("/youtube-cookie", { method: "DELETE" });
     expect(second.status).toBe(200);
     expect(await second.json()).toEqual({ hasYoutubeCookie: false });
+  });
+});
+
+/* -------------------------------------------------------------------------
+   The Ollama API key (settings-no-ollama-key-input)
+
+   The bug: the key was env-var-only, read once at boot, with no control on
+   the Settings page and no way to change it without a redeploy. These specs
+   pin the fix: a browser POST lands the key at mode 0600, and every consumer
+   resolves it at call time, so the save takes effect with no restart.
+   ------------------------------------------------------------------------- */
+
+function saveKey(
+  routes: Routes,
+  body: string,
+  contentType = "text/plain;charset=UTF-8",
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+  return routes.settings.request("/ollama-key", {
+    method: "POST",
+    headers: { "content-type": contentType, ...extraHeaders },
+    body,
+  });
+}
+
+describe("POST /api/settings/ollama-key", () => {
+  it("stores a pasted key at mode 0600 and answers exactly {ok:true}", async () => {
+    const routes = await reload();
+
+    const res = await saveKey(routes, "sk-ollama-abc123");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+
+    // One trailing newline, the same shape a shell-written secret has.
+    expect(await readFile(ollamaKeyPath, "utf8")).toBe("sk-ollama-abc123\n");
+    expect((await stat(ollamaKeyPath)).mode & 0o777).toBe(0o600);
+    // The atomic temp+rename leaves no sibling behind.
+    expect(await readdir(root)).toEqual(["ollama-api-key"]);
+  });
+
+  it("flips llmConfigured and hasOllamaKey on the next status read, with no restart", async () => {
+    const routes = await reload();
+
+    const before = (await (await routes.settings.request("/")).json()) as {
+      llmConfigured: boolean;
+      hasOllamaKey: boolean;
+    };
+    expect(before.llmConfigured).toBe(false);
+    expect(before.hasOllamaKey).toBe(false);
+
+    expect((await saveKey(routes, "sk-ollama-abc123")).status).toBe(200);
+
+    const after = (await (await routes.settings.request("/")).json()) as {
+      llmConfigured: boolean;
+      hasOllamaKey: boolean;
+      ollamaKeyUpdatedAt: string | null;
+    };
+    expect(after.llmConfigured).toBe(true);
+    expect(after.hasOllamaKey).toBe(true);
+    expect(Number.isNaN(Date.parse(after.ollamaKeyUpdatedAt ?? ""))).toBe(false);
+  });
+
+  it("lets Test connection use the saved key without a reload", async () => {
+    const routes = await reload({ ollamaBaseUrl: "https://ollama.example" });
+    await saveKey(routes, "sk-from-settings");
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      "Bearer sk-from-settings",
+    );
+  });
+
+  it("keeps OLLAMA_API_KEY authoritative over a key pasted in Settings", async () => {
+    const routes = await reload({
+      ollamaKey: "sk-from-env",
+      ollamaBaseUrl: "https://ollama.example",
+    });
+    await saveKey(routes, "sk-from-settings");
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await routes.settings.request("/test-llm", { method: "POST" });
+    expect(res.status).toBe(200);
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sk-from-env");
+  });
+
+  it("maps a JSON content type to 415 and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await saveKey(routes, JSON.stringify({ key: "sk-abc" }), "application/json");
+    expect(res.status).toBe(415);
+    expect(((await res.json()) as { error: string }).error).toBe("unsupported_media_type");
+    await expect(stat(ollamaKeyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a cross-origin save before reading the body", async () => {
+    const routes = await reload();
+
+    const res = await saveKey(routes, "sk-abc", "text/plain", {
+      origin: "https://evil.example",
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toBe("origin_mismatch");
+    await expect(stat(ollamaKeyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("maps an empty body and a multi-line value to 400 and writes nothing", async () => {
+    const routes = await reload();
+
+    const empty = await saveKey(routes, "   \n");
+    expect(empty.status).toBe(400);
+    expect(((await empty.json()) as { error: string }).error).toBe("invalid_key");
+
+    const multiline = await saveKey(routes, "sk-line-one\nsk-line-two");
+    expect(multiline.status).toBe(400);
+    expect(((await multiline.json()) as { error: string }).error).toBe("invalid_key");
+
+    await expect(stat(ollamaKeyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("maps a body over 4 KiB to 413 and writes nothing", async () => {
+    const routes = await reload();
+
+    const res = await saveKey(routes, "a".repeat(4 * 1024 + 1));
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: string }).error).toBe("key_too_large");
+    await expect(stat(ollamaKeyPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("never echoes the key in the response or in any log argument", async () => {
+    const routes = await reload();
+    const marker = "MARKER-ollama-9f3c1b-do-not-log";
+
+    const res = await saveKey(routes, marker);
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain(marker);
+
+    // The marker reached the file - the body was processed, not dropped.
+    expect(await readFile(ollamaKeyPath, "utf8")).toContain(marker);
+    expect(JSON.stringify(logHarness.entries)).not.toContain(marker);
+
+    // Only the route name, the byte count and the ok flag are logged.
+    const first = logHarness.entries[0] ?? [];
+    const fields = first[0] as Record<string, unknown>;
+    expect(Object.keys(fields).sort()).toEqual(["bytes", "ok", "route"]);
+    expect(fields.route).toBe("settings.ollama-key");
+    expect(fields.ok).toBe(true);
+  });
+});
+
+describe("DELETE /api/settings/ollama-key", () => {
+  it("removes the file, flips llmConfigured off, and is idempotent", async () => {
+    const routes = await reload();
+    await saveKey(routes, "sk-ollama-abc123");
+
+    const first = await routes.settings.request("/ollama-key", { method: "DELETE" });
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ hasOllamaKey: false });
+    await expect(stat(ollamaKeyPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const after = (await (await routes.settings.request("/")).json()) as {
+      llmConfigured: boolean;
+      hasOllamaKey: boolean;
+    };
+    expect(after.llmConfigured).toBe(false);
+    expect(after.hasOllamaKey).toBe(false);
+
+    const second = await routes.settings.request("/ollama-key", { method: "DELETE" });
+    expect(second.status).toBe(200);
+    expect(await second.json()).toEqual({ hasOllamaKey: false });
   });
 });

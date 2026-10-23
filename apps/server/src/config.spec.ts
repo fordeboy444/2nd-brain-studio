@@ -27,12 +27,11 @@ afterEach(() => {
 });
 
 describe("optional / config (OPS-07)", () => {
-  it("treats an empty OLLAMA_API_KEY as unset (llmConfigured false)", async () => {
+  it("treats an empty OLLAMA_API_KEY as unset", async () => {
     process.env.OLLAMA_API_KEY = "";
     const { config, optional } = await loadConfig();
     expect(optional("OLLAMA_API_KEY")).toBeUndefined();
     expect(config.ollamaApiKey).toBeUndefined();
-    expect(config.llmConfigured).toBe(false);
   });
 
   it("treats an all-whitespace value as unset", async () => {
@@ -40,20 +39,18 @@ describe("optional / config (OPS-07)", () => {
     const { config, optional } = await loadConfig();
     expect(optional("OLLAMA_API_KEY")).toBeUndefined();
     expect(config.ollamaApiKey).toBeUndefined();
-    expect(config.llmConfigured).toBe(false);
   });
 
   it("trims leading and trailing whitespace from a present value", async () => {
     process.env.OLLAMA_API_KEY = "  sk-test  ";
     const { config } = await loadConfig();
     expect(config.ollamaApiKey).toBe("sk-test");
-    expect(config.llmConfigured).toBe(true);
   });
 
-  it("reports healthy when the key is present", async () => {
+  it("keeps a present key as the env source of truth", async () => {
     process.env.OLLAMA_API_KEY = "sk-real";
     const { config } = await loadConfig();
-    expect(config.llmConfigured).toBe(true);
+    expect(config.ollamaApiKey).toBe("sk-real");
   });
 
   it("falls back to /data/vaults when VAULT_ROOT is unset", async () => {

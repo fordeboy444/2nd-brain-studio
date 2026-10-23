@@ -6,6 +6,7 @@ import {
   createVault as apiCreateVault,
   deleteVault as apiDeleteVault,
   deleteYoutubeCookie as apiDeleteYoutubeCookie,
+  deleteOllamaKey as apiDeleteOllamaKey,
   getHealth,
   getJob as apiGetJob,
   getSettings as apiGetSettings,
@@ -15,6 +16,7 @@ import {
   putSettings as apiPutSettings,
   readFile,
   retryJob as apiRetryJob,
+  saveOllamaKey as apiSaveOllamaKey,
   saveYoutubeCookieHeader as apiSaveYoutubeCookieHeader,
   startJob as apiStartJob,
   testLlm as apiTestLlm,
@@ -325,6 +327,9 @@ export interface AppState {
   /** A pasted Cookie header, sent as the raw `text/plain` body. */
   saveCookieHeader: (text: string) => Promise<void>;
   deleteCookie: () => Promise<void>;
+  /** The Ollama API key, pasted and sent as the raw `text/plain` body. */
+  saveOllamaKey: (text: string) => Promise<void>;
+  deleteOllamaKey: () => Promise<void>;
   runTestConnection: () => Promise<void>;
   runPreview: (input: PreviewInput) => Promise<void>;
   /**
@@ -980,6 +985,36 @@ export const useStore = create<AppState>((set, get) => {
             s.settings === null
               ? s.settings
               : { ...s.settings, hasYoutubeCookie: false, youtubeCookieUpdatedAt: null },
+          settingsError: null,
+        }));
+      }
+    },
+
+    /**
+     * Save one Ollama API key and refresh the redacted status. Same rule as the
+     * cookie uploads: the text goes straight to the API boundary and no copy is
+     * kept here, and a failed refresh must not report a failed save. The key
+     * flips `llmConfigured` to true on the refreshed payload.
+     */
+    saveOllamaKey: async (text) => {
+      await apiSaveOllamaKey(text);
+      try {
+        set({ settings: await apiGetSettings(), settingsError: null });
+      } catch {
+        set({ settingsError: null });
+      }
+    },
+
+    deleteOllamaKey: async () => {
+      await apiDeleteOllamaKey();
+      try {
+        set({ settings: await apiGetSettings(), settingsError: null });
+      } catch {
+        set((s) => ({
+          settings:
+            s.settings === null
+              ? s.settings
+              : { ...s.settings, hasOllamaKey: false, ollamaKeyUpdatedAt: null },
           settingsError: null,
         }));
       }

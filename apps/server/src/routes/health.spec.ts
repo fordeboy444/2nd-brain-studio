@@ -1,17 +1,27 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const ORIG_ENV = { ...process.env };
+
+let keyDir = "";
+let keyPath = "";
 
 async function reload() {
   vi.resetModules();
   return (await import("./health.js")) as typeof import("./health.js");
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  keyDir = await mkdtemp(join(tmpdir(), "health-key-"));
+  keyPath = join(keyDir, "ollama-api-key");
+  process.env.OLLAMA_KEY_PATH = keyPath;
   delete process.env.OLLAMA_API_KEY;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await rm(keyDir, { recursive: true, force: true });
   for (const k of Object.keys(process.env)) {
     if (!(k in ORIG_ENV)) delete process.env[k];
   }
@@ -41,6 +51,21 @@ describe("GET / (health router, mounted at /api/health by app)", () => {
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.status).toBe("healthy");
+  });
+
+  it("turns healthy as soon as a key is saved to disk, with no restart", async () => {
+    const { health } = await reload();
+
+    const before = await (await health.request("/")).json();
+    expect(before.ok).toBe(false);
+    expect(before.status).toBe("degraded");
+
+    // Same process, same router instance: the key appears on disk after boot.
+    await writeFile(keyPath, "sk-pasted-in-settings\n", { mode: 0o600 });
+
+    const after = await (await health.request("/")).json();
+    expect(after.ok).toBe(true);
+    expect(after.status).toBe("healthy");
   });
 
   it("never includes any secret key in the payload", async () => {

@@ -23,6 +23,14 @@ import {
   writeYoutubeCookie,
 } from "../ingest/cookie.js";
 import { readSettings, writeSettings } from "../settings/store.js";
+import {
+  MAX_OLLAMA_KEY_BYTES,
+  deleteOllamaKey,
+  ollamaKeyStatus,
+  resolveOllamaKey,
+  validateOllamaKey,
+  writeOllamaKey,
+} from "../settings/ollamaKey.js";
 
 const log = pino({ name: "settings" });
 
@@ -38,15 +46,27 @@ async function statusPayload(): Promise<{
   hasYoutubeCookie: boolean;
   youtubeCookieUpdatedAt: string | null;
   hasSupadataKey: boolean;
+  hasOllamaKey: boolean;
+  ollamaKeyUpdatedAt: string | null;
   llmConfigured: boolean;
 }> {
-  const [current, status] = await Promise.all([readSettings(), cookieStatus()]);
+  const [current, status, keyStatus, key] = await Promise.all([
+    readSettings(),
+    cookieStatus(),
+    ollamaKeyStatus(),
+    resolveOllamaKey(),
+  ]);
+  // `llmConfigured` follows the resolved key (env var OR on-disk file), so a
+  // key pasted in Settings flips this to true without a restart. The key body
+  // itself never enters the payload.
   return {
     settings: current,
     hasYoutubeCookie: status.hasYoutubeCookie,
     youtubeCookieUpdatedAt: status.youtubeCookieUpdatedAt,
     hasSupadataKey: config.supadataApiKey !== undefined,
-    llmConfigured: config.llmConfigured,
+    hasOllamaKey: keyStatus.hasOllamaKey,
+    ollamaKeyUpdatedAt: keyStatus.ollamaKeyUpdatedAt,
+    llmConfigured: key !== undefined,
   };
 }
 
@@ -260,10 +280,10 @@ settings.post("/youtube-cookie/header", async (c) => {
  * pipeline never calls it, so the zero-LLM Phase 3 proof still holds.
  */
 settings.post("/test-llm", async (c) => {
-  const key = config.ollamaApiKey;
-  if (!config.llmConfigured || key === undefined) {
+  const key = await resolveOllamaKey();
+  if (key === undefined) {
     return c.json(
-      { error: "llm_not_configured", message: "Set OLLAMA_API_KEY to test the connection." },
+      { error: "llm_not_configured", message: "Set an Ollama API key in Settings to test the connection." },
       400,
     );
   }
@@ -302,4 +322,79 @@ settings.post("/test-llm", async (c) => {
 settings.delete("/youtube-cookie", async (c) => {
   await deleteYoutubeCookie();
   return c.json({ hasYoutubeCookie: false }, 200);
+});
+
+/** Only the fields an Ollama-key outcome ever logs. */
+function logKeyOutcome(bytes: number, ok: boolean): void {
+  log.info(
+    { route: "settings.ollama-key", bytes, ok },
+    "ollama_key_outcome",
+  );
+}
+
+/**
+ * `POST /api/settings/ollama-key` — the raw API key as a `text/plain` body.
+ *
+ * The same contract as the cookie upload: `text/plain` only, the declared and
+ * actual lengths capped at 4 KiB, and the body validated before the 0600 writer
+ * sees it. The key never comes back: the success body is exactly `{ok:true}`,
+ * refusal bodies name only the reason shape, and the single log record carries
+ * the route, the byte count and the ok flag — never the key. A `sk-`-style
+ * bearer token is a single line, so a CR/LF/tab is refused.
+ */
+settings.post("/ollama-key", async (c) => {
+  const contentType = (c.req.header("content-type") ?? "").toLowerCase();
+  if (!contentType.startsWith("text/plain")) {
+    const declared = Number.parseInt(c.req.header("content-length") ?? "", 10);
+    logKeyOutcome(Number.isFinite(declared) ? declared : 0, false);
+    return c.json(
+      {
+        error: "unsupported_media_type",
+        message: "Paste the Ollama API key as a raw text/plain body.",
+      },
+      415,
+    );
+  }
+
+  const declared = Number.parseInt(c.req.header("content-length") ?? "", 10);
+  if (Number.isFinite(declared) && declared > MAX_OLLAMA_KEY_BYTES) {
+    logKeyOutcome(declared, false);
+    return c.json(
+      { error: "key_too_large", message: "The API key must be at most 4 KiB." },
+      413,
+    );
+  }
+
+  const text = await c.req.text();
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_OLLAMA_KEY_BYTES) {
+    logKeyOutcome(bytes, false);
+    return c.json(
+      { error: "key_too_large", message: "The API key must be at most 4 KiB." },
+      413,
+    );
+  }
+
+  const verdict = validateOllamaKey(text);
+  if (!verdict.ok) {
+    // The reason names the shape of the failure, never the key.
+    logKeyOutcome(bytes, false);
+    return c.json(
+      {
+        error: "invalid_key",
+        message: `The API key is not usable (${verdict.reason ?? "bad_shape"}).`,
+      },
+      400,
+    );
+  }
+
+  await writeOllamaKey(text);
+  logKeyOutcome(bytes, true);
+  return c.json({ ok: true }, 200);
+});
+
+/** `DELETE /api/settings/ollama-key` — idempotent; absence is a success. */
+settings.delete("/ollama-key", async (c) => {
+  await deleteOllamaKey();
+  return c.json({ hasOllamaKey: false }, 200);
 });
