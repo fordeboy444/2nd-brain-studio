@@ -70,6 +70,21 @@ export const config = Object.freeze({
   /** Supadata API key (Phase 3 ingest fallback). Absent or empty ⇒ unset. */
   supadataApiKey: optional("SUPADATA_API_KEY"),
   /**
+   * The one agent credential — minted tokens are Bearer-only and never a
+   * browser session. The file holds SHA-256 hashes, never a plaintext token,
+   * and is written atomically at 0600 on the `okf_state` volume.
+   */
+  agentTokensPath: optional("AGENT_TOKENS_PATH") ?? "/data/agent-tokens.json",
+  /**
+   * The admin token file, generated once at first boot when
+   * `BRAIN_ADMIN_TOKEN` is unset. `BRAIN_ADMIN_TOKEN` always wins over this
+   * file, so an operator can rotate the credential from the deployment
+   * environment without touching the volume.
+   */
+  adminTokenPath: optional("ADMIN_TOKEN_PATH") ?? "/data/admin-token",
+  /** The admin token from the environment. Never logged, never serialized. */
+  adminToken: optional("BRAIN_ADMIN_TOKEN"),
+  /**
    * Netscape cookie file handed to yt-dlp as `--cookies`. This is the one owner
    * of the property: 03-04 reads it through the runner's `cookiePath()` and
    * 03-06 writes the uploaded file at this path. The default matches the

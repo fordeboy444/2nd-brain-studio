@@ -25,6 +25,9 @@ const VAULT: Vault = {
 };
 
 const INITIAL: Partial<AppState> = {
+  authenticated: true,
+  isAdmin: true,
+  session: null,
   currentVault: null,
   tabs: [],
   activeTabPath: null,
@@ -72,7 +75,10 @@ const originalFetch = globalThis.fetch;
  * keeps these five assertions about the SHELL honest: an empty vault (so the
  * sidebar's own empty copy is what renders) and one readable file.
  */
-function stubFetch() {
+function stubFetch(session: { authenticated: boolean; isAdmin: boolean } = {
+  authenticated: true,
+  isAdmin: true,
+}) {
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = (payload: unknown, status = 200) =>
@@ -80,6 +86,10 @@ function stubFetch() {
         status,
         headers: { "content-type": "application/json" },
       });
+    // Must answer before the `/api/` fallbacks: the shell asks on every mount,
+    // and the catch-all `{}` would coerce to "not authenticated" and swap the
+    // shell for the login screen under every test in this file.
+    if (url.includes("/api/session")) return body(session);
     if (url.includes("/api/vaults/v1/tree")) return body({ dir: ".", entries: [] });
     if (url.includes("/api/vaults")) return body([]);
     if (url.includes("/api/jobs")) return body({ jobs: [] });
@@ -114,6 +124,8 @@ afterEach(() => {
 it("renders the three regions with no overlay element while none is open", async () => {
   const { host } = await mount();
   expect(host.querySelector(".app-shell")).toBeTruthy();
+  // An authenticated session keeps the shell and never paints the gate.
+  expect(host.querySelector(".login-screen")).toBeNull();
   expect(host.querySelector(".sidebar")).toBeTruthy();
   expect(host.querySelector(".main-header")).toBeTruthy();
   expect(host.querySelector(".editor-wrap")).toBeTruthy();
@@ -211,4 +223,17 @@ it("renders the settings and jobs overlays, and the reserved ones as an empty sl
 
   await render(() => useStore.getState().closeOverlay());
   expect(host.querySelector(".overlay-slot")).toBeNull();
+});
+
+it("swaps the shell for the login gate when /api/session says unauthenticated", async () => {
+  // The probe is the only thing that knows a first visitor has no cookie; the
+  // store starts optimistic so this answer is what must flip the shell.
+  stubFetch({ authenticated: false, isAdmin: false });
+  const { host } = await mount();
+  expect(host.querySelector(".login-screen")).toBeTruthy();
+  expect(host.querySelector(".login-input")?.getAttribute("type")).toBe("password");
+  expect(host.querySelector(".sidebar")).toBeNull();
+  expect(host.querySelector(".main-header")).toBeNull();
+  expect(useStore.getState().authenticated).toBe(false);
+  expect(useStore.getState().isAdmin).toBe(false);
 });

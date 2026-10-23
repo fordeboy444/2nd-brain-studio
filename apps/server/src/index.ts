@@ -1,4 +1,5 @@
 import { serve } from "@hono/node-server";
+import { ensureAdminToken } from "./auth/adminToken.js";
 import { config } from "./config.js";
 import { app } from "./http/app.js";
 import { configureJobQueue, resumeJobs } from "./jobs/bootstrap.js";
@@ -18,6 +19,25 @@ if (lockState.isReadOnly) {
     `[${config.serviceName}] running in READ-ONLY mode (active instance held by PID ${lockState.lockHolder?.pid} on ${lockState.lockHolder?.host})`,
   );
 } else {
+  // First-boot admin credential. A failure here must not stop the server: an
+  // unreadable or unwritable /data leaves the app degraded (login answers 503),
+  // which is a state the operator can see and fix, not a boot loop.
+  try {
+    const created = await ensureAdminToken();
+    if (created) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[${config.serviceName}] admin token created at ${config.adminTokenPath}`,
+      );
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[${config.serviceName}] admin_token_create_failed path=${config.adminTokenPath}`,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
   // Boot resume runs before the port opens only on the active primary instance.
   // A failure here must never stop the server: one corrupt job is worth less than the whole UI.
   try {

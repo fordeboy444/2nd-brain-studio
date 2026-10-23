@@ -9,8 +9,11 @@ import {
   deleteOllamaKey as apiDeleteOllamaKey,
   getHealth,
   getJob as apiGetJob,
+  getSession,
   getSettings as apiGetSettings,
   listJobs as apiListJobs,
+  login as apiLogin,
+  logout as apiLogout,
   listVaults as apiListVaults,
   previewJob as apiPreviewJob,
   putSettings as apiPutSettings,
@@ -18,6 +21,7 @@ import {
   retryJob as apiRetryJob,
   saveOllamaKey as apiSaveOllamaKey,
   saveYoutubeCookieHeader as apiSaveYoutubeCookieHeader,
+  setUnauthorizedHandler,
   startJob as apiStartJob,
   testLlm as apiTestLlm,
   uploadYoutubeCookie as apiUploadYoutubeCookie,
@@ -27,6 +31,7 @@ import {
   type JobSummary,
   type PreviewInput,
   type PreviewResult,
+  type SessionState,
   type SettingsPatch,
   type SettingsPayload,
   type SkippedUnit,
@@ -229,6 +234,19 @@ export interface AppState {
   setRightPanelTab: (tab: RightPanelTab) => void;
   openRightPanel: () => void;
   closeRightPanel: () => void;
+
+  // Session slice. `authenticated` and `isAdmin` start true so the optimistic
+  // first paint shows the shell and every existing screen suite (which never
+  // stubs /api/session) keeps its contract; `loadSession` corrects them from
+  // the server's answer, and a 401 from any guarded call drops to the login
+  // screen through the module-scope handler below.
+  authenticated: boolean;
+  isAdmin: boolean;
+  /** The last answer from GET /api/session, or null before the first probe. */
+  session: SessionState | null;
+  loadSession: () => Promise<void>;
+  login: (token: string) => Promise<void>;
+  logout: () => Promise<void>;
 
   // Health slice — one source for the settings overlay and the header indicator.
   health: HealthPayload | null;
@@ -480,6 +498,75 @@ export const useStore = create<AppState>((set, get) => {
     },
     openRightPanel: () => set({ rightPanelOpen: true }),
     closeRightPanel: () => set({ rightPanelOpen: false }),
+
+    authenticated: true,
+    isAdmin: true,
+    session: null,
+
+    /**
+     * Ask the server whether this browser holds a session.
+     *
+     * A failure means "not authenticated": a network error cannot be told
+     * apart from a missing server, and showing the login screen is the honest
+     * answer in both cases while the health probe reports the outage.
+     */
+    loadSession: async () => {
+      try {
+        const session = await getSession();
+        set({
+          session,
+          authenticated: session.authenticated === true,
+          isAdmin: session.isAdmin === true,
+        });
+      } catch {
+        set({ session: null, authenticated: false, isAdmin: false });
+      }
+    },
+
+    /**
+     * Exchange the admin token for a session cookie. The token is handed to
+     * the API boundary and never kept: there is no field for it in this store,
+     * and no storage write anywhere on this path.
+     */
+    login: async (token) => {
+      const result = await apiLogin(token);
+      set({
+        session: { authenticated: true, isAdmin: result.isAdmin === true },
+        authenticated: true,
+        isAdmin: result.isAdmin === true,
+      });
+    },
+
+    /**
+     * End the session and drop everything that belonged to it. The server call
+     * is best-effort: a cookie that cannot be cleared server-side still must
+     * not leave this tab showing vault content under a logged-out shell.
+     */
+    logout: async () => {
+      try {
+        await apiLogout();
+      } catch {
+        // Clearing local state below is the part the user asked for.
+      }
+      set({
+        authenticated: false,
+        isAdmin: false,
+        session: { authenticated: false, isAdmin: false },
+        currentVault: null,
+        tabs: [],
+        activeTabPath: null,
+        backlinks: [],
+        conflict: null,
+        saveError: null,
+        pendingRevealLine: null,
+        targetLine: null,
+        jumpToLine: null,
+        pendingTreeRefresh: null,
+        treeState: EMPTY_TREE,
+        overlayOpen: false,
+        activeOverlay: "none",
+      });
+    },
 
     health: null,
     healthError: null,
@@ -1316,4 +1403,18 @@ export const useStore = create<AppState>((set, get) => {
       await get().selectJob(job.id);
     },
   };
+});
+
+/**
+ * One expiry handler for every guarded call. `lib/api.ts` invokes it on a 401
+ * from any path except `/login` and `/session`, so a cookie invalidated by an
+ * admin-token rotation lands the app on the login screen from wherever the
+ * user was — including inside an overlay — without a per-screen branch.
+ */
+setUnauthorizedHandler(() => {
+  useStore.setState({
+    authenticated: false,
+    isAdmin: false,
+    session: { authenticated: false, isAdmin: false },
+  });
 });

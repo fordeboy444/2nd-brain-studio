@@ -6,6 +6,8 @@ import { resolve } from "node:path";
 import pino from "pino";
 import { config } from "../config.js";
 import { getLockState } from "../lock.js";
+import { authenticate } from "../auth/middleware.js";
+import { auth } from "../routes/auth.js";
 import { health } from "../routes/health.js";
 import { vaults } from "../routes/vaults.js";
 import { files } from "../routes/file.js";
@@ -63,12 +65,22 @@ app.use(
  * Read-only gate (OPS-06).
  * When another instance holds the single-writer lock, this secondary instance
  * runs in read-only mode: all mutating HTTP methods (POST, PUT, DELETE, PATCH)
- * on `/api/*` are rejected with 403 Forbidden, except `/api/health`.
+ * on `/api/*` are rejected with 403 Forbidden, except `/api/health` and the
+ * session routes. Login and logout write nothing to the shared state — they
+ * mint or expire one cookie — so a read-only instance can still authenticate
+ * a browser and serve reads.
  */
 app.use("/api/*", async (c, next) => {
   const method = c.req.method;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
-    if (c.req.path !== "/api/health" && c.req.path !== "/api/health/") {
+    const exempt =
+      c.req.path === "/api/health" ||
+      c.req.path === "/api/health/" ||
+      c.req.path === "/api/login" ||
+      c.req.path === "/api/login/" ||
+      c.req.path === "/api/logout" ||
+      c.req.path === "/api/logout/";
+    if (!exempt) {
       const { isReadOnly } = getLockState();
       if (isReadOnly) {
         return c.json(
@@ -85,8 +97,19 @@ app.use("/api/*", async (c, next) => {
   await next();
 });
 
+/**
+ * Authentication runs for every `/api/*` request, after the body cap and the
+ * read-only gate and before any route.
+ *
+ * The order is load-bearing (T-261023-07): registering this first would turn an
+ * oversized body into a 401 and hide the real 413, and would turn a secondary
+ * instance's `read_only` 403 into a 401.
+ */
+app.use("/api/*", authenticate);
+
 // API routes.
 app.route("/api/health", health);
+app.route("/api", auth);
 app.route("/api/vaults", vaults);
 app.route("/api/file", files);
 app.route("/api/jobs", jobs);

@@ -6,6 +6,7 @@ import { Search } from "./screens/Search.js";
 import { Jobs } from "./screens/Jobs.js";
 import { Graph } from "./screens/Graph.js";
 import { Settings } from "./screens/Settings.js";
+import { Login } from "./screens/Login.js";
 import { useStore } from "./store.js";
 
 /**
@@ -27,9 +28,16 @@ import { useStore } from "./store.js";
  *
  * The overlay slot is structural: the element is rendered for any open overlay,
  * `settings`, `jobs`, `search`, and `graph` each have a screen behind them.
+ *
+ * The session probe sits beside the health probe. Until it answers, the store
+ * reports authenticated (the optimistic first paint); a `false` answer swaps
+ * the whole shell for the login screen, and a 401 from any later call does the
+ * same through the store's expiry handler.
  */
 export function App() {
   const loadHealth = useStore((s) => s.loadHealth);
+  const loadSession = useStore((s) => s.loadSession);
+  const authenticated = useStore((s) => s.authenticated);
   const activeOverlay = useStore((s) => s.activeOverlay);
   const overlayOpen = useStore((s) => s.overlayOpen);
 
@@ -39,6 +47,21 @@ export function App() {
   useEffect(() => {
     void loadHealth();
   }, [loadHealth]);
+
+  useEffect(() => {
+    void loadSession();
+  }, [loadSession]);
+
+  // All hooks run before this branch: a conditional early return above a hook
+  // would change the hook order between renders.
+  if (!authenticated) {
+    return (
+      <div className="app-shell">
+        <Login />
+        <Toasts />
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

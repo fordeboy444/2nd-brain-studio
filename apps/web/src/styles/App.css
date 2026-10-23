@@ -4827,3 +4827,88 @@ button.secondary:active:not(:disabled),
   font-size: var(--fs-xs);
   text-align: right;
 }
+
+/* ============================================================
+   Login gate
+   ============================================================ */
+/* The whole window is the card's ground: there is no sidebar behind it and
+   nothing to hint at, so the screen centres a single column instead of
+   leaving the vault picker's chrome around an empty shell. */
+.login-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-6);
+  background: var(--bg-app);
+  overflow-y: auto;
+}
+.login-card {
+  width: min(400px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-6);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+}
+.login-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+.login-hint {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-body);
+  color: var(--text-secondary);
+}
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.login-label {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+/* The same filled well as `.modal input`; that rule is scoped to the modal, so
+   the login field repeats the three declarations it needs rather than widening
+   the modal selector to every screen. */
+.login-input {
+  background: var(--bg-subtle);
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  padding: var(--sp-2) var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-md);
+  width: 100%;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease),
+    background var(--t-fast) var(--ease);
+}
+.login-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.login-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+  background: var(--bg-surface);
+}
+.login-submit {
+  margin-top: var(--sp-2);
+  width: 100%;
+}
+.login-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--danger);
+}

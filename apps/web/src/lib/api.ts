@@ -59,6 +59,39 @@ export class ConflictError extends ApiError {
 }
 
 /**
+ * A 401 from any guarded route: the session cookie is absent, expired, or was
+ * invalidated by an admin-token rotation.
+ *
+ * Distinct type so the shell can drop to the login screen from one place. The
+ * login and session paths deliberately do NOT raise it — a failed login is a
+ * form error, and a `GET /api/session` that says "not logged in" is a normal
+ * answer, not a session expiry.
+ */
+export class UnauthorizedError extends ApiError {
+  constructor(message: string, body: unknown = undefined) {
+    super(401, message, body);
+    this.name = "UnauthorizedError";
+  }
+}
+
+/** The answer to `GET /api/session`. */
+export interface SessionState {
+  authenticated: boolean;
+  isAdmin: boolean;
+}
+
+/**
+ * The one session-expiry hook. The store registers it at module scope; the
+ * request helper calls it before throwing, so every guarded call that sees a
+ * 401 lands the app on the login screen without each screen handling it.
+ */
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  unauthorizedHandler = fn;
+}
+
+/**
  * Internal request helper: prefixes /api, sets content-type on bodies, parses
  * JSON, and on a non-2xx status throws an ApiError carrying the server's
  * `message` field with a generic fallback when the body is not JSON.
@@ -83,9 +116,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof body === "object" && body !== null && "message" in body && typeof (body as { message: unknown }).message === "string"
         ? (body as { message: string }).message
         : `request failed with status ${res.status}`;
+    if (res.status === 401 && path !== "/login" && path !== "/session") {
+      unauthorizedHandler?.();
+      throw new UnauthorizedError(message, body);
+    }
     throw new ApiError(res.status, message, body);
   }
   return body as T;
+}
+
+/* -------------------------------------------------------------------------
+   Session (auth)
+   ------------------------------------------------------------------------- */
+
+/**
+ * POST /api/login — the admin token, as the JSON body field `token`.
+ *
+ * The route sets an HttpOnly cookie; nothing is returned that the browser
+ * could store as a second credential, and this module never writes the token
+ * to local or session storage.
+ */
+export function login(token: string): Promise<{ ok: true; isAdmin: boolean }> {
+  return request<{ ok: true; isAdmin: boolean }>("/login", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+}
+
+/** POST /api/logout — expires the session cookie. */
+export function logout(): Promise<{ ok: true }> {
+  return request<{ ok: true }>("/logout", { method: "POST" });
+}
+
+/** GET /api/session — always 200; `authenticated:false` is the first visit. */
+export function getSession(): Promise<SessionState> {
+  return request<SessionState>("/session");
 }
 
 /** GET /api/vaults — resolves to the parsed array (empty array, never null). */
