@@ -97,8 +97,11 @@ container restarting in a loop.
   the vaults **and** the secrets.
 - **Refreshing the Python downloader means a redeploy.** `yt-dlp` is installed at
   image build time and pinned to one release, because YouTube changes break it
-  without notice. Bump the pin in the `Dockerfile`, commit, and redeploy — there
-  is no runtime upgrade path.
+  without notice. The image also pins Deno and `yt-dlp-ejs`, because yt-dlp needs
+  both to solve YouTube's n challenge. Bump any of the four pins (`yt-dlp`,
+  `yt-dlp-ejs`, `deno`, `youtube-transcript-api`) in the `Dockerfile`, commit,
+  and redeploy — there is no runtime upgrade path. Local tier-1 runs therefore
+  need `deno` on `PATH` too.
 - **A redeploy replaces the container and keeps the volume.** It is also the only
   way to pick up a new image.
 - **Logs** are Coolify's container log. The app logs method, path and status only

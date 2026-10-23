@@ -227,6 +227,15 @@ describe("the Dockerfile", () => {
     expect(runtimeStage).toMatch(/rm -rf \/var\/lib\/apt\/lists/);
   });
 
+  it("pins Deno and yt-dlp-ejs alongside yt-dlp with build-time checks", () => {
+    expect(runtimeStage).toContain("DENO_DIR=");
+    expect(runtimeStage).toMatch(/deno==\d+\.\d+\.\d+/);
+    expect(runtimeStage).toMatch(/yt-dlp-ejs==\d+\.\d+\.\d+/);
+    expect(runtimeStage).toContain("deno --version");
+    expect(runtimeStage).toContain("yt-dlp --js-runtimes deno --version");
+    expect(runtimeStage).toContain('import yt_dlp_ejs');
+  });
+
   it("runs as a non-root user that owns the data directory", () => {
     const userLine = /^USER (.+)$/m.exec(runtimeStage);
     expect(userLine).not.toBeNull();

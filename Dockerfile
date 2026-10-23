@@ -53,16 +53,23 @@ RUN pnpm --filter @2nd-brain/server build
 FROM node:22-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \
-    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    DENO_DIR=/tmp/deno-cache
 
-# yt-dlp breaks when YouTube changes and is a build-time install here, so it is
-# pinned to one release and refreshed by redeploying the image — see
-# deploy/coolify/README.md. Both tools land in a single layer.
+# yt-dlp breaks when YouTube changes and is a build-time install here: the image
+# pins yt-dlp, its EJS solver, Deno and youtube-transcript-api, and refreshing
+# any of them needs a redeploy — see deploy/coolify/README.md. All four land in
+# a single layer.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 python3-pip ca-certificates \
  && pip3 install --no-cache-dir --break-system-packages \
       yt-dlp==2026.8.19 \
+      yt-dlp-ejs==0.8.0 \
+      deno==2.9.8 \
       youtube-transcript-api==1.2.4 \
+ && deno --version \
+ && python3 -c "import yt_dlp_ejs" \
+ && yt-dlp --js-runtimes deno --version \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
