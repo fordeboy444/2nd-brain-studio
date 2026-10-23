@@ -21,6 +21,13 @@ import { z } from "zod";
 import type { SkipReason, TranscriptSegment, VideoCandidate } from "../jobs/types.js";
 import { isYouTubeVideoUrl } from "./enumerate.js";
 
+/**
+ * The JS runtime `yt-dlp` uses to solve YouTube's n challenge. Deno plus the
+ * `yt-dlp-ejs` solver scripts are required: without them yt-dlp reports missing
+ * formats. Passed as two argv elements, never as command text.
+ */
+export const JS_RUNTIME_ARGS = ["--js-runtimes", "deno"] as const;
+
 /** What one subprocess run returns. A failure is a value, never a throw. */
 export interface YtDlpResult {
   exitCode: number | null;
@@ -213,6 +220,7 @@ export async function fetchJson3Transcript(
       "json3",
       "--output",
       join(dir, "%(id)s.%(ext)s"),
+      ...JS_RUNTIME_ARGS,
       ...(ctx.cookiePath !== undefined ? ["--cookies", ctx.cookiePath] : []),
       // Option terminator: the URL is data even if it starts with `-`.
       "--",
